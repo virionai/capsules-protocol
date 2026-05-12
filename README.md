@@ -1,0 +1,99 @@
+# Capsule v0.6 — redesign
+
+A redesign of the Capsule format around the actual product:
+
+> A portable unit of intelligence. The work product (loan application, AML
+> review, scoping document, code, media) travels with the context needed to
+> continue it (Pith-style narrative, agents, skills) and an append-only,
+> signed audit trail. Foreign LLMs can cold-load it. Regulators and auditors
+> can verify it months later. Platforms can ship it as the unit of work.
+
+This directory is a stripped, working prototype of that idea. It is not
+backwards-compatible with the prior `0.5.x` shape.
+
+## What changed at a glance
+
+Six artifacts collapsed to two-plus-chain, custom parsers replaced with
+vetted libraries, the envelope reworked so signatures actually bind what
+they claim to bind.
+
+| Topic | Old | New |
+|---|---|---|
+| Document artifacts | `surface.md` + `handoff.md` + `state.json` + `plan.md` + `skills_used_in_this_capsule.md` | `program.md` + `agents.md` (state is computed) |
+| Chain hash linkage | `SHA-256(prev_hash_hex_utf8 \|\| JCS(event))` | `SHA-256(prev_hash_raw32 \|\| JCS(event))` |
+| Envelope signing payload | `SHA-256(checkpoint_hash \|\| ciphertext_hash \|\| skill_hash)` | JCS-canonical envelope minus signers |
+| Signature input | `Ed25519.sign(utf8(hex_string))` | `Ed25519.sign(domain_sep_bytes \|\| canonical_payload)` |
+| Cipher enum | `none \| ChaCha20-Poly1305 \| AES-256-GCM` (last not implemented) | `none \| ChaCha20-Poly1305` (fail-closed on unknown) |
+| Capsule identity | `first_event_hash` (squattable) | `SHA-256("capsule-id-v0.6\x00" \|\| originator_pubkey \|\| first_event_hash)` |
+| Signers | Two fixed roles | `signers: [{role, public_key, signature}, ...]` |
+| Temporal anchor | None | Self-attested `signed_at` (RFC 3161/Rekor planned) |
+| JCS | In-house "matches RFC 8785 semantics" | RFC 8785 reference library |
+| ZIP | Custom deterministic ZIP_STORED writer | Standard ZIP via vetted library |
+| Skill instructions | Mixed metadata + markdown for foreign LLMs | Two trust tiers; decryption is metadata only |
+| Provenance version | `1.0` ahead of SDK `0.1.x` | `0.6` matched to SDK |
+
+## Layout
+
+```
+new-design/
+├── README.md                       you are here
+├── ROADMAP.md                      one-page roadmap with kill criteria
+├── spec/                           the v0.6 protocol specification
+│   ├── README.md                   stripped/replaced/kept summary
+│   ├── format.md                   file layout
+│   ├── manifest.md                 manifest.json schema
+│   ├── chain.md                    event chain rules
+│   ├── envelope.md                 provenance envelope schema
+│   └── trust.md                    trust model and skill trust tiers
+├── sdk/                            reference TypeScript-free JS SDK
+│   ├── package.json
+│   ├── src/                        builder, reader, verifier, crypto, zip
+│   └── test/
+└── examples/
+    └── tamper-detection/           the canonical first example
+```
+
+## The minimum viable capsule
+
+```
+example.capsule (deterministic ZIP)
+├── manifest.json                   ~20 fields: id, originator, participants, content_index
+├── program.md                      the document — loan app, review, scope, etc.
+├── agents.md                       who's allowed to do what; skill-trust roots
+├── chain/events.jsonl              append-only signed decision log
+├── skills/                         carry-on context for foreign LLMs
+│   └── <id>/
+│       ├── skill.json              typed metadata
+│       └── SKILL.md                instructions (trust tier per agents.md)
+├── payload/                        whatever travels: PDFs, code, datasets, media
+└── provenance/envelope.json        signed envelope, optional encryption
+```
+
+There is no `state.json`, `handoff.md`, `plan.md`, `surface-citations.md`,
+or `skills_used_in_this_capsule.md`. State is computed. Handoff is a
+section of `program.md`. Plan is a section of `program.md`. Citations are
+markdown links. Skill inventory is computed at read.
+
+## Try the demo
+
+```sh
+cd sdk
+npm install
+cd ../examples/tamper-detection
+npm install
+npm run build
+npm run verify
+```
+
+The demo builds four capsules — one clean, three tampered — and runs
+verification on each. The clean capsule passes. Each tampered capsule
+fails at a distinct, reported check.
+
+## Status
+
+Prototype. Not v1.0. Not production. The envelope schema is `0.6` on
+purpose — locked once a second independent implementation round-trips
+the test vectors and an outside party reviews the crypto.
+
+See `ROADMAP.md` for what would have to be true before any of this earns
+a `1.0`.

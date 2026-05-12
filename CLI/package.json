@@ -1,0 +1,25 @@
+{
+  "name": "@capsule/cli",
+  "version": "0.6.0",
+  "description": "Command-line tool for inspecting and verifying Capsule v0.6 files.",
+  "type": "module",
+  "bin": {
+    "capsule": "bin/capsule.mjs"
+  },
+  "main": "src/index.mjs",
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@capsule/sdk-v0.6-prototype": "file:../sdk"
+  },
+  "license": "Apache-2.0"
+}

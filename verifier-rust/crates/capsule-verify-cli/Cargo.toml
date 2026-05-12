@@ -1,0 +1,18 @@
+[package]
+name = "capsule-verify-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Capsule verifier CLI."
+
+[[bin]]
+name = "capsule-verify-cli"
+path = "src/main.rs"
+
+[dependencies]
+capsule-verify = { path = "../capsule-verify" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }

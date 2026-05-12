@@ -1,0 +1,37 @@
+.DS_Store
+**/.DS_Store
+
+# Local agent/editor state
+.claude/
+
+# JavaScript dependencies and builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+dist-ts/
+**/dist-ts/
+
+# Python caches and builds
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.pyc
+*.egg-info/
+
+# Rust/Kotlin/Swift build outputs
+target/
+**/target/
+.gradle/
+**/.gradle/
+build/
+**/build/
+.build/
+**/.build/
+.swiftpm/
+DerivedData/
+
+# Local logs
+*.log

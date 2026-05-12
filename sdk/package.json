@@ -1,0 +1,25 @@
+{
+  "name": "@capsule/sdk-v0.6-prototype",
+  "version": "0.6.0-prototype.1",
+  "description": "Reference JS SDK for Capsule v0.6 — prototype.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "canonicalize": "^2.0.0",
+    "jszip": "^3.10.1"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "license": "Apache-2.0"
+}

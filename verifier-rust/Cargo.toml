@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/capsule-verify",
+    "crates/capsule-verify-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/virion-ai/capsule"
+
+[workspace.dependencies]
+sha2 = "0.10"
+ed25519-dalek = "2"
+hex = "0.4"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+zip = "5.1"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+base64 = "0.22"
+
+# A workspace-root package whose only job is to host the parity integration
+# tests under `tests/`. It depends on the verifier library and reads JS
+# fixtures from `../examples/tamper-detection/output/`. There is no `src/`
+# (an empty `lib.rs` keeps cargo happy) — the real assertions live in
+# `tests/parity_against_js_sdk.rs`.
+[package]
+name = "capsule-verifier-rust-parity-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Integration tests asserting parity between the Rust verifier and the JS SDK fixtures."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+capsule-verify = { path = "crates/capsule-verify" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }

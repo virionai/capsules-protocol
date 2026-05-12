@@ -1,0 +1,510 @@
+<template id="scene-2-the-ask-template">
+<div data-composition-id="scene-2-the-ask" data-width="1920" data-height="1080">
+
+  <!-- Decorative warm-dawn glow (top), cool depth (bottom) -->
+  <div class="glow glow-dawn" data-layout-ignore></div>
+  <div class="glow glow-deep" data-layout-ignore></div>
+
+  <!-- Persistent time chyron (top-left) -->
+  <div class="time-chyron">
+    <div class="chy-day">TUESDAY</div>
+    <div class="chy-time">07:42</div>
+    <div class="chy-rule"></div>
+    <div class="chy-meta">RIVERSIDE · ALLERGY JOURNAL · DAY 4</div>
+  </div>
+
+  <!-- Phase A: opening hold (no center visual) -->
+  <div class="phase phase-a">
+    <div class="phase-pad">
+      <div class="big-quote">
+        <span class="qmark">“</span>Most of what a clinician needs to see happens <em>between visits.</em><span class="qmark">”</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase B: Phone with airplane mode -->
+  <div class="phase phase-b">
+    <div class="phone-stack">
+      <div class="phone">
+        <div class="phone-notch"></div>
+        <div class="phone-screen">
+          <div class="status-bar">
+            <span class="sb-time">7:42</span>
+            <div class="sb-right">
+              <span class="airplane">✈</span>
+              <span class="battery"></span>
+            </div>
+          </div>
+          <div class="app-shell">
+            <div class="app-name">EDGE GALLERY</div>
+            <div class="app-subhead">Skills</div>
+            <div class="skill-row skill-active">
+              <div class="skill-dot"></div>
+              <div class="skill-info">
+                <div class="skill-title">Riverside Dermatology</div>
+                <div class="skill-tag">RX7Q · allergy journal</div>
+              </div>
+              <div class="skill-state">ACTIVE</div>
+            </div>
+            <div class="skill-row skill-dim">
+              <div class="skill-dot"></div>
+              <div class="skill-info">
+                <div class="skill-title">Notes</div>
+                <div class="skill-tag">local</div>
+              </div>
+              <div class="skill-state">—</div>
+            </div>
+            <div class="skill-row skill-dim">
+              <div class="skill-dot"></div>
+              <div class="skill-info">
+                <div class="skill-title">Translate</div>
+                <div class="skill-tag">on-device</div>
+              </div>
+              <div class="skill-state">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="phone-pedestal"></div>
+    </div>
+  </div>
+
+  <!-- Phase C: Paper card -->
+  <div class="phase phase-c">
+    <div class="card-stage">
+      <div class="paper-card">
+        <div class="card-eyebrow">ALLERGY JOURNAL · PRESCRIPTION</div>
+        <div class="card-rule"></div>
+        <div class="card-url">prescribe.chat/rx7q</div>
+        <div class="card-clinic">Riverside Dermatology</div>
+        <div class="card-foot">
+          <span class="foot-tag">Dr. M. Singh, MD</span>
+          <span class="foot-sep">·</span>
+          <span class="foot-tag">issued 2026-05-04</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Airplane mode chyron (bottom-left, persistent from B onward) -->
+  <div class="airplane-chyron">
+    <span class="ap-icon">✈</span>
+    <span class="ap-text">airplane mode — entire patient flow</span>
+  </div>
+
+  <!-- V/O caption strip -->
+  <div class="cap-strip">
+    <div class="cap" id="cap-1">Most of what a clinician needs to see happens between visits.</div>
+    <div class="cap" id="cap-2">This patient is journaling for an allergy clinic.</div>
+    <div class="cap" id="cap-3">Their doctor prescribed it on a paper card.</div>
+    <div class="cap" id="cap-4">A single short URL.</div>
+  </div>
+
+  <style>
+    [data-composition-id="scene-2-the-ask"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      background: #0a0a0a;
+      color: #f5f5f5;
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-2-the-ask"] * { box-sizing: border-box; }
+
+    [data-composition-id="scene-2-the-ask"] .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(140px);
+      pointer-events: none;
+    }
+    [data-composition-id="scene-2-the-ask"] .glow-dawn {
+      width: 1100px; height: 800px;
+      background: rgba(255, 159, 67, 0.08);
+      top: -300px; left: 30%;
+    }
+    [data-composition-id="scene-2-the-ask"] .glow-deep {
+      width: 700px; height: 700px;
+      background: rgba(124, 156, 255, 0.08);
+      bottom: -200px; right: -100px;
+    }
+
+    /* Time chyron */
+    [data-composition-id="scene-2-the-ask"] .time-chyron {
+      position: absolute;
+      top: 64px; left: 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    [data-composition-id="scene-2-the-ask"] .chy-day {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      letter-spacing: 0.2em;
+      color: #a3a3a3;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-2-the-ask"] .chy-time {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 56px;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: -0.04em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    [data-composition-id="scene-2-the-ask"] .chy-rule {
+      width: 60px; height: 2px;
+      background: #ff9f43;
+      margin: 6px 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .chy-meta {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      letter-spacing: 0.15em;
+      color: #525252;
+      font-weight: 400;
+    }
+
+    /* Phases */
+    [data-composition-id="scene-2-the-ask"] .phase {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .phase-pad {
+      width: 100%;
+      max-width: 1500px;
+      padding: 0 80px;
+    }
+
+    [data-composition-id="scene-2-the-ask"] .big-quote {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 78px;
+      font-weight: 300;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      color: #f5f5f5;
+      text-align: left;
+    }
+    [data-composition-id="scene-2-the-ask"] .big-quote em {
+      font-style: italic;
+      color: #ff9f43;
+      font-weight: 400;
+    }
+    [data-composition-id="scene-2-the-ask"] .qmark {
+      color: #525252;
+      font-weight: 400;
+    }
+
+    /* Phone */
+    [data-composition-id="scene-2-the-ask"] .phone-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .phone {
+      width: 380px;
+      height: 760px;
+      background: #141414;
+      border: 1.5px solid #2a2a2a;
+      border-radius: 38px;
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-2-the-ask"] .phone-notch {
+      position: absolute;
+      top: 22px; left: 50%;
+      transform: translateX(-50%);
+      width: 110px; height: 26px;
+      background: #0a0a0a;
+      border-radius: 14px;
+      z-index: 2;
+    }
+    [data-composition-id="scene-2-the-ask"] .phone-screen {
+      width: 100%;
+      height: 100%;
+      background: #0a0a0a;
+      border-radius: 28px;
+      padding: 18px 22px 22px;
+      display: flex;
+      flex-direction: column;
+    }
+    [data-composition-id="scene-2-the-ask"] .status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 8px 18px;
+    }
+    [data-composition-id="scene-2-the-ask"] .sb-time {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      color: #f5f5f5;
+      font-variant-numeric: tabular-nums;
+    }
+    [data-composition-id="scene-2-the-ask"] .sb-right {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    [data-composition-id="scene-2-the-ask"] .airplane {
+      color: #ff9f43;
+      font-size: 18px;
+    }
+    [data-composition-id="scene-2-the-ask"] .battery {
+      width: 22px; height: 11px;
+      border: 1.2px solid #f5f5f5;
+      border-radius: 2px;
+      background: linear-gradient(90deg, #f5f5f5 70%, transparent 70%);
+      background-clip: padding-box;
+    }
+    [data-composition-id="scene-2-the-ask"] .app-name {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      letter-spacing: 0.25em;
+      color: #525252;
+      margin-top: 18px;
+    }
+    [data-composition-id="scene-2-the-ask"] .app-subhead {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 38px;
+      font-weight: 700;
+      color: #f5f5f5;
+      margin-top: 4px;
+      margin-bottom: 22px;
+      letter-spacing: -0.02em;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 14px;
+      border-radius: 12px;
+      margin-bottom: 10px;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-active {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-dim { opacity: 0.55; }
+    [data-composition-id="scene-2-the-ask"] .skill-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #5fdb87;
+      flex-shrink: 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-dim .skill-dot { background: #525252; }
+    [data-composition-id="scene-2-the-ask"] .skill-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-title {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 17px;
+      font-weight: 600;
+      color: #f5f5f5;
+      letter-spacing: -0.01em;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-tag {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      color: #737373;
+      letter-spacing: 0.05em;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-state {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      color: #5fdb87;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-2-the-ask"] .skill-dim .skill-state { color: #525252; }
+
+    /* Paper card */
+    [data-composition-id="scene-2-the-ask"] .card-stage {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    [data-composition-id="scene-2-the-ask"] .paper-card {
+      width: 980px;
+      padding: 80px 96px;
+      background: linear-gradient(180deg, #1a1a1a 0%, #141414 100%);
+      border: 1.5px solid #2a2a2a;
+      border-radius: 6px;
+      transform: rotate(-1.5deg);
+      box-shadow: 0 0 0 1px rgba(255,159,67,0.04) inset;
+    }
+    [data-composition-id="scene-2-the-ask"] .card-eyebrow {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      letter-spacing: 0.25em;
+      color: #ff9f43;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-2-the-ask"] .card-rule {
+      width: 80px; height: 2px;
+      background: #2a2a2a;
+      margin: 26px 0 32px;
+    }
+    [data-composition-id="scene-2-the-ask"] .card-url {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 68px;
+      font-weight: 600;
+      color: #f5f5f5;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+    [data-composition-id="scene-2-the-ask"] .card-clinic {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 38px;
+      color: #a3a3a3;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      margin-top: 24px;
+    }
+    [data-composition-id="scene-2-the-ask"] .card-foot {
+      display: flex;
+      gap: 14px;
+      margin-top: 36px;
+      align-items: center;
+    }
+    [data-composition-id="scene-2-the-ask"] .foot-tag {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      color: #525252;
+    }
+    [data-composition-id="scene-2-the-ask"] .foot-sep { color: #2a2a2a; }
+
+    /* Airplane mode chyron */
+    [data-composition-id="scene-2-the-ask"] .airplane-chyron {
+      position: absolute;
+      bottom: 80px; left: 80px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      background: rgba(20, 20, 20, 0.85);
+      border: 1px solid #2a2a2a;
+      border-radius: 100px;
+      opacity: 0;
+    }
+    [data-composition-id="scene-2-the-ask"] .ap-icon {
+      color: #ff9f43;
+      font-size: 18px;
+    }
+    [data-composition-id="scene-2-the-ask"] .ap-text {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+      color: #f5f5f5;
+      letter-spacing: 0.05em;
+    }
+
+    /* Captions */
+    [data-composition-id="scene-2-the-ask"] .cap-strip {
+      position: absolute;
+      bottom: 80px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    [data-composition-id="scene-2-the-ask"] .cap {
+      position: absolute;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 34px;
+      font-weight: 400;
+      color: #f5f5f5;
+      letter-spacing: -0.01em;
+      max-width: 1500px;
+      text-align: center;
+      opacity: 0;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      // Ambient
+      tl.fromTo(".glow-dawn", { scale: 0.9, opacity: 0 }, { scale: 1.05, opacity: 1, duration: 8, ease: "sine.inOut" }, 0);
+      tl.fromTo(".glow-deep", { scale: 0.92, opacity: 0 }, { scale: 1, opacity: 1, duration: 6, ease: "sine.inOut" }, 1);
+
+      // Time chyron — appears immediately, persists whole scene
+      tl.from(".chy-day", { y: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.3);
+      tl.from(".chy-time", { y: 14, opacity: 0, duration: 0.55, ease: "power3.out" }, 0.4);
+      tl.from(".chy-rule", { scaleX: 0, opacity: 0, duration: 0.4, ease: "expo.out", transformOrigin: "left center" }, 0.7);
+      tl.from(".chy-meta", { y: 8, opacity: 0, duration: 0.35, ease: "power2.out" }, 0.85);
+
+      // ============ PHASE A: Big quote (0 - 5.5s) ============
+      tl.set(".phase-a", { opacity: 1 }, 0);
+      tl.from(".big-quote", { y: 30, opacity: 0, duration: 0.9, ease: "power3.out" }, 1.0);
+      tl.from(".big-quote em", { color: "#f5f5f5", duration: 0.6, ease: "sine.inOut" }, 2.0);
+
+      // Caption 1
+      tl.from("#cap-1", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 1.5);
+      tl.set("#cap-1", { opacity: 1 }, 1.9);
+      tl.set("#cap-1", { opacity: 0 }, 5.3);
+
+      // Cut to phase B
+      tl.set(".phase-a", { opacity: 0 }, 5.5);
+
+      // ============ PHASE B: Phone with airplane (5.5 - 13.5s) ============
+      tl.set(".phase-b", { opacity: 1 }, 5.5);
+      tl.from(".phone", { y: 50, opacity: 0, scale: 0.92, duration: 0.7, ease: "power3.out" }, 5.55);
+      tl.from(".phone-notch", { opacity: 0, duration: 0.3, ease: "power2.out" }, 5.85);
+      tl.from(".status-bar", { y: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 6.05);
+      tl.from(".airplane", { scale: 0, rotation: -20, opacity: 0, duration: 0.5, ease: "back.out(2)" }, 6.4);
+
+      // App content stagger
+      tl.from(".app-name", { y: 10, opacity: 0, duration: 0.35, ease: "power2.out" }, 6.6);
+      tl.from(".app-subhead", { y: 16, opacity: 0, duration: 0.45, ease: "power3.out" }, 6.7);
+      tl.from('[data-composition-id="scene-2-the-ask"] .skill-row', { y: 14, opacity: 0, duration: 0.4, ease: "power2.out", stagger: 0.1 }, 6.9);
+
+      // Airplane chyron appears
+      tl.from(".airplane-chyron", { x: -30, opacity: 0, duration: 0.5, ease: "power3.out" }, 7.5);
+      tl.set(".airplane-chyron", { opacity: 1 }, 8.0);
+
+      // Caption 2
+      tl.from("#cap-2", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 6.0);
+      tl.set("#cap-2", { opacity: 1 }, 6.4);
+      tl.set("#cap-2", { opacity: 0 }, 9.5);
+
+      // Caption 3
+      tl.from("#cap-3", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 9.6);
+      tl.set("#cap-3", { opacity: 1 }, 10.0);
+      tl.set("#cap-3", { opacity: 0 }, 13.3);
+
+      // Cut to phase C
+      tl.set(".phase-b", { opacity: 0 }, 13.5);
+
+      // ============ PHASE C: Paper card (13.5 - 20.0s) ============
+      tl.set(".phase-c", { opacity: 1 }, 13.5);
+      tl.from(".paper-card", { y: 50, opacity: 0, rotation: -8, scale: 0.92, duration: 0.8, ease: "power3.out" }, 13.55);
+      tl.from(".card-eyebrow", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 13.95);
+      tl.from(".card-rule", { scaleX: 0, opacity: 0, duration: 0.45, ease: "expo.out", transformOrigin: "left center" }, 14.15);
+      tl.from(".card-url", { y: 30, opacity: 0, duration: 0.7, ease: "power3.out" }, 14.3);
+      tl.from(".card-clinic", { y: 16, opacity: 0, duration: 0.5, ease: "power2.out" }, 14.6);
+      tl.from(".card-foot", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 14.85);
+
+      // Caption 4
+      tl.from("#cap-4", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 13.8);
+      tl.set("#cap-4", { opacity: 1 }, 14.2);
+
+      window.__timelines["scene-2-the-ask"] = tl;
+    })();
+  </script>
+</div>
+</template>

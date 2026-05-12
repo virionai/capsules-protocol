@@ -1,0 +1,379 @@
+<template id="scene-1-cold-open-template">
+<div data-composition-id="scene-1-cold-open" data-width="1920" data-height="1080">
+
+  <!-- Background glows (decorative) -->
+  <div class="glow glow-a" data-layout-ignore></div>
+  <div class="glow glow-b" data-layout-ignore></div>
+
+  <!-- Phase A: File hero -->
+  <div class="phase phase-a">
+    <div class="file-card">
+      <div class="file-icon">
+        <div class="file-fold"></div>
+        <div class="file-ext">.capsule</div>
+      </div>
+      <div class="file-meta">
+        <div class="file-name">medical-journal-2026-05-08-c18ac983.capsule</div>
+        <div class="file-stats"><span>16.8 KB</span><span class="dot-sep">·</span><span>signed</span><span class="dot-sep">·</span><span>encrypted</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase B: Terminal -->
+  <div class="phase phase-b">
+    <div class="terminal">
+      <div class="term-chrome">
+        <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+        <span class="term-title">~/journals — zsh</span>
+      </div>
+      <div class="term-body">
+        <div class="term-line">
+          <span class="prompt">$</span>
+          <span class="cmd" id="cmd-text"></span><span class="caret">▌</span>
+        </div>
+        <div class="term-out" id="term-out">
+          <div class="out-line">verified · originator: <span class="mono-mute">ed25519:74b096cc6983…</span></div>
+          <div class="out-line">18 events · 3 media payloads</div>
+          <div class="out-line out-blank"><span class="caret-blink">▌</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase C: Title card -->
+  <div class="phase phase-c">
+    <div class="title-card">
+      <div class="title-mark">Capsule</div>
+      <div class="title-rule"></div>
+      <div class="title-tag">portable, signed, verifiable AI-context records</div>
+      <div class="title-attr">medical-journal — Kaggle Gemma 4 Good Hackathon, 2026</div>
+    </div>
+  </div>
+
+  <!-- V/O captions strip -->
+  <div class="cap-strip">
+    <div class="cap" id="cap-1">This is one file.</div>
+    <div class="cap" id="cap-2">Encrypted. Signed.</div>
+    <div class="cap" id="cap-3">Written by an on-device LLM in airplane mode.</div>
+    <div class="cap" id="cap-4">Opened cold by a doctor with no install.</div>
+  </div>
+
+  <style>
+    [data-composition-id="scene-1-cold-open"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      background: #0a0a0a;
+      color: #f5f5f5;
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-1-cold-open"] * { box-sizing: border-box; }
+
+    [data-composition-id="scene-1-cold-open"] .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      pointer-events: none;
+    }
+    [data-composition-id="scene-1-cold-open"] .glow-a {
+      width: 800px; height: 800px;
+      background: rgba(124, 156, 255, 0.10);
+      top: -200px; left: 50%;
+      transform: translateX(-50%);
+    }
+    [data-composition-id="scene-1-cold-open"] .glow-b {
+      width: 600px; height: 600px;
+      background: rgba(95, 219, 135, 0.06);
+      bottom: -200px; right: -100px;
+    }
+
+    [data-composition-id="scene-1-cold-open"] .phase {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+    }
+
+    /* Phase A: File hero */
+    [data-composition-id="scene-1-cold-open"] .file-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 36px;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-icon {
+      width: 200px;
+      height: 250px;
+      background: linear-gradient(180deg, #1f1f1f 0%, #141414 100%);
+      border: 1.5px solid #2a2a2a;
+      border-radius: 8px;
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 28px;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-fold {
+      position: absolute;
+      top: 0; right: 0;
+      width: 50px; height: 50px;
+      background: #2a2a2a;
+      clip-path: polygon(0 0, 100% 100%, 0 100%);
+      border-bottom-left-radius: 6px;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-ext {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 22px;
+      font-weight: 600;
+      color: #7c9cff;
+      letter-spacing: 0;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-meta {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-name {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 28px;
+      color: #f5f5f5;
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+    [data-composition-id="scene-1-cold-open"] .file-stats {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 22px;
+      color: #a3a3a3;
+      font-weight: 400;
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      font-variant-numeric: tabular-nums;
+    }
+    [data-composition-id="scene-1-cold-open"] .dot-sep { color: #525252; }
+
+    /* Phase B: Terminal */
+    [data-composition-id="scene-1-cold-open"] .terminal {
+      width: 1280px;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.02);
+    }
+    [data-composition-id="scene-1-cold-open"] .term-chrome {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      background: #1f1f1f;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    [data-composition-id="scene-1-cold-open"] .tdot {
+      width: 13px; height: 13px;
+      border-radius: 50%;
+      background: #2a2a2a;
+    }
+    [data-composition-id="scene-1-cold-open"] .term-title {
+      flex: 1;
+      text-align: center;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 16px;
+      color: #a3a3a3;
+      letter-spacing: 0.02em;
+      margin-right: 60px;
+    }
+    [data-composition-id="scene-1-cold-open"] .term-body {
+      padding: 36px 40px;
+      min-height: 320px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 26px;
+      line-height: 1.65;
+      color: #f5f5f5;
+    }
+    [data-composition-id="scene-1-cold-open"] .term-line {
+      display: flex;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 14px;
+    }
+    [data-composition-id="scene-1-cold-open"] .prompt {
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-1-cold-open"] .cmd {
+      color: #f5f5f5;
+      white-space: pre;
+      word-break: break-all;
+    }
+    [data-composition-id="scene-1-cold-open"] .caret {
+      color: #5fdb87;
+      animation: blink 1s steps(2) infinite;
+      margin-left: 2px;
+    }
+    [data-composition-id="scene-1-cold-open"] .caret-blink {
+      color: #5fdb87;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+    [data-composition-id="scene-1-cold-open"] .term-out {
+      color: #5fdb87;
+      margin-top: 10px;
+    }
+    [data-composition-id="scene-1-cold-open"] .out-line {
+      opacity: 0;
+    }
+    [data-composition-id="scene-1-cold-open"] .out-line::before {
+      content: "✓ ";
+      color: #5fdb87;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-1-cold-open"] .out-blank::before { content: ""; }
+    [data-composition-id="scene-1-cold-open"] .mono-mute { color: #a3a3a3; }
+
+    /* Phase C: Title card */
+    [data-composition-id="scene-1-cold-open"] .title-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+    }
+    [data-composition-id="scene-1-cold-open"] .title-mark {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 130px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      color: #f5f5f5;
+      line-height: 1;
+    }
+    [data-composition-id="scene-1-cold-open"] .title-rule {
+      width: 100px;
+      height: 2px;
+      background: #7c9cff;
+    }
+    [data-composition-id="scene-1-cold-open"] .title-tag {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 30px;
+      color: #a3a3a3;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+    }
+    [data-composition-id="scene-1-cold-open"] .title-attr {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      color: #8a8a8a;
+      letter-spacing: 0;
+      margin-top: 4px;
+    }
+
+    /* Captions */
+    [data-composition-id="scene-1-cold-open"] .cap-strip {
+      position: absolute;
+      bottom: 80px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    [data-composition-id="scene-1-cold-open"] .cap {
+      position: absolute;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 34px;
+      font-weight: 400;
+      color: #f5f5f5;
+      letter-spacing: -0.01em;
+      max-width: 1500px;
+      text-align: center;
+      opacity: 0;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      // Decorative ambient
+      tl.fromTo(".glow-a", { scale: 0.85, opacity: 0 }, { scale: 1, opacity: 1, duration: 4, ease: "sine.inOut" }, 0);
+      tl.to(".glow-a", { scale: 1.15, duration: 6, ease: "sine.inOut" }, 4);
+      tl.fromTo(".glow-b", { scale: 0.9, opacity: 0 }, { scale: 1, opacity: 1, duration: 5, ease: "sine.inOut" }, 0.5);
+
+      // ============ PHASE A: File hero (0 - 3.0s) ============
+      tl.set(".phase-a", { opacity: 1 }, 0);
+      tl.from(".file-icon", { y: 40, scale: 0.85, opacity: 0, duration: 0.7, ease: "power3.out" }, 0.3);
+      tl.from(".file-fold", { x: -10, y: 10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.7);
+      tl.from(".file-ext", { y: 15, opacity: 0, duration: 0.5, ease: "power2.out" }, 0.6);
+      tl.from(".file-name", { y: 20, opacity: 0, duration: 0.6, ease: "power2.out" }, 0.7);
+      tl.from(".file-stats", { y: 14, opacity: 0, duration: 0.5, ease: "power2.out" }, 0.85);
+
+      // Caption: "This is one file."
+      tl.from("#cap-1", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.5);
+      tl.set("#cap-1", { opacity: 1 }, 0.9);
+
+      // File pulse (single)
+      tl.to(".file-icon", { scale: 1.06, duration: 0.5, ease: "sine.inOut" }, 1.6);
+      tl.to(".file-icon", { scale: 1.0, duration: 0.6, ease: "sine.inOut" }, 2.1);
+
+      // Cut to terminal: hide phase A
+      tl.set(".phase-a", { opacity: 0 }, 3.0);
+      tl.set("#cap-1", { opacity: 0 }, 3.0);
+
+      // ============ PHASE B: Terminal (3.0 - 8.6s) ============
+      tl.set(".phase-b", { opacity: 1 }, 3.0);
+      tl.from(".terminal", { y: 30, scale: 0.97, opacity: 0, duration: 0.5, ease: "power3.out" }, 3.05);
+      tl.from(".term-chrome", { y: -8, opacity: 0, duration: 0.3, ease: "power2.out" }, 3.2);
+
+      // Type the command (using GSAP scrambleText-style with character reveal)
+      const cmd = "capsule verify medical-journal-2026-05-08-c18ac983.capsule";
+      const cmdEl = { progress: 0 };
+      tl.fromTo(cmdEl, { progress: 0 }, {
+        progress: cmd.length,
+        duration: 1.4,
+        ease: "none",
+        onUpdate: function () {
+          const t = document.querySelector('[data-composition-id="scene-1-cold-open"] #cmd-text');
+          if (t) t.textContent = cmd.slice(0, Math.floor(cmdEl.progress));
+        }
+      }, 3.5);
+
+      // Output prints
+      tl.from('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(1)', { x: -8, opacity: 0, duration: 0.35, ease: "expo.out" }, 5.0);
+      tl.set('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(1)', { opacity: 1 }, 5.35);
+      tl.from('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(2)', { x: -8, opacity: 0, duration: 0.35, ease: "expo.out" }, 5.25);
+      tl.set('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(2)', { opacity: 1 }, 5.6);
+      tl.from('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(3)', { opacity: 0, duration: 0.3, ease: "power2.out" }, 5.6);
+      tl.set('[data-composition-id="scene-1-cold-open"] .term-out .out-line:nth-child(3)', { opacity: 1 }, 5.9);
+
+      // Caption sequence over terminal
+      tl.from("#cap-2", { y: 14, opacity: 0, duration: 0.35, ease: "power2.out" }, 5.5);
+      tl.set("#cap-2", { opacity: 1 }, 5.85);
+      tl.set("#cap-2", { opacity: 0 }, 6.7);
+
+      tl.from("#cap-3", { y: 14, opacity: 0, duration: 0.35, ease: "power2.out" }, 6.7);
+      tl.set("#cap-3", { opacity: 1 }, 7.05);
+      tl.set("#cap-3", { opacity: 0 }, 8.0);
+
+      tl.from("#cap-4", { y: 14, opacity: 0, duration: 0.35, ease: "power2.out" }, 7.95);
+      tl.set("#cap-4", { opacity: 1 }, 8.3);
+
+      // Cut to title card
+      tl.set(".phase-b", { opacity: 0 }, 8.6);
+      tl.set("#cap-4", { opacity: 0 }, 8.6);
+
+      // ============ PHASE C: Title card (8.6 - 10.0s) ============
+      tl.set(".phase-c", { opacity: 1 }, 8.6);
+      tl.from(".title-mark", { y: 30, opacity: 0, duration: 0.5, ease: "power3.out" }, 8.65);
+      tl.from(".title-rule", { scaleX: 0, opacity: 0, duration: 0.5, ease: "expo.out", transformOrigin: "left center" }, 8.85);
+      tl.from(".title-tag", { y: 16, opacity: 0, duration: 0.4, ease: "power2.out" }, 8.95);
+      tl.from(".title-attr", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 9.1);
+
+      window.__timelines["scene-1-cold-open"] = tl;
+    })();
+  </script>
+</div>
+</template>

@@ -1,0 +1,502 @@
+<template id="scene-7-format-moat-template">
+<div data-composition-id="scene-7-format-moat" data-width="1920" data-height="1080">
+
+  <div class="glow glow-a" data-layout-ignore></div>
+  <div class="glow glow-b" data-layout-ignore></div>
+
+  <!-- Section label -->
+  <div class="section-label">
+    <span class="sl-num">06</span>
+    <span class="sl-text">FORMAT · ONE SPEC · THREE IMPLEMENTATIONS</span>
+  </div>
+
+  <!-- Phase A: SSH terminal -->
+  <div class="phase phase-a">
+    <div class="ssh-stage">
+      <div class="ssh-eyebrow">VERIFY VIA SSH · NO CAPSULE CLIENT INSTALLED</div>
+
+      <div class="terminal">
+        <div class="term-chrome">
+          <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+          <span class="term-title">capsules.run — ssh</span>
+        </div>
+        <div class="term-body">
+          <div class="term-line">
+            <span class="prompt">$</span>
+            <span class="cmd" id="ssh-cmd"></span><span class="caret">▌</span>
+          </div>
+          <div class="term-out" id="ssh-out">
+            <div class="out-line out-head"><span class="out-mark">✓</span> verified</div>
+            <div class="out-line"><span class="out-key">originator:</span><span class="out-val">ed25519:74b096cc6983…</span></div>
+            <div class="out-line"><span class="out-key">signed_at:</span><span class="out-val">2026-05-08T17:16:55Z</span></div>
+            <div class="out-line"><span class="out-key">events:</span><span class="out-val">18</span></div>
+            <div class="out-line"><span class="out-key">media:</span><span class="out-val">3 files (337 B + 1644 B + 32 B)</span></div>
+            <div class="out-line out-attest"><span class="out-key">attestation:</span><span class="out-val">rfc8785 · sha256(envelope) c1225fba96b5…</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase B: Three implementations -->
+  <div class="phase phase-b">
+    <div class="impl-stage">
+      <div class="impl-head">
+        <div class="ih-eyebrow">FORMAT · CAPSULE 0.6</div>
+        <div class="ih-title">Three implementations.<br/>One spec.</div>
+        <div class="ih-rule"></div>
+        <div class="ih-sub">bit-identical against signed v0.6 test vectors</div>
+      </div>
+
+      <div class="impl-grid">
+        <div class="impl-card impl-js">
+          <div class="ic-mark">JS</div>
+          <div class="ic-name">JavaScript</div>
+          <div class="ic-runtime">node 22 · deno 2 · bun · browser</div>
+          <div class="ic-hash">
+            <span class="ich-key">sha256</span>
+            <span class="ich-val">c1225fba96b5…</span>
+          </div>
+          <div class="ic-foot"><span class="icf-mark">✓</span> 184 / 184 vectors</div>
+        </div>
+
+        <div class="impl-card impl-py">
+          <div class="ic-mark">PY</div>
+          <div class="ic-name">Python</div>
+          <div class="ic-runtime">cpython 3.12 · pypy</div>
+          <div class="ic-hash">
+            <span class="ich-key">sha256</span>
+            <span class="ich-val">c1225fba96b5…</span>
+          </div>
+          <div class="ic-foot"><span class="icf-mark">✓</span> 184 / 184 vectors</div>
+        </div>
+
+        <div class="impl-card impl-rs">
+          <div class="ic-mark">RS</div>
+          <div class="ic-name">Rust</div>
+          <div class="ic-runtime">stable 1.84 · no_std · wasm</div>
+          <div class="ic-hash">
+            <span class="ich-key">sha256</span>
+            <span class="ich-val">c1225fba96b5…</span>
+          </div>
+          <div class="ic-foot"><span class="icf-mark">✓</span> 184 / 184 vectors</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- V/O caption strip -->
+  <div class="cap-strip">
+    <div class="cap" id="cap-1">Same file. Verified by SSH.</div>
+    <div class="cap" id="cap-2">No Capsule keypair to bootstrap — the clinician's SSH key is the trust path.</div>
+    <div class="cap" id="cap-3">Three independent implementations. One spec.</div>
+    <div class="cap" id="cap-4">The format is the bet. The journal is the proof.</div>
+  </div>
+
+  <style>
+    [data-composition-id="scene-7-format-moat"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      background: #0a0a0a;
+      color: #f5f5f5;
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-7-format-moat"] * { box-sizing: border-box; }
+
+    [data-composition-id="scene-7-format-moat"] .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(140px);
+      pointer-events: none;
+    }
+    [data-composition-id="scene-7-format-moat"] .glow-a {
+      width: 900px; height: 800px;
+      background: rgba(95, 219, 135, 0.10);
+      top: -200px; left: 50%;
+      transform: translateX(-50%);
+    }
+    [data-composition-id="scene-7-format-moat"] .glow-b {
+      width: 700px; height: 700px;
+      background: rgba(124, 156, 255, 0.07);
+      bottom: -200px; right: -100px;
+    }
+
+    [data-composition-id="scene-7-format-moat"] .section-label {
+      position: absolute;
+      top: 64px; left: 80px;
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }
+    [data-composition-id="scene-7-format-moat"] .sl-num {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 24px;
+      color: #5fdb87;
+      font-weight: 700;
+    }
+    [data-composition-id="scene-7-format-moat"] .sl-text {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+      letter-spacing: 0.25em;
+      color: #a3a3a3;
+      font-weight: 600;
+    }
+
+    [data-composition-id="scene-7-format-moat"] .phase {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+    }
+
+    /* SSH terminal */
+    [data-composition-id="scene-7-format-moat"] .ssh-stage {
+      width: 1500px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+    [data-composition-id="scene-7-format-moat"] .ssh-eyebrow {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      letter-spacing: 0.3em;
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-7-format-moat"] .terminal {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-7-format-moat"] .term-chrome {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      background: #1f1f1f;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    [data-composition-id="scene-7-format-moat"] .tdot {
+      width: 13px; height: 13px;
+      border-radius: 50%;
+      background: #2a2a2a;
+    }
+    [data-composition-id="scene-7-format-moat"] .term-title {
+      flex: 1;
+      text-align: center;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 16px;
+      color: #a3a3a3;
+      letter-spacing: 0.02em;
+      margin-right: 60px;
+    }
+    [data-composition-id="scene-7-format-moat"] .term-body {
+      padding: 36px 44px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 26px;
+      line-height: 1.55;
+    }
+    [data-composition-id="scene-7-format-moat"] .term-line {
+      display: flex;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    [data-composition-id="scene-7-format-moat"] .prompt {
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-7-format-moat"] .cmd {
+      color: #f5f5f5;
+      white-space: pre;
+    }
+    [data-composition-id="scene-7-format-moat"] .caret {
+      color: #5fdb87;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+
+    [data-composition-id="scene-7-format-moat"] .term-out {
+      margin-top: 16px;
+      color: #5fdb87;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-line {
+      display: flex;
+      gap: 18px;
+      padding: 4px 0;
+      align-items: baseline;
+      opacity: 0;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-head {
+      font-weight: 600;
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-mark {
+      color: #5fdb87;
+      font-weight: 700;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-key {
+      color: #a3a3a3;
+      width: 180px;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-val {
+      color: #f5f5f5;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-attest {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #1f1f1f;
+    }
+    [data-composition-id="scene-7-format-moat"] .out-attest .out-val {
+      color: #5fdb87;
+    }
+
+    /* Implementations */
+    [data-composition-id="scene-7-format-moat"] .impl-stage {
+      width: 1700px;
+      display: flex;
+      flex-direction: column;
+      gap: 50px;
+      align-items: center;
+    }
+    [data-composition-id="scene-7-format-moat"] .impl-head {
+      text-align: center;
+    }
+    [data-composition-id="scene-7-format-moat"] .ih-eyebrow {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+      letter-spacing: 0.3em;
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-7-format-moat"] .ih-title {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 76px;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      margin-top: 12px;
+    }
+    [data-composition-id="scene-7-format-moat"] .ih-rule {
+      width: 60px; height: 2px;
+      background: #5fdb87;
+      margin: 24px auto 14px;
+    }
+    [data-composition-id="scene-7-format-moat"] .ih-sub {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      color: #5fdb87;
+      letter-spacing: 0;
+    }
+
+    [data-composition-id="scene-7-format-moat"] .impl-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+      width: 100%;
+    }
+    [data-composition-id="scene-7-format-moat"] .impl-card {
+      padding: 36px 30px;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    [data-composition-id="scene-7-format-moat"] .ic-mark {
+      width: 60px; height: 60px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    [data-composition-id="scene-7-format-moat"] .impl-js .ic-mark { background: rgba(255, 159, 67, 0.15); color: #ff9f43; }
+    [data-composition-id="scene-7-format-moat"] .impl-py .ic-mark { background: rgba(124, 156, 255, 0.15); color: #7c9cff; }
+    [data-composition-id="scene-7-format-moat"] .impl-rs .ic-mark { background: rgba(95, 219, 135, 0.15); color: #5fdb87; }
+    [data-composition-id="scene-7-format-moat"] .ic-name {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 44px;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: -0.025em;
+      line-height: 1;
+    }
+    [data-composition-id="scene-7-format-moat"] .ic-runtime {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      color: #a3a3a3;
+      letter-spacing: 0;
+    }
+    [data-composition-id="scene-7-format-moat"] .ic-hash {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 14px 16px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      margin-top: 4px;
+    }
+    [data-composition-id="scene-7-format-moat"] .ich-key {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      color: #737373;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-7-format-moat"] .ich-val {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 20px;
+      color: #5fdb87;
+      letter-spacing: 0;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-7-format-moat"] .ic-foot {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-top: 12px;
+      border-top: 1px solid #1f1f1f;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      color: #5fdb87;
+    }
+    [data-composition-id="scene-7-format-moat"] .icf-mark {
+      color: #5fdb87;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    /* Captions */
+    [data-composition-id="scene-7-format-moat"] .cap-strip {
+      position: absolute;
+      bottom: 60px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    [data-composition-id="scene-7-format-moat"] .cap {
+      position: absolute;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 32px;
+      font-weight: 400;
+      color: #f5f5f5;
+      letter-spacing: -0.01em;
+      max-width: 1500px;
+      text-align: center;
+      opacity: 0;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const compRoot = '[data-composition-id="scene-7-format-moat"] ';
+
+      // Ambient
+      tl.fromTo(".glow-a", { scale: 0.92, opacity: 0 }, { scale: 1.08, opacity: 1, duration: 9, ease: "sine.inOut" }, 0);
+      tl.fromTo(".glow-b", { scale: 0.92, opacity: 0 }, { scale: 1.0, opacity: 1, duration: 7, ease: "sine.inOut" }, 1);
+
+      tl.from(".sl-num", { x: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.1);
+      tl.from(".sl-text", { x: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.2);
+
+      // ============ PHASE A: SSH terminal (0 - 11s) ============
+      tl.set(".phase-a", { opacity: 1 }, 0);
+      tl.from(".ssh-eyebrow", { y: -10, opacity: 0, duration: 0.45, ease: "power2.out" }, 0.3);
+      tl.from(".terminal", { y: 30, scale: 0.97, opacity: 0, duration: 0.6, ease: "power3.out" }, 0.4);
+      tl.from(".term-chrome", { y: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.6);
+
+      // Type the command
+      const sshCmd = "ssh verify@capsules.run < medical-journal-2026-05-08-c18ac983.capsule";
+      const sshState = { progress: 0 };
+      tl.fromTo(sshState, { progress: 0 }, {
+        progress: sshCmd.length,
+        duration: 1.6,
+        ease: "none",
+        onUpdate: function () {
+          const t = document.querySelector(compRoot + "#ssh-cmd");
+          if (t) t.textContent = sshCmd.slice(0, Math.floor(sshState.progress));
+        }
+      }, 1.0);
+
+      // Output prints — fast SSH verify (per script: under 2 seconds)
+      tl.from(compRoot + ".out-head", { x: -10, opacity: 0, duration: 0.4, ease: "expo.out" }, 3.0);
+      tl.set(compRoot + ".out-head", { opacity: 1 }, 3.4);
+
+      tl.from(compRoot + ".term-out .out-line:nth-child(2)", { x: -8, opacity: 0, duration: 0.3, ease: "power3.out" }, 3.5);
+      tl.set(compRoot + ".term-out .out-line:nth-child(2)", { opacity: 1 }, 3.8);
+      tl.from(compRoot + ".term-out .out-line:nth-child(3)", { x: -8, opacity: 0, duration: 0.3, ease: "power3.out" }, 3.65);
+      tl.set(compRoot + ".term-out .out-line:nth-child(3)", { opacity: 1 }, 3.95);
+      tl.from(compRoot + ".term-out .out-line:nth-child(4)", { x: -8, opacity: 0, duration: 0.3, ease: "power3.out" }, 3.8);
+      tl.set(compRoot + ".term-out .out-line:nth-child(4)", { opacity: 1 }, 4.1);
+      tl.from(compRoot + ".term-out .out-line:nth-child(5)", { x: -8, opacity: 0, duration: 0.3, ease: "power3.out" }, 3.95);
+      tl.set(compRoot + ".term-out .out-line:nth-child(5)", { opacity: 1 }, 4.25);
+      tl.from(compRoot + ".out-attest", { y: 8, opacity: 0, duration: 0.45, ease: "power3.out" }, 4.4);
+      tl.set(compRoot + ".out-attest", { opacity: 1 }, 4.85);
+
+      // Caption 1
+      tl.from("#cap-1", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 3.4);
+      tl.set("#cap-1", { opacity: 1 }, 3.8);
+      tl.set("#cap-1", { opacity: 0 }, 6.5);
+
+      // Caption 2
+      tl.from("#cap-2", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 6.6);
+      tl.set("#cap-2", { opacity: 1 }, 7.0);
+      tl.set("#cap-2", { opacity: 0 }, 10.7);
+
+      // Cut to phase B
+      tl.set(".phase-a", { opacity: 0 }, 11.0);
+
+      // ============ PHASE B: Implementations (11 - 20s) ============
+      tl.set(".phase-b", { opacity: 1 }, 11.0);
+      tl.from(".ih-eyebrow", { y: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 11.1);
+      tl.from(".ih-title", { y: 24, opacity: 0, duration: 0.65, ease: "power3.out" }, 11.25);
+      tl.from(".ih-rule", { scaleX: 0, opacity: 0, duration: 0.5, ease: "expo.out", transformOrigin: "center" }, 11.65);
+      tl.from(".ih-sub", { y: 10, opacity: 0, duration: 0.4, ease: "power2.out" }, 11.8);
+
+      // Cards stagger in
+      tl.from(".impl-js", { y: 30, opacity: 0, duration: 0.55, ease: "power3.out" }, 12.0);
+      tl.from(".impl-py", { y: 30, opacity: 0, duration: 0.55, ease: "power3.out" }, 12.15);
+      tl.from(".impl-rs", { y: 30, opacity: 0, duration: 0.55, ease: "power3.out" }, 12.3);
+
+      // Inside-card content stagger
+      tl.from(compRoot + ".ic-mark", { scale: 0.6, opacity: 0, duration: 0.45, ease: "back.out(1.6)", stagger: 0.1 }, 12.4);
+      tl.from(compRoot + ".ic-name", { x: -10, opacity: 0, duration: 0.4, ease: "power3.out", stagger: 0.1 }, 12.5);
+      tl.from(compRoot + ".ic-runtime", { x: -10, opacity: 0, duration: 0.4, ease: "power2.out", stagger: 0.1 }, 12.65);
+      tl.from(compRoot + ".ic-hash", { y: 10, opacity: 0, duration: 0.4, ease: "power2.out", stagger: 0.1 }, 12.85);
+      tl.from(compRoot + ".ic-foot", { y: 6, opacity: 0, duration: 0.35, ease: "power2.out", stagger: 0.1 }, 13.15);
+
+      // Highlight the matching hashes
+      tl.fromTo(compRoot + ".ich-val", { backgroundColor: "rgba(95,219,135,0)" }, { backgroundColor: "rgba(95,219,135,0.15)", duration: 0.4, ease: "power2.out", stagger: 0.1 }, 14.0);
+      tl.to(compRoot + ".ich-val", { backgroundColor: "rgba(95,219,135,0)", duration: 0.6, ease: "power2.in", stagger: 0.1 }, 14.5);
+
+      // Caption 3
+      tl.from("#cap-3", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 12.0);
+      tl.set("#cap-3", { opacity: 1 }, 12.4);
+      tl.set("#cap-3", { opacity: 0 }, 16.5);
+
+      // Caption 4
+      tl.from("#cap-4", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 16.6);
+      tl.set("#cap-4", { opacity: 1 }, 17.0);
+
+      window.__timelines["scene-7-format-moat"] = tl;
+    })();
+  </script>
+</div>
+</template>

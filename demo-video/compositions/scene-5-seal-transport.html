@@ -1,0 +1,630 @@
+<template id="scene-5-seal-transport-template">
+<div data-composition-id="scene-5-seal-transport" data-width="1920" data-height="1080">
+
+  <div class="glow glow-a" data-layout-ignore></div>
+  <div class="glow glow-b" data-layout-ignore></div>
+
+  <!-- Section label -->
+  <div class="section-label">
+    <span class="sl-num">04</span>
+    <span class="sl-text">SEAL · LOCAL RADIO TRANSPORT</span>
+  </div>
+
+  <!-- Airplane chyron persistent -->
+  <div class="airplane-chyron">
+    <span class="ap-icon">✈</span>
+    <span class="ap-text">airplane mode</span>
+  </div>
+
+  <!-- Phase A: Export panel -->
+  <div class="phase phase-a">
+    <div class="export-panel">
+      <div class="ep-head">
+        <div class="ep-mark">✓</div>
+        <div class="ep-headtxt">
+          <div class="ep-title">Sealed and signed on-device</div>
+          <div class="ep-sub">medical-journal-2026-05-08-c18ac983.capsule</div>
+        </div>
+      </div>
+
+      <div class="ep-rule"></div>
+
+      <div class="ep-stats">
+        <div class="stat">
+          <div class="stat-num">18</div>
+          <div class="stat-lbl">events</div>
+        </div>
+        <div class="stat-sep"></div>
+        <div class="stat">
+          <div class="stat-num">3</div>
+          <div class="stat-lbl">media payloads</div>
+        </div>
+        <div class="stat-sep"></div>
+        <div class="stat">
+          <div class="stat-num stat-mono">c18ac983…</div>
+          <div class="stat-lbl">capsule_id</div>
+        </div>
+        <div class="stat-sep"></div>
+        <div class="stat">
+          <div class="stat-num stat-mono">RX7Q</div>
+          <div class="stat-lbl">trust anchor</div>
+        </div>
+      </div>
+
+      <div class="ep-rule"></div>
+
+      <div class="ep-checks">
+        <div class="ep-check"><span class="ec-mark">✓</span><span>envelope signature</span></div>
+        <div class="ep-check"><span class="ec-mark">✓</span><span>capsule_id derives</span></div>
+        <div class="ep-check"><span class="ec-mark">✓</span><span>content index ok</span></div>
+        <div class="ep-check"><span class="ec-mark">✓</span><span>chain hashes contiguous</span></div>
+      </div>
+
+      <div class="ep-detail">
+        <span class="ed-key">recipients</span>
+        <span class="ed-val">patient · Riverside Dermatology RX7Q</span>
+      </div>
+      <div class="ep-detail">
+        <span class="ed-key">size</span>
+        <span class="ed-val">16.8 KB · format 0.6</span>
+      </div>
+
+      <div class="ep-actions">
+        <div class="btn-secondary">Save .capsule</div>
+        <div class="btn-primary">Share…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase B: AirDrop transfer -->
+  <div class="phase phase-b">
+    <div class="airdrop-stage">
+      <div class="ad-label">
+        <div class="adl-eyebrow">AIRDROP · PEER-TO-PEER</div>
+        <div class="adl-title">Local radio, not the internet</div>
+      </div>
+
+      <div class="ad-devices">
+        <div class="ad-device ad-source">
+          <div class="ad-dev-frame phone-shape">
+            <div class="dev-screen">
+              <div class="dev-icon">⎘</div>
+              <div class="dev-name">capsule</div>
+              <div class="dev-size">16.8 KB</div>
+            </div>
+          </div>
+          <div class="ad-dev-label">PATIENT · PIXEL 8</div>
+        </div>
+
+        <div class="ad-track">
+          <div class="ad-arc">
+            <div class="ad-packet" id="ad-packet">
+              <div class="packet-icon">⎘</div>
+            </div>
+            <div class="ad-arc-line"></div>
+          </div>
+          <div class="ad-status" id="ad-status">SENDING…</div>
+        </div>
+
+        <div class="ad-device ad-dest">
+          <div class="ad-dev-frame ipad-shape">
+            <div class="dev-screen ipad-screen">
+              <div class="dev-icon" id="ipad-icon">…</div>
+              <div class="dev-name" id="ipad-name">awaiting</div>
+              <div class="dev-size" id="ipad-size">—</div>
+            </div>
+          </div>
+          <div class="ad-dev-label">DR. SINGH · IPAD</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- V/O caption strip -->
+  <div class="cap-strip">
+    <div class="cap" id="cap-1">The skill re-seals the capsule and re-encrypts it to the patient and the clinic.</div>
+    <div class="cap" id="cap-2">The file on disk is the medical record.</div>
+    <div class="cap" id="cap-3">Local radio, not the internet.</div>
+    <div class="cap" id="cap-4">Airplane mode still on.</div>
+  </div>
+
+  <style>
+    [data-composition-id="scene-5-seal-transport"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      background: #0a0a0a;
+      color: #f5f5f5;
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      overflow: hidden;
+    }
+    [data-composition-id="scene-5-seal-transport"] * { box-sizing: border-box; }
+
+    [data-composition-id="scene-5-seal-transport"] .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(140px);
+      pointer-events: none;
+    }
+    [data-composition-id="scene-5-seal-transport"] .glow-a {
+      width: 800px; height: 800px;
+      background: rgba(95, 219, 135, 0.10);
+      top: -200px; right: -100px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .glow-b {
+      width: 800px; height: 700px;
+      background: rgba(124, 156, 255, 0.08);
+      bottom: -200px; left: -100px;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .section-label {
+      position: absolute;
+      top: 64px; left: 80px;
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .sl-num {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 24px;
+      color: #5fdb87;
+      font-weight: 700;
+    }
+    [data-composition-id="scene-5-seal-transport"] .sl-text {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+      letter-spacing: 0.25em;
+      color: #a3a3a3;
+      font-weight: 600;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .airplane-chyron {
+      position: absolute;
+      bottom: 80px; left: 80px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: rgba(20, 20, 20, 0.85);
+      border: 1px solid #2a2a2a;
+      border-radius: 100px;
+      z-index: 5;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ap-icon {
+      color: #ff9f43;
+      font-size: 16px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ap-text {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      color: #f5f5f5;
+      letter-spacing: 0.05em;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .phase {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+    }
+
+    /* Export panel */
+    [data-composition-id="scene-5-seal-transport"] .export-panel {
+      width: 1280px;
+      padding: 56px 72px;
+      background: linear-gradient(180deg, #1a1a1a 0%, #141414 100%);
+      border: 1px solid #2a2a2a;
+      border-radius: 14px;
+      box-shadow: 0 0 0 1px rgba(95, 219, 135, 0.10);
+    }
+    [data-composition-id="scene-5-seal-transport"] .ep-head {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ep-mark {
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      border: 2px solid #5fdb87;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #5fdb87;
+      font-size: 32px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ep-title {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: -0.025em;
+      line-height: 1;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ep-sub {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      color: #a3a3a3;
+      margin-top: 8px;
+      letter-spacing: 0;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ep-rule {
+      height: 1px;
+      background: #2a2a2a;
+      margin: 32px 0;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ep-stats {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      justify-content: space-between;
+    }
+    [data-composition-id="scene-5-seal-transport"] .stat {
+      flex: 1;
+      text-align: center;
+    }
+    [data-composition-id="scene-5-seal-transport"] .stat-sep {
+      width: 1px;
+      height: 60px;
+      background: #2a2a2a;
+    }
+    [data-composition-id="scene-5-seal-transport"] .stat-num {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 56px;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    [data-composition-id="scene-5-seal-transport"] .stat-mono {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 38px;
+      letter-spacing: 0;
+    }
+    [data-composition-id="scene-5-seal-transport"] .stat-lbl {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      letter-spacing: 0.2em;
+      color: #737373;
+      margin-top: 10px;
+      text-transform: uppercase;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ep-checks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px 32px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ep-check {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 22px;
+      color: #f5f5f5;
+      letter-spacing: 0;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ec-mark {
+      color: #5fdb87;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ep-detail {
+      display: flex;
+      gap: 16px;
+      align-items: baseline;
+      margin-top: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ed-key {
+      color: #525252;
+      letter-spacing: 0.1em;
+      width: 120px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ed-val {
+      color: #a3a3a3;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ep-actions {
+      display: flex;
+      gap: 14px;
+      justify-content: flex-end;
+      margin-top: 36px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .btn-secondary {
+      padding: 16px 30px;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 18px;
+      color: #a3a3a3;
+      font-weight: 500;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      letter-spacing: 0.05em;
+    }
+    [data-composition-id="scene-5-seal-transport"] .btn-primary {
+      padding: 16px 38px;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 18px;
+      color: #0a0a0a;
+      font-weight: 700;
+      background: #5fdb87;
+      border-radius: 6px;
+      letter-spacing: 0.05em;
+    }
+
+    /* AirDrop */
+    [data-composition-id="scene-5-seal-transport"] .airdrop-stage {
+      width: 100%;
+      max-width: 1600px;
+      padding: 0 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 60px;
+      align-items: center;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-label {
+      text-align: center;
+    }
+    [data-composition-id="scene-5-seal-transport"] .adl-eyebrow {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      letter-spacing: 0.3em;
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-5-seal-transport"] .adl-title {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 64px;
+      font-weight: 400;
+      color: #f5f5f5;
+      letter-spacing: -0.025em;
+      margin-top: 14px;
+      line-height: 1.1;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-devices {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      justify-content: space-between;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-device {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 22px;
+      flex-shrink: 0;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-dev-frame {
+      background: #141414;
+      border: 1.5px solid #2a2a2a;
+      padding: 14px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .phone-shape {
+      width: 220px; height: 420px;
+      border-radius: 28px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ipad-shape {
+      width: 360px; height: 470px;
+      border-radius: 22px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .dev-screen {
+      width: 100%; height: 100%;
+      background: #0a0a0a;
+      border-radius: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ipad-screen { border-radius: 10px; }
+    [data-composition-id="scene-5-seal-transport"] .dev-icon {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 56px;
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-5-seal-transport"] .dev-name {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 18px;
+      color: #f5f5f5;
+    }
+    [data-composition-id="scene-5-seal-transport"] .dev-size {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      color: #737373;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-dev-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 14px;
+      letter-spacing: 0.2em;
+      color: #737373;
+      font-weight: 600;
+    }
+
+    [data-composition-id="scene-5-seal-transport"] .ad-track {
+      flex: 1;
+      position: relative;
+      height: 200px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      margin: 0 30px;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-arc {
+      position: relative;
+      width: 100%;
+      height: 100px;
+      display: flex;
+      align-items: center;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-arc-line {
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(124,156,255,0) 0%, rgba(124,156,255,0.6) 50%, rgba(124,156,255,0) 100%);
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-packet {
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 70px; height: 70px;
+      background: #1a1a1a;
+      border: 2px solid #7c9cff;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 32px;
+      color: #7c9cff;
+      font-weight: 600;
+    }
+    [data-composition-id="scene-5-seal-transport"] .ad-status {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 16px;
+      letter-spacing: 0.3em;
+      color: #7c9cff;
+      font-weight: 600;
+      margin-top: 24px;
+    }
+
+    /* Captions */
+    [data-composition-id="scene-5-seal-transport"] .cap-strip {
+      position: absolute;
+      bottom: 80px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    [data-composition-id="scene-5-seal-transport"] .cap {
+      position: absolute;
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 32px;
+      font-weight: 400;
+      color: #f5f5f5;
+      letter-spacing: -0.01em;
+      max-width: 1500px;
+      text-align: center;
+      opacity: 0;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const compRoot = '[data-composition-id="scene-5-seal-transport"] ';
+
+      // Ambient
+      tl.fromTo(".glow-a", { scale: 0.92, opacity: 0 }, { scale: 1.08, opacity: 1, duration: 9, ease: "sine.inOut" }, 0);
+      tl.fromTo(".glow-b", { scale: 0.92, opacity: 0 }, { scale: 1.0, opacity: 1, duration: 7, ease: "sine.inOut" }, 1);
+
+      tl.from(".sl-num", { x: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.1);
+      tl.from(".sl-text", { x: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.2);
+      tl.from(".airplane-chyron", { x: -20, opacity: 0, duration: 0.5, ease: "power3.out" }, 0.4);
+
+      // ============ PHASE A: Export panel (0 - 14s) ============
+      tl.set(".phase-a", { opacity: 1 }, 0);
+      tl.from(".export-panel", { y: 60, scale: 0.95, opacity: 0, duration: 0.8, ease: "power3.out" }, 0.4);
+
+      // Header
+      tl.from(".ep-mark", { scale: 0, rotation: -45, opacity: 0, duration: 0.55, ease: "back.out(1.6)" }, 0.9);
+      tl.from(".ep-title", { x: -20, opacity: 0, duration: 0.55, ease: "power3.out" }, 1.05);
+      tl.from(".ep-sub", { x: -20, opacity: 0, duration: 0.45, ease: "power2.out" }, 1.2);
+
+      // First rule
+      tl.from(compRoot + ".ep-rule:nth-of-type(1)", { scaleX: 0, opacity: 0, duration: 0.5, ease: "expo.out", transformOrigin: "left center" }, 1.4);
+
+      // Stats
+      tl.from(compRoot + ".ep-stats .stat", { y: 16, opacity: 0, duration: 0.45, ease: "power3.out", stagger: 0.12 }, 1.5);
+      tl.from(compRoot + ".ep-stats .stat-sep", { scaleY: 0, opacity: 0, duration: 0.4, ease: "expo.out", transformOrigin: "center", stagger: 0.12 }, 1.7);
+
+      // Second rule
+      tl.from(compRoot + ".ep-rule:nth-of-type(2)", { scaleX: 0, opacity: 0, duration: 0.5, ease: "expo.out", transformOrigin: "left center" }, 2.6);
+
+      // Checks
+      tl.from(compRoot + ".ep-check", { x: -20, opacity: 0, duration: 0.4, ease: "power3.out", stagger: 0.12 }, 2.8);
+
+      // Detail rows
+      tl.from(compRoot + ".ep-detail", { x: -10, opacity: 0, duration: 0.35, ease: "power2.out", stagger: 0.08 }, 3.6);
+
+      // Buttons
+      tl.from(compRoot + ".ep-actions .btn-secondary", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 4.0);
+      tl.from(compRoot + ".ep-actions .btn-primary", { y: 14, opacity: 0, duration: 0.4, ease: "power2.out" }, 4.1);
+
+      // Pulse share button
+      tl.to(compRoot + ".btn-primary", { scale: 1.06, duration: 0.25, ease: "power2.out" }, 7.0);
+      tl.to(compRoot + ".btn-primary", { scale: 1.0, duration: 0.3, ease: "power2.in" }, 7.25);
+
+      // Caption 1
+      tl.from("#cap-1", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 1.0);
+      tl.set("#cap-1", { opacity: 1 }, 1.4);
+      tl.set("#cap-1", { opacity: 0 }, 6.5);
+
+      // Caption 2
+      tl.from("#cap-2", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 6.6);
+      tl.set("#cap-2", { opacity: 1 }, 7.0);
+      tl.set("#cap-2", { opacity: 0 }, 13.5);
+
+      // Cut to AirDrop
+      tl.set(".phase-a", { opacity: 0 }, 14.0);
+
+      // ============ PHASE B: AirDrop (14 - 30s) ============
+      tl.set(".phase-b", { opacity: 1 }, 14.0);
+      tl.from(".adl-eyebrow", { y: -10, opacity: 0, duration: 0.4, ease: "power2.out" }, 14.1);
+      tl.from(".adl-title", { y: 18, opacity: 0, duration: 0.6, ease: "power3.out" }, 14.25);
+      tl.from(".ad-source", { x: -40, opacity: 0, duration: 0.6, ease: "power3.out" }, 14.4);
+      tl.from(".ad-dest", { x: 40, opacity: 0, duration: 0.6, ease: "power3.out" }, 14.55);
+      tl.from(".ad-arc-line", { scaleX: 0, opacity: 0, duration: 0.7, ease: "power2.inOut", transformOrigin: "left center" }, 14.9);
+      tl.from(".ad-packet", { scale: 0.5, opacity: 0, duration: 0.4, ease: "back.out(1.5)" }, 15.4);
+      tl.from(".ad-status", { y: 8, opacity: 0, duration: 0.35, ease: "power2.out" }, 15.6);
+
+      // Packet flies
+      tl.to(".ad-packet", { left: "calc(100% - 70px)", duration: 2.0, ease: "power2.inOut" }, 17.0);
+      tl.to(".ad-packet", { rotation: 8, duration: 1.0, ease: "sine.inOut" }, 17.2);
+      tl.to(".ad-packet", { rotation: 0, duration: 0.8, ease: "sine.inOut" }, 18.2);
+
+      // Status updates
+      tl.to("#ad-status", { color: "#5fdb87", duration: 0.3 }, 19.0);
+      tl.set("#ad-status", { textContent: "RECEIVED ✓" }, 19.1);
+      tl.fromTo("#ad-status", { scale: 0.9 }, { scale: 1, duration: 0.4, ease: "back.out(2)" }, 19.1);
+
+      // iPad fills with file info
+      tl.to("#ipad-icon", { color: "#5fdb87", duration: 0.3 }, 19.2);
+      tl.set("#ipad-icon", { textContent: "⎘" }, 19.2);
+      tl.set("#ipad-name", { textContent: "capsule" }, 19.2);
+      tl.set("#ipad-size", { textContent: "16.8 KB" }, 19.2);
+      tl.fromTo(["#ipad-icon", "#ipad-name", "#ipad-size"], { y: 8, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: "power3.out", stagger: 0.06 }, 19.2);
+
+      // Pulse on dest device
+      tl.fromTo(".ad-dest .ad-dev-frame", { boxShadow: "0 0 0 0 rgba(95,219,135,0)" }, { boxShadow: "0 0 0 6px rgba(95,219,135,0.3)", duration: 0.4, ease: "power2.out" }, 19.1);
+      tl.to(".ad-dest .ad-dev-frame", { boxShadow: "0 0 0 0 rgba(95,219,135,0)", duration: 0.6, ease: "power2.in" }, 19.5);
+
+      // Caption 3
+      tl.from("#cap-3", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 14.5);
+      tl.set("#cap-3", { opacity: 1 }, 14.9);
+      tl.set("#cap-3", { opacity: 0 }, 22.0);
+
+      // Caption 4
+      tl.from("#cap-4", { y: 12, opacity: 0, duration: 0.4, ease: "power2.out" }, 22.1);
+      tl.set("#cap-4", { opacity: 1 }, 22.5);
+
+      window.__timelines["scene-5-seal-transport"] = tl;
+    })();
+  </script>
+</div>
+</template>
