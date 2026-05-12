@@ -19,7 +19,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@capsule/sdk-v0.6-prototype": "file:../sdk"
+    "@capsule/sdk-v0.6-prototype": "file:../sdk-js"
   },
   "license": "Apache-2.0"
 }

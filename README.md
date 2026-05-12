@@ -35,7 +35,7 @@ they claim to bind.
 ## Layout
 
 ```
-new-design/
+capsules-protocol/
 ├── README.md                       you are here
 ├── ROADMAP.md                      one-page roadmap with kill criteria
 ├── spec/                           the v0.6 protocol specification
@@ -45,7 +45,7 @@ new-design/
 │   ├── chain.md                    event chain rules
 │   ├── envelope.md                 provenance envelope schema
 │   └── trust.md                    trust model and skill trust tiers
-├── sdk/                            reference TypeScript-free JS SDK
+├── sdk-js/                         reference TypeScript-free JS SDK
 │   ├── package.json
 │   ├── src/                        builder, reader, verifier, crypto, zip
 │   └── test/
