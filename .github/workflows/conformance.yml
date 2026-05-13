@@ -11,21 +11,25 @@ on:
   workflow_dispatch:
 
 permissions:
-  # Default-deny. The job opts in to `contents: write` only when it
-  # needs to commit the regenerated report back to main.
   contents: read
 
 jobs:
   conformance:
     name: Run conformance harness
     runs-on: ubuntu-latest
-    # Allow the auto-commit step to push to main on push-to-main runs.
+    # This job needs write access to push the regenerated report back to
+    # main via the auto-commit step below.
     permissions:
       contents: write
     timeout-minutes: 20
+    # Pin every `run:` step to bash so PIPESTATUS et al. behave the same
+    # regardless of any future runner-image default-shell change.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           # Need full history for the auto-commit step to push back.
           fetch-depth: 0
@@ -33,7 +37,7 @@ jobs:
           persist-credentials: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
           # No package.json at repo root; the harness installs each
@@ -55,7 +59,7 @@ jobs:
 
       - name: Upload conformance report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: conformance-report
           path: |
@@ -70,7 +74,7 @@ jobs:
         # currently skip the commit step too (flip the `if:` if we want
         # nightly autocommits later).
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403  # v5.2.0
         with:
           commit_message: "ci: refresh output/conformance-report.md"
           # Only commit the two report files; harness.log etc. stays
