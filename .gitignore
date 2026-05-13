@@ -35,3 +35,12 @@ DerivedData/
 
 # Local logs
 *.log
+
+# Demo-video render outputs (the .mp4 binaries are large; the
+# compositions/ sources are what we track).
+demo-video/renders/
+
+# Conformance reports — CI regenerates these on every push to main.
+# Keep the directory itself (via .gitkeep) so workflows can write here.
+output/*
+!output/.gitkeep
