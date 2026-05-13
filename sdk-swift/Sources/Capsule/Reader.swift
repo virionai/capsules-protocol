@@ -212,7 +212,34 @@ public enum CapsuleReader {
             else {
                 throw CapsuleError.malformed("key bundle missing required fields")
             }
-            match = (Bytes.fromHex(epHex), Bytes.fromHex(wnHex), Bytes.fromHex(wkHex))
+            // Hex from untrusted capsule metadata — must not panic on
+            // malformed input. Byte-count guards run here rather than
+            // relying on the downstream ChaCha20-Poly1305 preconditions.
+            let ephPub = try Bytes.fromHexThrowing(
+                epHex, label: "decryption.key_bundles[].ephemeral_public_key"
+            )
+            guard ephPub.count == 32 else {
+                throw CapsuleError.malformed(
+                    "decryption.key_bundles[].ephemeral_public_key must decode to 32 bytes, got \(ephPub.count)"
+                )
+            }
+            let wrapNonce = try Bytes.fromHexThrowing(
+                wnHex, label: "decryption.key_bundles[].wrap_nonce"
+            )
+            guard wrapNonce.count == 12 else {
+                throw CapsuleError.malformed(
+                    "decryption.key_bundles[].wrap_nonce must decode to 12 bytes, got \(wrapNonce.count)"
+                )
+            }
+            let wrappedKey = try Bytes.fromHexThrowing(
+                wkHex, label: "decryption.key_bundles[].wrapped_key"
+            )
+            guard wrappedKey.count >= 16 else {
+                throw CapsuleError.malformed(
+                    "decryption.key_bundles[].wrapped_key too short (\(wrappedKey.count) bytes) for AEAD tag"
+                )
+            }
+            match = (ephPub, wrapNonce, wrappedKey)
             break
         }
         guard let m = match else {
@@ -260,7 +287,14 @@ public enum CapsuleReader {
         guard let contentEnc = outer.files["content.enc"] else {
             throw CapsuleError.malformed("content.enc missing")
         }
-        let contentNonce = Bytes.fromHex(contentNonceHex)
+        let contentNonce = try Bytes.fromHexThrowing(
+            contentNonceHex, label: "decryption.content_nonce"
+        )
+        guard contentNonce.count == 12 else {
+            throw CapsuleError.malformed(
+                "decryption.content_nonce must decode to 12 bytes, got \(contentNonce.count)"
+            )
+        }
         let innerZip: Data
         do {
             innerZip = try ChaCha20Poly1305.decrypt(

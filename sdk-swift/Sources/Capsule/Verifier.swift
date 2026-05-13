@@ -174,13 +174,22 @@ public enum CapsuleVerifier {
            let mfId = lookupString(parsed.manifest, ["id"]),
            let envId = lookupString(parsed.envelope, ["capsule_id"])
         {
-            let expected = Manifest.computeCapsuleId(
-                originatorPub: Bytes.fromHex(pubHex),
-                firstEventHashHex: firstHash
-            )
-            record("capsule_id",
-                   expected == mfId && expected == envId,
-                   String(expected.prefix(12)) + "…")
+            // Untrusted hex from manifest — degrade gracefully on bad input
+            // (originator pub must be 64 hex chars, first_event_hash 64).
+            if let pubBytes = try? Bytes.fromHexThrowing(pubHex, label: "manifest.originator.public_key"),
+               pubBytes.count == 32, firstHash.count == 64,
+               (try? Bytes.fromHexThrowing(firstHash, label: "manifest.first_event_hash")) != nil
+            {
+                let expected = Manifest.computeCapsuleId(
+                    originatorPub: pubBytes,
+                    firstEventHashHex: firstHash
+                )
+                record("capsule_id",
+                       expected == mfId && expected == envId,
+                       String(expected.prefix(12)) + "…")
+            } else {
+                record("capsule_id", false, "malformed hex fields")
+            }
         } else {
             record("capsule_id", false, "missing fields")
         }

@@ -45,6 +45,27 @@ public enum Bytes {
         }
         return out
     }
+    /// Parse hex into raw bytes. Throws `CapsuleError.malformed` on bad
+    /// input. Use this on untrusted hex (e.g. capsule metadata read out
+    /// of a caller-supplied `.capsule` file). For internal, SDK-controlled
+    /// inputs (round-trip seal paths, builder-side hex) the non-throwing
+    /// `fromHex` is fine and gives clearer crashes on programmer error.
+    public static func fromHexThrowing(_ hex: String, label: String = "hex") throws -> Data {
+        guard hex.count % 2 == 0 else {
+            throw CapsuleError.malformed("\(label): odd-length hex (\(hex.count) chars)")
+        }
+        var out = Data(capacity: hex.count / 2)
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let next = hex.index(idx, offsetBy: 2)
+            guard let byte = UInt8(hex[idx..<next], radix: 16) else {
+                throw CapsuleError.malformed("\(label): non-hex character in '\(hex[idx..<next])'")
+            }
+            out.append(byte)
+            idx = next
+        }
+        return out
+    }
     public static func concat(_ parts: Data...) -> Data {
         var out = Data()
         for p in parts { out.append(p) }

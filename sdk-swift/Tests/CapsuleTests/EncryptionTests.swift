@@ -341,6 +341,104 @@ final class EncryptedRoundTripTests: XCTestCase {
         }
     }
 
+    /// Regression test for the precondition crash in `Bytes.fromHex` when
+    /// `decryption.json` carries malformed hex. `openInner` must throw
+    /// `CapsuleError.malformed` rather than terminate the host process.
+    func testMalformedHexInDecryptionMetadataThrows() throws {
+        let recipient = X25519KeyPair.generate()
+        let (_, bytes) = try buildEncryptedCapsule(recipients: [recipient])
+
+        // Helper: unpack outer, mutate decryption.json, repack, assert openInner throws malformed.
+        func tamperAndAssertThrows(
+            replacing: String,
+            with replacement: String,
+            expectField: String,
+            file: StaticString = #file, line: UInt = #line
+        ) throws {
+            let entries = try CapsuleZip.unpack(bytes)
+            var files = entries.reduce(into: [String: Data]()) { $0[$1.path] = $1.data }
+            guard let metaBytes = files["skills/decryption/decryption.json"],
+                  let metaStr = String(data: metaBytes, encoding: .utf8)
+            else { return XCTFail("decryption.json missing", file: file, line: line) }
+            let tamperedMeta = metaStr.replacingOccurrences(of: replacing, with: replacement)
+            XCTAssertNotEqual(tamperedMeta, metaStr,
+                              "tamper substitution must actually change the file",
+                              file: file, line: line)
+            files["skills/decryption/decryption.json"] = Data(tamperedMeta.utf8)
+            let tampered = CapsuleZip.pack(files.map { ($0.key, $0.value) })
+
+            let outer = try CapsuleReader.parse(tampered)
+            XCTAssertThrowsError(
+                try CapsuleReader.openInner(
+                    outer,
+                    recipientPrivateKey: recipient.privateKeyBytes,
+                    recipientPublicKey: recipient.publicKeyBytes
+                ),
+                file: file, line: line
+            ) { err in
+                let msg = "\(err)".lowercased()
+                XCTAssertTrue(msg.contains("malformed"),
+                              "expected CapsuleError.malformed, got \(err)",
+                              file: file, line: line)
+                XCTAssertTrue(msg.contains(expectField.lowercased()),
+                              "error must name field '\(expectField)', got \(err)",
+                              file: file, line: line)
+            }
+        }
+
+        // 1) content_nonce — replace the first hex char of its value with
+        // 'z' (non-hex). The original value is 12 random bytes = 24 hex
+        // chars; mutating leaves the length even so the failure must be
+        // the non-hex character branch.
+        let entries = try CapsuleZip.unpack(bytes)
+        let metaBytes = entries.first(where: { $0.path == "skills/decryption/decryption.json" })!.data
+        let metaStr = String(data: metaBytes, encoding: .utf8)!
+        // Yank out the actual content_nonce value so the substitution is unique.
+        // decryption.json is JCS — keys are alphabetical so `"content_nonce":"<hex>"` appears once.
+        let needle = "\"content_nonce\":\""
+        let after = metaStr.range(of: needle)!.upperBound
+        let end = metaStr[after...].firstIndex(of: "\"")!
+        let originalNonce = String(metaStr[after..<end])
+        XCTAssertEqual(originalNonce.count, 24, "content_nonce should be 24 hex chars (12 bytes)")
+        // Replace with a 24-char non-hex string.
+        try tamperAndAssertThrows(
+            replacing: "\"content_nonce\":\"\(originalNonce)\"",
+            with: "\"content_nonce\":\"zzzzzzzzzzzzzzzzzzzzzzzz\"",
+            expectField: "content_nonce"
+        )
+
+        // 2) Same field but odd-length hex — exercises the length branch.
+        try tamperAndAssertThrows(
+            replacing: "\"content_nonce\":\"\(originalNonce)\"",
+            with: "\"content_nonce\":\"abc\"",
+            expectField: "content_nonce"
+        )
+
+        // 3) wrapped_key with odd-length hex inside the key bundle.
+        // Find the actual wrapped_key value first.
+        let wkNeedle = "\"wrapped_key\":\""
+        let wkAfter = metaStr.range(of: wkNeedle)!.upperBound
+        let wkEnd = metaStr[wkAfter...].firstIndex(of: "\"")!
+        let wkOriginal = String(metaStr[wkAfter..<wkEnd])
+        try tamperAndAssertThrows(
+            replacing: "\"wrapped_key\":\"\(wkOriginal)\"",
+            with: "\"wrapped_key\":\"abc\"",
+            expectField: "wrapped_key"
+        )
+
+        // 4) ephemeral_public_key with non-hex chars.
+        let epNeedle = "\"ephemeral_public_key\":\""
+        let epAfter = metaStr.range(of: epNeedle)!.upperBound
+        let epEnd = metaStr[epAfter...].firstIndex(of: "\"")!
+        let epOriginal = String(metaStr[epAfter..<epEnd])
+        XCTAssertEqual(epOriginal.count, 64, "ephemeral_public_key should be 64 hex chars (32 bytes)")
+        try tamperAndAssertThrows(
+            replacing: "\"ephemeral_public_key\":\"\(epOriginal)\"",
+            with: "\"ephemeral_public_key\":\"" + String(repeating: "z", count: 64) + "\"",
+            expectField: "ephemeral_public_key"
+        )
+    }
+
     func testL2EncryptedVerifies() throws {
         let recipient = X25519KeyPair.generate()
         let (origin, bytes) = try buildEncryptedCapsule(recipients: [recipient])
