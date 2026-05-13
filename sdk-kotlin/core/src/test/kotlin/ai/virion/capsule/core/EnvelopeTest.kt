@@ -17,18 +17,18 @@ import kotlin.test.assertTrue
 class EnvelopeTest {
     private val hex64 = "0".repeat(64)
 
-    private fun minimalEnvelope(): JCSValue = JCSValue.Obj(listOf(
-        "version" to JCSValue.Str("0.6"),
-        "capsule_id" to JCSValue.Str(hex64),
-        "first_event_hash" to JCSValue.Str(hex64),
-        "entry_hash" to JCSValue.Str(hex64),
-        "manifest_hash" to JCSValue.Str(hex64),
-        "content_index_hash" to JCSValue.Str(hex64),
-        "encrypted_blob_hash" to JCSValue.Null,
-        "cipher" to JCSValue.Str("none"),
-        "signed_at" to JCSValue.Str("2026-05-07T12:00:00Z"),
+    private fun minimalEnvelope(): JCSValue = jobj(
+        "version" to jstr("0.6"),
+        "capsule_id" to jstr(hex64),
+        "first_event_hash" to jstr(hex64),
+        "entry_hash" to jstr(hex64),
+        "manifest_hash" to jstr(hex64),
+        "content_index_hash" to jstr(hex64),
+        "encrypted_blob_hash" to jstr(null),
+        "cipher" to jstr("none"),
+        "signed_at" to jstr("2026-05-07T12:00:00Z"),
         "signers" to JCSValue.Arr(emptyList()),
-    ))
+    )
 
     @Test
     fun signingInputPrefixMatchesSpecDomainSeparator() {
@@ -52,17 +52,17 @@ class EnvelopeTest {
 
     @Test
     fun byteAfterRoleIsNulNotSpace() {
-        // "capsule-provenance-v0.6:" is 24 bytes; "originator" is 10 bytes.
-        // The byte at index 34 is the terminator that follows the role.
+        // The byte at (prefixLen + role.length) is the terminator that follows the role.
         // Spec requires 0x00 (NUL). The historical bug used 0x20 (SPACE).
-        val envelope = minimalEnvelope()
-        val input = Envelope.signingInput(envelope, role = "originator")
+        val role = "originator"
+        val prefixLen = "capsule-provenance-v0.6:".length
+        val input = Envelope.signingInput(minimalEnvelope(), role = role)
 
-        assertTrue(input.size > 34, "signing input too short to contain terminator byte")
+        assertTrue(input.size > prefixLen + role.length, "signing input shorter than domain separator")
         assertEquals(
             0x00.toByte(),
-            input[34],
-            "byte after role must be NUL (0x00), not 0x${"%02x".format(input[34].toInt() and 0xff)}",
+            input[prefixLen + role.length],
+            "byte after role must be NUL (0x00), not 0x${"%02x".format(input[prefixLen + role.length].toInt() and 0xff)}",
         )
     }
 }
