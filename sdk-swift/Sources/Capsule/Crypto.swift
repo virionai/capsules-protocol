@@ -101,7 +101,9 @@ public struct X25519KeyPair {
     }
     /// X25519 ECDH; returns the raw 32-byte shared secret.
     public func dh(peerPublicKey: Data) throws -> Data {
-        precondition(peerPublicKey.count == 32, "X25519 peer pubkey must be 32 bytes")
+        guard peerPublicKey.count == 32 else {
+            throw CapsuleError.malformed("X25519 peer pubkey must be 32 bytes, got \(peerPublicKey.count)")
+        }
         let pk = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerPublicKey)
         let secret = try privateKey.sharedSecretFromKeyAgreement(with: pk)
         return secret.withUnsafeBytes { Data($0) }

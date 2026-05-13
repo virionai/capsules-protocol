@@ -335,7 +335,10 @@ final class EncryptedRoundTripTests: XCTestCase {
                 recipientPrivateKey: interloper.privateKeyBytes,
                 recipientPublicKey: intended.publicKeyBytes
             )
-        )
+        ) { err in
+            XCTAssertTrue("\(err)".lowercased().contains("aead"),
+                          "expected AEAD failure for wrong private half, got \(err)")
+        }
     }
 
     func testL2EncryptedVerifies() throws {
