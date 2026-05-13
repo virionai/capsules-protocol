@@ -20,8 +20,6 @@ public struct ExportCapsuleButton: View {
     private let result: CapsuleBuilder.BuildResult
     private let label: String
     private let suggestedFileName: String
-    @State private var sharing = false
-    @State private var verification: CapsuleVerification?
 
     public init(result: CapsuleBuilder.BuildResult,
                 label: String = "Share .capsule",
@@ -34,6 +32,9 @@ public struct ExportCapsuleButton: View {
     }
 
     #if canImport(UIKit)
+    @State private var sharing = false
+    @State private var verification: CapsuleVerification?
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
