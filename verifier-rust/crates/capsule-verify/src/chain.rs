@@ -1,5 +1,5 @@
 //! Chain walk + per-event hash recompute. Mirrors `verifyChain` and
-//! `firstAndEntryHash` in `sdk/src/chain.js`.
+//! `firstAndEntryHash` in `sdk-js/src/chain.js`.
 //!
 //! The chain commits to a sequence of events. Each event's `hash` is the
 //! SHA-256 of `prev_hash_raw || JCS(event_minus_hash)`, where `prev_hash_raw`
@@ -65,7 +65,7 @@ pub fn hash_event_value(event_minus_hash: &serde_json::Value) -> Option<[u8; 32]
 
 /// Walk a slice of events, returning per-event errors (and a global ok bit).
 ///
-/// Mirrors `verifyChain` in `sdk/src/chain.js`. The error messages here are
+/// Mirrors `verifyChain` in `sdk-js/src/chain.js`. The error messages here are
 /// kept verbatim with the JS strings except for substitution syntax (Rust
 /// `{}` vs JS template literal).
 pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {

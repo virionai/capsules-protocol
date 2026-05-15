@@ -227,9 +227,12 @@ export class CapsuleBuilder {
     const innerZipBytes = await packZip(innerAllFiles);
 
     // 3b) Encrypt inner zip.
-    // AAD uses only static envelope fields available pre-decrypt
-    // (no outer manifest_hash — that depends on encrypted_blob_hash, which
-    //  depends on this encryption step).
+    // AAD per spec/envelope.md "Encryption" — version, capsule_id,
+    // first_event_hash, originator_public_key, cipher. manifest_hash
+    // is intentionally excluded (the outer manifest depends on the
+    // encrypted_blob_hash, which depends on this step; the inner
+    // content commitment is established at L3 by the inner envelope).
+    // Field order is irrelevant — JCS sorts keys lexicographically.
     const contentKey = randomKey32();
     const contentNonce = randomNonce12();
 

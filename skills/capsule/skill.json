@@ -1,0 +1,136 @@
+{
+  "id": "capsule",
+  "version": "0.6.0",
+  "title": "Capsule v0.6 — portable verifiable work-product",
+  "description": "A portable unit of intelligence: a work product, the context to continue it, and a signed append-only audit trail. Verifies offline. Cold-readable by foreign LLMs.",
+  "spec_version": "0.6",
+  "audience": [
+    "foreign-llm",
+    "auditor",
+    "human-reader"
+  ],
+  "applies_to": "manifest.format.version == \"0.6\"",
+  "links": {
+    "manifest": "manifest.json",
+    "program": "program.md",
+    "agents": "agents.md",
+    "chain": "chain/events.jsonl",
+    "envelope": "provenance/envelope.json"
+  },
+  "references": [
+    {
+      "type": "spec",
+      "path": "spec/README.md",
+      "title": "Spec index"
+    },
+    {
+      "type": "spec",
+      "path": "spec/format.md",
+      "title": "File layout"
+    },
+    {
+      "type": "spec",
+      "path": "spec/manifest.md",
+      "title": "manifest.json schema"
+    },
+    {
+      "type": "spec",
+      "path": "spec/chain.md",
+      "title": "Event chain rules"
+    },
+    {
+      "type": "spec",
+      "path": "spec/envelope.md",
+      "title": "Provenance envelope"
+    },
+    {
+      "type": "spec",
+      "path": "spec/trust.md",
+      "title": "Trust model"
+    },
+    {
+      "type": "spec",
+      "path": "spec/pith.md",
+      "title": "Pith context style"
+    },
+    {
+      "type": "sdk",
+      "path": "sdk-js/",
+      "title": "Reference SDK (Node)"
+    },
+    {
+      "type": "sdk",
+      "path": "sdk-py/",
+      "title": "Python SDK"
+    },
+    {
+      "type": "sdk",
+      "path": "sdk-swift/",
+      "title": "Swift SDK"
+    },
+    {
+      "type": "sdk",
+      "path": "sdk-kotlin/",
+      "title": "Kotlin SDK"
+    },
+    {
+      "type": "verifier",
+      "path": "verifier-rust/",
+      "title": "Independent Rust verifier"
+    },
+    {
+      "type": "cli",
+      "path": "cli/",
+      "title": "Capsule CLI"
+    }
+  ],
+  "issuer": {
+    "label": "capsules-protocol",
+    "url": "https://github.com/virion-ai/capsule"
+  },
+  "provenance": {
+    "generated_by": "tools/regen-capsule-skill.mjs",
+    "sources": [
+      {
+        "path": "spec/README.md",
+        "title": "Spec index",
+        "sha256": "022b2be01a9b1e7cf4e7de5309ec93302e8398197c9bc0eb5b20d675f0845b64"
+      },
+      {
+        "path": "spec/format.md",
+        "title": "File layout",
+        "sha256": "6e6383723756dd3bae27434b1233af9f24ca9a50a6f60cdb75db6bebfa4c992e"
+      },
+      {
+        "path": "spec/manifest.md",
+        "title": "manifest.json schema",
+        "sha256": "09a53b55b4521244d0591412602695c06730d16a5c996b9796bcb3de033d7af4"
+      },
+      {
+        "path": "spec/chain.md",
+        "title": "Event chain rules",
+        "sha256": "16ddb7c83d615b9bd397f535fa3e9df94dd1d66112227c676e4d275a745d363d"
+      },
+      {
+        "path": "spec/envelope.md",
+        "title": "Provenance envelope",
+        "sha256": "dff28c020451832f21d8ff2dae61cc7f41b70e146f0e2783a95b17c4399b7b40"
+      },
+      {
+        "path": "spec/trust.md",
+        "title": "Trust model",
+        "sha256": "850ad0122fcb8d9a2a4b936a36b3dc988626905c96437d60bcac14ad45516ace"
+      },
+      {
+        "path": "spec/pith.md",
+        "title": "Pith context style",
+        "sha256": "adb8e133420028e7b41ab7bfcc647540e675c11616722ef63090051259b40a51"
+      },
+      {
+        "path": "skills/capsule/SKILL.md",
+        "title": "Foreign-LLM instructions",
+        "sha256": "3a908fddd1771833fd063c960c088bcf1c77d7356fd6bba353b20435c665f1d1"
+      }
+    ]
+  }
+}

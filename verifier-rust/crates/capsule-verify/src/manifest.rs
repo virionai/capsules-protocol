@@ -1,7 +1,7 @@
 //! Manifest-level helpers: capsule_id derivation, content_index recompute,
 //! manifest_hash. Mirrors `computeCapsuleId`, `buildContentIndex`,
 //! `manifestHash`, and the `CONTENT_INDEX_EXCLUDED` set from
-//! `sdk/src/manifest.js`.
+//! `sdk-js/src/manifest.js`.
 //!
 //! The functions here are pure: they take parsed schemas and per-file
 //! byte maps, and return the strings or vectors the top-level verifier
@@ -54,7 +54,7 @@ pub enum CapsuleIdError {
 /// Compute capsule_id as `sha256_hex(domain || originator_pubkey_raw ||
 /// first_event_hash_raw)`, where `domain = b"capsule-id-v0.6\0"`.
 ///
-/// Mirrors `computeCapsuleId` in `sdk/src/manifest.js`.
+/// Mirrors `computeCapsuleId` in `sdk-js/src/manifest.js`.
 pub fn compute_capsule_id(
     originator_pubkey_raw: &[u8],
     first_event_hash_hex: &str,
@@ -80,7 +80,7 @@ pub fn compute_capsule_id(
 /// array is sorted by path (matching the JS reference's `sort` step), and
 /// `index_hash = sha256_hex(jcs(files_as_value))`.
 ///
-/// Mirrors `buildContentIndex` in `sdk/src/manifest.js`.
+/// Mirrors `buildContentIndex` in `sdk-js/src/manifest.js`.
 pub fn build_content_index(files: &BTreeMap<String, Vec<u8>>) -> ContentIndex {
     let mut entries: Vec<ContentIndexEntry> = Vec::new();
     for (path, bytes) in files {
@@ -116,7 +116,7 @@ pub fn build_content_index(files: &BTreeMap<String, Vec<u8>>) -> ContentIndex {
 
 /// JCS-canonical bytes of a manifest, then SHA-256, lowercase hex.
 ///
-/// Mirrors `manifestHash` in `sdk/src/manifest.js`. Goes through
+/// Mirrors `manifestHash` in `sdk-js/src/manifest.js`. Goes through
 /// `serde_json::to_value` so the canonicalization runs over the same shape
 /// the JS reference's `JSON.stringify` would produce.
 pub fn manifest_hash(manifest: &Manifest) -> String {

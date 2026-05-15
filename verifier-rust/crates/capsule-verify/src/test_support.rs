@@ -25,7 +25,7 @@ fn fixture_path(name: &str) -> PathBuf {
         .unwrap_or_else(|_| {
             panic!(
                 "fixture {name:?} missing; \
-                 run `cd new-design/examples/tamper-detection && npm install && npm run build`"
+                 run `cd examples/tamper-detection && npm install && npm run build`"
             )
         })
 }
@@ -64,7 +64,7 @@ pub fn recipient_x25519_private_key() -> [u8; 32] {
         .canonicalize()
         .expect(
             "keys.json missing; \
-             run `cd new-design/examples/tamper-detection && npm install && npm run build`",
+             run `cd examples/tamper-detection && npm install && npm run build`",
         );
     let bytes = std::fs::read(&path).expect("read keys.json");
     let v: serde_json::Value =

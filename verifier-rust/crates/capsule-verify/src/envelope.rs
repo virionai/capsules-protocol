@@ -1,6 +1,6 @@
 //! Envelope canonical payload, signing input, and per-signer Ed25519
 //! verification. Mirrors `envelopeCanonicalPayload`, `envelopeSigningInput`,
-//! and `verifyEnvelopeSignatures` in `sdk/src/envelope.js`.
+//! and `verifyEnvelopeSignatures` in `sdk-js/src/envelope.js`.
 //!
 //! The signed payload is `JCS(envelope minus signers)`. The actual signing
 //! input is then `domain_sep_bytes || canonical_envelope_bytes`, where
@@ -26,7 +26,7 @@ pub struct VerifiedSigner {
 
 /// JCS-canonical bytes of `envelope` with the `signers` field removed.
 ///
-/// Matches `envelopeCanonicalPayload` in `sdk/src/envelope.js`. We go through
+/// Matches `envelopeCanonicalPayload` in `sdk-js/src/envelope.js`. We go through
 /// `serde_json::to_value` (rather than constructing a parallel
 /// "EnvelopeMinusSigners" struct) so that any future field added to
 /// `Envelope` is automatically picked up — and so the JCS canonicalization

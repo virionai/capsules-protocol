@@ -4,7 +4,7 @@
 // Runs each known target (SDK + examples) serially, captures structured
 // results, and writes both JSON and Markdown reports under output/.
 //
-// Invoke from the new-design/ directory:
+// Invoke from the capsules-protocol/ directory:
 //   node tools/run-conformance.mjs
 //
 // Exits 0 if all targets pass, 1 otherwise. Skipped targets do not fail
@@ -34,11 +34,24 @@ const MD_PATH = join(OUT_DIR, "conformance-report.md");
 // ---------------------------------------------------------------------------
 const TARGETS = [
   {
+    // Drift detector for skills/capsule/skill.json. Runs first so spec
+    // edits that forget to regenerate the canonical skill fail loudly
+    // before any example build burns time. No dependencies — Node only.
+    id: "skill-capsule-regen",
+    name: "skills/capsule regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node tools/regen-capsule-skill.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "sdk-js",
     name: "@capsule/sdk-v0.6-prototype",
     language: "javascript",
     kind: "sdk",
-    cwd: "sdk",
+    cwd: "sdk-js",
     install_cmd: "npm install --prefer-offline --no-audit --no-fund",
     test_cmd: "npm test",
     pass_signal: { type: "exit_code", value: 0 },

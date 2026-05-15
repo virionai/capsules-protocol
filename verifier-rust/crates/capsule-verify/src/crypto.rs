@@ -1,5 +1,5 @@
-//! Crypto and hex helpers, mirroring `sdk/src/canonical.js` and the Ed25519
-//! verify path in `sdk/src/crypto.js`.
+//! Crypto and hex helpers, mirroring `sdk-js/src/canonical.js` and the Ed25519
+//! verify path in `sdk-js/src/crypto.js`.
 //!
 //! Hex handling is intentionally strict: lowercase only, even length, no
 //! `0x` prefix, no whitespace. This matches the JS reference's lowercase

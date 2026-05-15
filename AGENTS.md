@@ -10,7 +10,7 @@ This repo is the active Capsule protocol/spec/SDK workspace. It was renamed from
 - `ROADMAP.md` records the path to protocol lock and kill criteria.
 - `spec/` is the protocol contract.
 - `sdk-js/` is the reference JavaScript SDK.
-- `CLI/` is the command-line verifier/inspector.
+- `cli/` is the command-line verifier/inspector.
 - `sdk-py/`, `sdk-kotlin/`, `sdk-swift/`, and `verifier-rust/` are peer implementation or verification lanes.
 
 ## Working Rules
@@ -25,7 +25,7 @@ This repo is the active Capsule protocol/spec/SDK workspace. It was renamed from
 
 ```bash
 cd virion/capsule/capsules-protocol/sdk-js && npm test
-cd virion/capsule/capsules-protocol/CLI && npm test
+cd virion/capsule/capsules-protocol/cli && npm test
 cd virion/capsule/capsules-protocol/verifier-rust && cargo test
 ```
 

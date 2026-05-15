@@ -10,7 +10,7 @@
 //! via:
 //!
 //! ```sh
-//! cd new-design/examples/tamper-detection && npm install && npm run build
+//! cd examples/tamper-detection && npm install && npm run build
 //! ```
 //!
 //! The whole suite reads the originator pubkey out of `keys.json` so a
@@ -48,7 +48,7 @@ fn fixture_path(name: &str) -> PathBuf {
         .unwrap_or_else(|_| {
             panic!(
                 "fixture {name:?} missing; \
-                 run `cd new-design/examples/tamper-detection && npm install && npm run build`"
+                 run `cd examples/tamper-detection && npm install && npm run build`"
             )
         })
 }

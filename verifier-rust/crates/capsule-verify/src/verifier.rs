@@ -1,6 +1,6 @@
 //! Top-level verifier: orchestrates the chain, content-index, and envelope
 //! checks against the on-disk artifacts in a Capsule ZIP. Mirrors
-//! `verifyCapsule` in `sdk/src/verifier.js`.
+//! `verifyCapsule` in `sdk-js/src/verifier.js`.
 //!
 //! Behavior summary (in evaluation order):
 //!   1. parse the ZIP
