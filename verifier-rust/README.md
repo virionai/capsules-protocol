@@ -2,8 +2,8 @@
 
 A Rust verifier for Capsule v0.6 capsules (plain and encrypted-outer).
 Written from the spec, not ported from the JS reference. Byte-compatible
-with the JS SDK (`new-design/sdk/`) on the canonical tamper-detection
-corpus (`new-design/examples/tamper-detection/`).
+with the JS SDK (`sdk-js/`) on the canonical tamper-detection
+corpus (`examples/tamper-detection/`).
 
 ## Why this exists
 
@@ -152,7 +152,7 @@ the recipient's X25519 private key is supplied:
 ## Build and test
 
 ```sh
-cd new-design/verifier-rust
+cd verifier-rust
 cargo build --workspace
 cargo test --workspace          # 104 tests, all pass
 cargo run -p capsule-verify-cli -- verify <FILE.capsule>
@@ -488,8 +488,8 @@ catch.
 ## License + provenance
 
 - **License:** Apache-2.0 (workspace-wide).
-- **Spec:** `new-design/spec/`. Anything that disagrees with the spec
+- **Spec:** `spec/`. Anything that disagrees with the spec
   is a verifier bug.
-- **Reference SDK:** `new-design/sdk/` (TypeScript-free JS).
-- **Test fixtures:** `new-design/examples/tamper-detection/output/`,
+- **Reference SDK:** `sdk-js/` (TypeScript-free JS).
+- **Test fixtures:** `examples/tamper-detection/output/`,
   produced by the JS SDK and consumed unchanged by the Rust verifier.

@@ -1,6 +1,6 @@
 //! Deterministic STORED-only ZIP reader with safety checks.
 //!
-//! This is the read side of `sdk/src/zip.js`. The verifier reads `.capsule`
+//! This is the read side of `sdk-js/src/zip.js`. The verifier reads `.capsule`
 //! containers (which are ZIP archives) and must reject any entry that
 //! violates the spec's safety properties:
 //!
@@ -91,7 +91,7 @@ pub enum ZipError {
 }
 
 /// Validate `path` against the safety predicate. Returns a typed reason on
-/// the first violation. Mirrors `assertSafePath` in `sdk/src/zip.js`.
+/// the first violation. Mirrors `assertSafePath` in `sdk-js/src/zip.js`.
 fn check_safe_path(path: &str) -> Result<(), PathReason> {
     if path.is_empty() {
         return Err(PathReason::Empty);

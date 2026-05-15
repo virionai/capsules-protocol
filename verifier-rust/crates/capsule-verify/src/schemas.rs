@@ -203,7 +203,7 @@ pub enum ChainParseError {
 /// number reported on parse failure is the 1-based index in the original
 /// input, which matches `nl`/editor numbering for the underlying file.
 ///
-/// Mirrors `eventsFromJsonl` in `sdk/src/chain.js`.
+/// Mirrors `eventsFromJsonl` in `sdk-js/src/chain.js`.
 pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ChainEvent>, ChainParseError> {
     let text = std::str::from_utf8(bytes)?;
     let mut events = Vec::new();

@@ -29,7 +29,7 @@ an IDE this session**. First steps for the next instance:
 - [ ] **P1** — Cross-impl byte-parity test: feed identical chain inputs
       into Node SDK + Swift SDK + Kotlin SDK and compare the produced
       `manifest_hash` and `content_index_hash`. They should match
-      exactly per the spec's determinism boundary. (`sdk/`'s
+      exactly per the spec's determinism boundary. (`sdk-js/`'s
       verifyCapsule already accepts what the JS reference produces;
       this widens the parity claim.)
 - [ ] **P1** — `medlog-ios` and `medlog-android` currently inline the
@@ -158,7 +158,7 @@ an IDE this session**. First steps for the next instance:
 - The medlog + SDK Capsule cores were authored against the JS
   reference at
   `examples/medical-journal/edge-gallery-skill/assets/medical-journal-builder.js`,
-  which itself is parity-tested against the Node SDK at `sdk/`. So
+  which itself is parity-tested against the Node SDK at `sdk-js/`. So
   the algorithm chain is: JS reference (parity-tested) → Swift core
   (uncompiled) → Kotlin core (uncompiled). The first compile + test
   pass is the single most valuable thing to do.
