@@ -19,7 +19,7 @@
 //!    caller.
 //!
 //! **AAD construction is authoritative against the JS reference SDK
-//! (`sdk/src/builder.js`), not the spec text.** The 5 fields are:
+//! (`sdk-js/src/builder.js`), not the spec text.** The 5 fields are:
 //!
 //! ```text
 //! { "version": "0.6",

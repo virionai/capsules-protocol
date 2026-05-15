@@ -2,7 +2,7 @@
 //!
 //! This module produces canonical JSON byte sequences that must be
 //! byte-identical to the JS reference SDK's `canonicalize` npm package
-//! (`sdk/src/canonical.js`). Identical output is required because the
+//! (`sdk-js/src/canonical.js`). Identical output is required because the
 //! verifier hashes these bytes and any divergence breaks signature checks.
 //!
 //! Implementation: thin wrapper over the `serde_jcs` crate. Every required

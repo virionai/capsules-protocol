@@ -39,10 +39,24 @@ export function concatBytes(...parts) {
   return out;
 }
 
-/** Hex → Buffer; throws on invalid input. */
+/**
+ * Hex → Buffer; throws on invalid input.
+ *
+ * Strict per spec: protocol-bound hex fields are lowercase only. Mixed
+ * case is rejected so that a hand-edited capsule whose stored hex
+ * differs from the canonical form fails at the parse boundary with a
+ * specific error, rather than silently succeeding here and failing
+ * later with a confusing "hash mismatch".
+ *
+ * For user-supplied input that may be either case (e.g. an allowlist
+ * key copied from a UI), normalize with .toLowerCase() before calling.
+ */
 export function hexToBytes(hex) {
   if (typeof hex !== "string") throw new Error("hexToBytes: expected string");
   if (hex.length % 2 !== 0) throw new Error("hexToBytes: odd length");
+  if (/[A-F]/.test(hex)) {
+    throw new Error("hexToBytes: uppercase hex is non-canonical; use lowercase");
+  }
   if (!/^[0-9a-f]*$/.test(hex)) throw new Error("hexToBytes: non-hex characters");
   return Buffer.from(hex, "hex");
 }

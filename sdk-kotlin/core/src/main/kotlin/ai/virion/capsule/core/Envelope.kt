@@ -42,7 +42,7 @@ object Envelope {
 
     fun signingInput(envelope: JCSValue, role: String): ByteArray {
         require(role.isNotEmpty())
-        val domain = "capsule-provenance-v$VERSION:$role ".toByteArray(Charsets.UTF_8)
+        val domain = "capsule-provenance-v$VERSION:$role\u0000".toByteArray(Charsets.UTF_8)
         return CapsuleCrypto.concat(domain, canonicalPayload(envelope))
     }
 

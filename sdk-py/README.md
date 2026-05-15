@@ -99,20 +99,20 @@ builds the JS fixtures via `npm install && npm run build` in
 `examples/tamper-detection`; subsequent runs reuse them. Set
 `CAPSULE_PY_SKIP_JS_BUILD=1` to skip if Node tooling is unavailable.
 
-## Module map (mirrors `sdk/src/`)
+## Module map (mirrors `sdk-js/src/`)
 
 | Python | JS reference | Responsibility |
 |---|---|---|
-| `capsule.canonical` | `sdk/src/canonical.js` | JCS RFC 8785, SHA-256, hex |
-| `capsule.crypto` | `sdk/src/crypto.js` | Ed25519, X25519, HKDF-SHA256, ChaCha20-Poly1305 |
-| `capsule.zip_io` | `sdk/src/zip.js` | Deterministic STORED ZIP + safety |
-| `capsule.pith` | `sdk/src/pith.js` | Narrative-field normalizer |
-| `capsule.chain` | `sdk/src/chain.js` | Event hashing + chain verify |
-| `capsule.manifest` | `sdk/src/manifest.js` | Manifest, capsule_id, content_index |
-| `capsule.envelope` | `sdk/src/envelope.js` | Envelope build + sign + verify |
-| `capsule.builder` | `sdk/src/builder.js` | CapsuleBuilder (plain + encrypted multi-recipient) |
-| `capsule.reader` | `sdk/src/reader.js` | CapsuleReader (plain + decrypt) |
-| `capsule.verifier` | `sdk/src/verifier.js` | verify_capsule (L2 plain, L2 encrypted-aware, L3) |
+| `capsule.canonical` | `sdk-js/src/canonical.js` | JCS RFC 8785, SHA-256, hex |
+| `capsule.crypto` | `sdk-js/src/crypto.js` | Ed25519, X25519, HKDF-SHA256, ChaCha20-Poly1305 |
+| `capsule.zip_io` | `sdk-js/src/zip.js` | Deterministic STORED ZIP + safety |
+| `capsule.pith` | `sdk-js/src/pith.js` | Narrative-field normalizer |
+| `capsule.chain` | `sdk-js/src/chain.js` | Event hashing + chain verify |
+| `capsule.manifest` | `sdk-js/src/manifest.js` | Manifest, capsule_id, content_index |
+| `capsule.envelope` | `sdk-js/src/envelope.js` | Envelope build + sign + verify |
+| `capsule.builder` | `sdk-js/src/builder.js` | CapsuleBuilder (plain + encrypted multi-recipient) |
+| `capsule.reader` | `sdk-js/src/reader.js` | CapsuleReader (plain + decrypt) |
+| `capsule.verifier` | `sdk-js/src/verifier.js` | verify_capsule (L2 plain, L2 encrypted-aware, L3) |
 
 ## License
 

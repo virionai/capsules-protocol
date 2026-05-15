@@ -19,7 +19,7 @@ npm link            # optional; exposes `capsule` globally
 Or invoke directly without linking:
 
 ```sh
-node CLI/bin/capsule.mjs <command> [args...]
+node cli/bin/capsule.mjs <command> [args...]
 ```
 
 Requires Node ≥ 20.

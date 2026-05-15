@@ -13,15 +13,58 @@ import { unpackZip } from "./zip.js";
 
 const dec = new TextDecoder();
 
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * Lightweight shape check on the manifest. Full integrity is the
+ * verifier's job; this catches obvious malformation early so a caller
+ * that reads `reader.manifest().id` without verifying first can rely
+ * on the field being a 64-hex lowercase string per spec.
+ */
+function validateManifestShape(manifest) {
+  if (manifest == null || typeof manifest !== "object") {
+    throw new Error("manifest.json is not a JSON object");
+  }
+  if (manifest.format?.version !== "0.6") {
+    throw new Error(`manifest.format.version: expected '0.6', got ${JSON.stringify(manifest.format?.version)}`);
+  }
+  if (!HEX64.test(manifest.id ?? "")) {
+    throw new Error(`manifest.id is not a 64-char lowercase hex string: ${JSON.stringify(manifest.id)}`);
+  }
+  if (!manifest.originator || !HEX64.test(manifest.originator.public_key ?? "")) {
+    throw new Error("manifest.originator.public_key must be a 64-char lowercase hex string");
+  }
+  if (!HEX64.test(manifest.first_event_hash ?? "")) {
+    throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string");
+  }
+}
+
+function validateEnvelopeShape(envelope) {
+  if (envelope == null || typeof envelope !== "object") {
+    throw new Error("envelope.json is not a JSON object");
+  }
+  if (envelope.version !== "0.6") {
+    throw new Error(`envelope.version: expected '0.6', got ${JSON.stringify(envelope.version)}`);
+  }
+  if (!HEX64.test(envelope.capsule_id ?? "")) {
+    throw new Error("envelope.capsule_id must be a 64-char lowercase hex string");
+  }
+  if (!Array.isArray(envelope.signers) || envelope.signers.length === 0) {
+    throw new Error("envelope.signers must be a non-empty array");
+  }
+}
+
 export class CapsuleReader {
   constructor(files) {
     this.files = files; // Map<path, Uint8Array>
     const manifestBytes = files.get("manifest.json");
     if (!manifestBytes) throw new Error("missing manifest.json");
     this._manifest = JSON.parse(dec.decode(manifestBytes));
+    validateManifestShape(this._manifest);
     const envBytes = files.get("provenance/envelope.json");
     if (!envBytes) throw new Error("missing provenance/envelope.json");
     this._envelope = JSON.parse(dec.decode(envBytes));
+    validateEnvelopeShape(this._envelope);
   }
 
   static async fromBytes(bytes) {
@@ -124,6 +167,8 @@ export class CapsuleReader {
     );
     const contentKey = chacha20Poly1305Decrypt(wrapKey, wrapNonce, Buffer.alloc(0), wrappedKey);
 
+    // AAD reconstructed per spec/envelope.md "Encryption" — must mirror
+    // builder exactly. Do not include manifest_hash; see spec rationale.
     const aad = jcs({
       version: "0.6",
       capsule_id: this._envelope.capsule_id,

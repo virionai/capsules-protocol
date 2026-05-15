@@ -118,16 +118,29 @@ content_key   = random(32)
 content_nonce = random(12)
 
 aad = JCS({
-  "version":             "0.6",
-  "capsule_id":          <hex>,
-  "first_event_hash":    <hex>,
+  "version":               "0.6",
+  "capsule_id":            <hex>,
+  "first_event_hash":      <hex>,
   "originator_public_key": <hex>,
-  "manifest_hash":       <hex>,
-  "cipher":              "ChaCha20-Poly1305"
+  "cipher":                "ChaCha20-Poly1305"
 })
 
 content.enc = ChaCha20-Poly1305(content_key, content_nonce, aad, inner_zip_bytes)
 ```
+
+**Why no `manifest_hash` in AAD.** The outer manifest commits to
+`encrypted_blob_hash` (via its `content_index`), which is the hash of
+`content.enc`, which depends on the AAD. Including the outer
+`manifest_hash` in the AAD would close a cycle. The inner
+`manifest_hash` is available pre-encryption but is intentionally
+omitted here: the inner content's integrity is established at L3 by
+recomputing the inner manifest hash from the decrypted bytes and
+checking it against the inner envelope (which is itself signed by the
+originator). The AAD's job is to prevent cross-envelope substitution
+of `content.enc`; the combination of `capsule_id` (derived from
+`originator_public_key || first_event_hash`) plus `first_event_hash`
+already binds the ciphertext to a specific origin and chain genesis.
+Implementations MUST NOT include `manifest_hash` in the AAD.
 
 For each recipient X25519 public key:
 

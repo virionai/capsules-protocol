@@ -48,7 +48,7 @@ sdk-py/                Python SDK
 sdk-swift/             Swift SDK (iOS/macOS via SwiftPM)
 sdk-kotlin/            Kotlin SDK (Android/JVM via Gradle)
 verifier-rust/         independent Rust verifier (cargo)
-CLI/                   command-line verifier and inspector
+cli/                   command-line verifier and inspector
 tools/                 conformance harness
 .github/workflows/     CI: conformance harness on every push + nightly
 ```
