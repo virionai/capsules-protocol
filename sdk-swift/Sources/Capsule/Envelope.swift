@@ -113,11 +113,20 @@ public enum Envelope {
                   let sigPair = sp.first(where: { $0.0 == "signature" }),
                   case .string(let sigHex) = sigPair.1
             else { allValid = false; continue }
+            // Hex strings on the wire are caller-supplied — never panic.
+            // A malformed signer is just an invalid signature.
+            guard let pkBytes = try? Bytes.fromHexThrowing(pkHex, label: "signer.public_key"),
+                  let sigBytes = try? Bytes.fromHexThrowing(sigHex, label: "signer.signature")
+            else {
+                allValid = false
+                out.append((role, pkHex, false))
+                continue
+            }
             let input = signingInput(envelope, role: role)
             let valid = Ed25519.verify(
-                publicKey: Bytes.fromHex(pkHex),
+                publicKey: pkBytes,
                 message: input,
-                signature: Bytes.fromHex(sigHex)
+                signature: sigBytes
             )
             if !valid { allValid = false }
             out.append((role, pkHex, valid))

@@ -122,6 +122,259 @@ public final class CapsuleBuilder {
     /// envelope APIs for hosts that need it.
     public func seal(signedAt: String? = nil) throws -> BuildResult {
         let sealedAt = signedAt ?? Self.isoNow()
+        let parts = try buildInnerParts(sealedAt: sealedAt)
+        let contentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let manifest = Manifest.build(
+            originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
+                              label: originator.label),
+            participants: participants.map {
+                .init(actorId: $0.actorId, role: $0.role, label: $0.label)
+            },
+            contentIndex: contentIndex,
+            firstEventHash: parts.firstHash,
+            skillTrust: parts.skillTrust,
+            createdAt: createdAt,
+            capsuleId: parts.capsuleId
+        )
+        let mfHash = Manifest.hash(manifest)
+
+        var envelope = Envelope.build(
+            capsuleId: parts.capsuleId,
+            firstEventHash: parts.firstHash,
+            entryHash: parts.entryHash,
+            manifestHash: mfHash,
+            contentIndexHash: contentIndex.indexHash,
+            cipher: "none",
+            signedAt: sealedAt
+        )
+        try Envelope.sign(&envelope, signers: [
+            .init(role: "originator", keyPair: originator.keyPair)
+        ])
+
+        var allFiles = parts.innerFiles
+        allFiles.append(("manifest.json", Manifest.bytes(manifest)))
+        allFiles.append(("provenance/envelope.json", JCS.bytes(envelope)))
+        let zipBytes = CapsuleZip.pack(allFiles.map { ($0.0, $0.1) })
+
+        return BuildResult(
+            bytes: zipBytes,
+            capsuleId: parts.capsuleId,
+            firstEventHash: parts.firstHash,
+            entryHash: parts.entryHash,
+            manifestHash: mfHash,
+            contentIndexHash: contentIndex.indexHash,
+            originatorPublicKey: originator.keyPair.publicKeyHex,
+            signedAt: sealedAt,
+            fileCount: allFiles.count,
+            byteCount: zipBytes.count
+        )
+    }
+
+    /// Recipient for the multi-recipient encrypted seal path. Each recipient
+    /// supplies a 32-byte X25519 raw public key; the builder generates an
+    /// ephemeral X25519 keypair per recipient and HKDFs a wrap key.
+    public struct Recipient {
+        public let publicKey: Data
+        public init(publicKey: Data) {
+            precondition(publicKey.count == 32, "recipient X25519 pubkey must be 32 bytes")
+            self.publicKey = publicKey
+        }
+    }
+
+    /// Encrypted-capsule seal. Mirrors `sdk-js/src/builder.js`'s `seal()`
+    /// when `recipients` is non-empty. Behavior with an empty recipient
+    /// list is identical to the plain `seal(signedAt:)` overload.
+    ///
+    /// Result shape:
+    ///   `bytes`             — outer zip (manifest.json + content.enc +
+    ///                         skills/decryption/decryption.json + envelope)
+    ///   `manifestHash`      — outer manifest hash
+    ///   `contentIndexHash`  — outer content-index hash (covers only the
+    ///                         decryption metadata file)
+    ///   Other fields are shared with the inner capsule (same id,
+    ///   first_event_hash, entry_hash, originator).
+    public func seal(signedAt: String? = nil, recipients: [Recipient]) throws -> BuildResult {
+        if recipients.isEmpty {
+            return try seal(signedAt: signedAt)
+        }
+        let sealedAt = signedAt ?? Self.isoNow()
+
+        // 1) Build inner files + chain anchors + originator/capsule id once.
+        let parts = try buildInnerParts(sealedAt: sealedAt)
+
+        // 2) Build the inner manifest + envelope. The inner package is what
+        // recipients receive after decryption — a fully-formed plain
+        // capsule that an L3 verifier can verify in isolation.
+        let innerContentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let innerManifest = Manifest.build(
+            originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
+                              label: originator.label),
+            participants: participants.map {
+                .init(actorId: $0.actorId, role: $0.role, label: $0.label)
+            },
+            contentIndex: innerContentIndex,
+            firstEventHash: parts.firstHash,
+            skillTrust: parts.skillTrust,
+            encryption: .null,
+            createdAt: createdAt,
+            capsuleId: parts.capsuleId
+        )
+        let innerMfHash = Manifest.hash(innerManifest)
+        var innerEnvelope = Envelope.build(
+            capsuleId: parts.capsuleId,
+            firstEventHash: parts.firstHash,
+            entryHash: parts.entryHash,
+            manifestHash: innerMfHash,
+            contentIndexHash: innerContentIndex.indexHash,
+            cipher: "none",
+            signedAt: sealedAt
+        )
+        try Envelope.sign(&innerEnvelope, signers: [
+            .init(role: "originator", keyPair: originator.keyPair)
+        ])
+
+        var innerAllFiles = parts.innerFiles
+        innerAllFiles.append(("manifest.json", Manifest.bytes(innerManifest)))
+        innerAllFiles.append(("provenance/envelope.json", JCS.bytes(innerEnvelope)))
+        let innerZipBytes = CapsuleZip.pack(innerAllFiles)
+
+        // 3) Encrypt the inner zip.
+        //
+        // AAD uses only static envelope fields available pre-decrypt
+        // (no outer manifest_hash — that depends on encrypted_blob_hash, which
+        //  depends on this encryption step).
+        //
+        // spec/envelope.md lists manifest_hash in the AAD object; the JS
+        // reference SDK omits it knowingly, and the Python SDK matches JS.
+        // We match the JS reference (the cross-SDK source of truth) so a
+        // capsule sealed in Swift decrypts under JS and vice versa.
+        let contentKey = Random.key32()
+        let contentNonce = Random.nonce12()
+        let aad = JCS.bytes(.object([
+            ("version", .string("0.6")),
+            ("capsule_id", .string(parts.capsuleId)),
+            ("first_event_hash", .string(parts.firstHash)),
+            ("originator_public_key", .string(originator.keyPair.publicKeyHex)),
+            ("cipher", .string("ChaCha20-Poly1305")),
+        ]))
+        let contentEnc = try ChaCha20Poly1305.encrypt(
+            key: contentKey, nonce: contentNonce, aad: aad, plaintext: innerZipBytes
+        )
+        let encryptedBlobHash = Hash.sha256Hex(contentEnc)
+
+        // 4) Per-recipient key bundles. Ephemeral X25519 + HKDF-SHA256
+        // (salt = recipient pubkey) → 32-byte wrap key; wrap the content
+        // key with ChaCha20-Poly1305 over empty AAD.
+        var keyBundles: [JCSValue] = []
+        for r in recipients {
+            let eph = X25519KeyPair.generate()
+            let shared = try eph.dh(peerPublicKey: r.publicKey)
+            let wrapKey = HKDF.sha256(
+                ikm: shared,
+                salt: r.publicKey,
+                info: Data("capsule-key-wrap-v0.6".utf8),
+                length: 32
+            )
+            let wrapNonce = Random.nonce12()
+            let wrappedKey = try ChaCha20Poly1305.encrypt(
+                key: wrapKey, nonce: wrapNonce, aad: Data(), plaintext: contentKey
+            )
+            keyBundles.append(.object([
+                ("recipient_public_key", .string(Bytes.toHex(r.publicKey))),
+                ("ephemeral_public_key", .string(eph.publicKeyHex)),
+                ("wrap_nonce", .string(Bytes.toHex(wrapNonce))),
+                ("wrapped_key", .string(Bytes.toHex(wrappedKey))),
+            ]))
+        }
+        let decryptionMeta = JCSValue.object([
+            ("cipher", .string("ChaCha20-Poly1305")),
+            ("content_nonce", .string(Bytes.toHex(contentNonce))),
+            ("key_bundles", .array(keyBundles)),
+        ])
+        let decryptionMetaBytes = JCS.bytes(decryptionMeta)
+
+        // 5) Outer manifest + envelope. The outer content_index covers
+        // only skills/decryption/decryption.json — manifest.json,
+        // provenance/envelope.json, and content.enc are excluded from the
+        // index by `buildContentIndex` (see spec/manifest.md).
+        let outerSidecars: [(String, Data)] = [
+            ("skills/decryption/decryption.json", decryptionMetaBytes),
+            ("content.enc", contentEnc),
+        ]
+        let outerContentIndex = Manifest.buildContentIndex(outerSidecars)
+        let outerManifest = Manifest.build(
+            originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
+                              label: originator.label),
+            participants: participants.map {
+                .init(actorId: $0.actorId, role: $0.role, label: $0.label)
+            },
+            contentIndex: outerContentIndex,
+            firstEventHash: parts.firstHash,
+            skillTrust: [], // decryption metadata is not a skill
+            encryption: .object([
+                ("metadata_path", .string("skills/decryption/decryption.json")),
+                ("cipher", .string("ChaCha20-Poly1305")),
+            ]),
+            createdAt: createdAt,
+            capsuleId: parts.capsuleId
+        )
+        let outerMfHash = Manifest.hash(outerManifest)
+
+        var outerEnvelope = Envelope.build(
+            capsuleId: parts.capsuleId,
+            firstEventHash: parts.firstHash,
+            entryHash: parts.entryHash,
+            manifestHash: outerMfHash,
+            contentIndexHash: outerContentIndex.indexHash,
+            encryptedBlobHash: encryptedBlobHash,
+            cipher: "ChaCha20-Poly1305",
+            signedAt: sealedAt
+        )
+        try Envelope.sign(&outerEnvelope, signers: [
+            .init(role: "originator", keyPair: originator.keyPair)
+        ])
+
+        // 6) Pack the outer zip.
+        var outerAllFiles = outerSidecars
+        outerAllFiles.append(("manifest.json", Manifest.bytes(outerManifest)))
+        outerAllFiles.append(("provenance/envelope.json", JCS.bytes(outerEnvelope)))
+        let outerZipBytes = CapsuleZip.pack(outerAllFiles)
+
+        return BuildResult(
+            bytes: outerZipBytes,
+            capsuleId: parts.capsuleId,
+            firstEventHash: parts.firstHash,
+            entryHash: parts.entryHash,
+            manifestHash: outerMfHash,
+            contentIndexHash: outerContentIndex.indexHash,
+            originatorPublicKey: originator.keyPair.publicKeyHex,
+            signedAt: sealedAt,
+            fileCount: outerAllFiles.count,
+            byteCount: outerZipBytes.count
+        )
+    }
+
+    public static func isoNow() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f.string(from: Date())
+    }
+
+    // MARK: - Inner-build helper
+
+    /// Shared pre-manifest construction used by both `seal()` overloads.
+    /// Builds the chain, computes the capsule id, and assembles the
+    /// non-manifest/non-envelope file list that lives inside the (inner)
+    /// capsule.
+    private struct InnerParts {
+        let innerFiles: [(String, Data)]
+        let capsuleId: String
+        let firstHash: String
+        let entryHash: String
+        let skillTrust: [(String, String)]
+    }
+
+    private func buildInnerParts(sealedAt: String) throws -> InnerParts {
         var bare = bareEvents
         if bare.isEmpty {
             bare.append(BareEvent(
@@ -158,61 +411,16 @@ public final class CapsuleBuilder {
         for (path, bytes) in payload {
             innerFiles.append((path, bytes))
         }
-
         let capsuleId = Manifest.computeCapsuleId(
             originatorPub: originator.keyPair.publicKeyBytes,
             firstEventHashHex: firstHash
         )
-        let contentIndex = Manifest.buildContentIndex(innerFiles)
-        let manifest = Manifest.build(
-            originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
-                              label: originator.label),
-            participants: participants.map {
-                .init(actorId: $0.actorId, role: $0.role, label: $0.label)
-            },
-            contentIndex: contentIndex,
-            firstEventHash: firstHash,
-            skillTrust: skillTrust,
-            createdAt: createdAt,
-            capsuleId: capsuleId
-        )
-        let mfHash = Manifest.hash(manifest)
-
-        var envelope = Envelope.build(
+        return InnerParts(
+            innerFiles: innerFiles,
             capsuleId: capsuleId,
-            firstEventHash: firstHash,
+            firstHash: firstHash,
             entryHash: entryHash,
-            manifestHash: mfHash,
-            contentIndexHash: contentIndex.indexHash,
-            cipher: "none",
-            signedAt: sealedAt
+            skillTrust: skillTrust
         )
-        try Envelope.sign(&envelope, signers: [
-            .init(role: "originator", keyPair: originator.keyPair)
-        ])
-
-        var allFiles = innerFiles
-        allFiles.append(("manifest.json", Manifest.bytes(manifest)))
-        allFiles.append(("provenance/envelope.json", JCS.bytes(envelope)))
-        let zipBytes = CapsuleZip.pack(allFiles.map { ($0.0, $0.1) })
-
-        return BuildResult(
-            bytes: zipBytes,
-            capsuleId: capsuleId,
-            firstEventHash: firstHash,
-            entryHash: entryHash,
-            manifestHash: mfHash,
-            contentIndexHash: contentIndex.indexHash,
-            originatorPublicKey: originator.keyPair.publicKeyHex,
-            signedAt: sealedAt,
-            fileCount: allFiles.count,
-            byteCount: zipBytes.count
-        )
-    }
-
-    public static func isoNow() -> String {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f.string(from: Date())
     }
 }

@@ -36,11 +36,9 @@ final class RoundTripTests: XCTestCase {
         let result = try builder.seal()
         XCTAssertGreaterThan(result.bytes.count, 0)
         XCTAssertEqual(result.capsuleId.count, 64)
-        XCTAssertEqual(result.fileCount, result.bytes.count > 0 ? 7 : 0)
-        // 7 = program.md + agents.md + chain/events.jsonl + skills/demo/skill.json
-        //     + skills/demo/SKILL.md + payload/notes.txt + manifest.json + envelope.json (8?)
-        // Actually: program, agents, chain, skill.json, SKILL.md, payload, manifest, envelope = 8
-        // Let's just assert >= 7 and not be brittle.
+        XCTAssertEqual(result.fileCount, result.bytes.count > 0 ? 8 : 0)
+        // 8 = program.md + agents.md + chain/events.jsonl + skills/demo/skill.json
+        //     + skills/demo/SKILL.md + payload/notes.txt + manifest.json + envelope.json
 
         // Verify
         let v = CapsuleVerifier.verify(result.bytes,

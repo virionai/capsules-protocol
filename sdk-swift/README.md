@@ -11,8 +11,11 @@ make the format real on phones.
 
 ## Status
 
-`v0.6.0-prototype.1` — code-complete, untested in Xcode in this session.
-Round-trip tests live in `Tests/CapsuleTests`.
+`v0.6.0-prototype.1` — `swift build` succeeds on macOS and iOS with
+zero warnings, and the package's 25 tests pass (round-trip, encryption
+primitives + end-to-end, and cross-implementation parity against
+fixtures produced by the JS SDK). Encryption (X25519 + HKDF-SHA256 +
+ChaCha20-Poly1305 multi-recipient) ships in this prototype.
 
 ## Install
 
@@ -79,6 +82,42 @@ guard v.ok else {
 print("Signers: \(v.signers.map { "\($0.role) trusted=\($0.trusted)" })")
 print("Program:\n\(parsed.programMd)")
 ```
+
+## Quick start — seal + open an encrypted capsule
+
+```swift
+import Capsule
+
+// Recipients hand you their X25519 public keys (32 raw bytes each).
+let alice = X25519KeyPair.generate()   // recipient — in practice you'd
+                                       // receive only the public bytes
+let result = try builder.seal(
+    recipients: [.init(publicKey: alice.publicKeyBytes)]
+)
+// result.bytes is an encrypted-outer capsule. The chain, program.md,
+// and any payloads live inside a ChaCha20-Poly1305 blob; the outer
+// envelope is still signed and L2-verifiable without any key.
+
+let outer = try CapsuleReader.parse(result.bytes)
+let inner = try CapsuleReader.openInner(
+    outer,
+    recipientPrivateKey: alice.privateKeyBytes,
+    recipientPublicKey: alice.publicKeyBytes
+)
+print(inner.programMd)
+
+// L3 verifies outer envelope, decrypts, verifies inner envelope, and
+// cross-checks capsule_id / first_event_hash / entry_hash.
+let l3 = CapsuleVerifier.verify(
+    result.bytes,
+    recipientPrivateKey: alice.privateKeyBytes,
+    recipientPublicKey: alice.publicKeyBytes,
+    allowlist: [kp.publicKeyHex]   // kp from the build example above
+)
+```
+
+Multiple `recipients:` are supported; each gets an independent key
+bundle and can decrypt without coordination.
 
 ## Quick start — drop in "+ Capsule" UI
 
@@ -162,9 +201,12 @@ mapping.
 
 ## What ships in v0.6.0-prototype.1
 
-- `Capsule`: JCS, Crypto (CryptoKit), Zip (deterministic STORED), Chain,
-  Manifest, Envelope, Builder, Reader, Verifier, JCSValue value type
-  with literal-syntax sugar (`jobj`, `jarr`).
+- `Capsule`: JCS, Crypto (CryptoKit) — SHA-256, Ed25519, `X25519KeyPair`,
+  `HKDF`, `ChaCha20Poly1305`, `Random` — Zip (deterministic STORED),
+  Chain, Manifest, Envelope, Builder (plain + multi-recipient encrypted
+  `seal(recipients:)`), Reader (`parse` + `openInner`), Verifier (L2
+  outer-only + L3 decrypted-content), JCSValue value type with
+  literal-syntax sugar (`jobj`, `jarr`).
 - `CapsuleSkills`: `CapsuleSkill` model, `ParsedCapsule.skills()`
   extension, trust-tier semantics.
 - `CapsuleLLM`: `CapsuleLocalLLM` + `CapsuleSkillRuntime` protocols,
@@ -174,9 +216,6 @@ mapping.
 
 ## What's deferred
 
-- **Encryption** (X25519-HKDF + ChaCha20-Poly1305 multi-recipient):
-  parking-lot per format spec; will land alongside the patient ↔
-  clinic flow.
 - **Compile + ship to SPM registry**: source-tree consumption works
   today; tagged release after first audit.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `[Signer]`
