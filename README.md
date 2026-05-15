@@ -1,4 +1,59 @@
-# Capsule v0.6 — redesign
+# Capsules
+
+> An open protocol for portable, signed, AI-readable records of multi-actor work.
+
+**The protocol behind [capsules.run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.6 prototype.
+
+[Kaggle Gemma 4 Good Hackathon submission](https://capsules.run/competitions/gemma-4-good/) · [Live in-browser reader](https://capsules.run/load/) · [Roadmap](https://capsules.run/roadmap/) · [Conformance](https://capsules.run/conformance/)
+
+---
+
+## 20 minutes to a verified capsule
+
+If you arrived here from the Kaggle submission and want to verify the work:
+
+1. **Clone and run.**
+   ```sh
+   git clone https://github.com/virionai/capsules
+   cd capsules
+   ```
+
+2. **Pick an SDK lane and round-trip a capsule:**
+   - **JavaScript** (reference impl): `cd sdk-js && npm install && npm test`
+   - **Python**: `cd sdk-py && pip install -e . && pytest`
+   - **Rust verifier**: `cd verifier-rust && cargo test`
+
+   All three produce or verify the same canonical capsule artifacts. Cross-impl parity is the [ROADMAP.md](ROADMAP.md) milestone 5 unlock signal.
+
+3. **Open a real capsule in your browser.**
+   Visit [capsules.run/load](https://capsules.run/load/) and click any of the ten gallery capsules (health, crisis response, B2B sales, research, verifiability demos). The page parses and verifies the chain offline in your browser. Drop your own `.capsule` file too.
+
+4. **Try the tamper-detection demo.**
+   The "Tampered payload" card in the gallery is a capsule with one byte flipped. The reader names the failing check (content_index mismatch). Tamper-evident by construction.
+
+## What's in this repo
+
+```
+spec/                  v0.6 protocol specification (normative)
+  README.md            stripped/replaced/kept summary
+  format.md            file layout
+  manifest.md          manifest.json schema
+  chain.md             event chain rules
+  envelope.md          provenance envelope schema
+  trust.md             trust model and skill trust tiers
+  pith.md              context-style discipline (informative)
+
+sdk-js/                JavaScript reference SDK (npm)
+sdk-py/                Python SDK
+sdk-swift/             Swift SDK (iOS/macOS via SwiftPM)
+sdk-kotlin/            Kotlin SDK (Android/JVM via Gradle)
+verifier-rust/         independent Rust verifier (cargo)
+cli/                   command-line verifier and inspector
+tools/                 conformance harness
+.github/workflows/     CI: conformance harness on every push + nightly
+```
+
+## What v0.6 is
 
 A redesign of the Capsule format around the actual product:
 
@@ -11,7 +66,62 @@ A redesign of the Capsule format around the actual product:
 This directory is a stripped, working prototype of that idea. It is not
 backwards-compatible with the prior `0.5.x` shape.
 
-## What changed at a glance
+## The protocol earns its weight by being load-bearing in a specific use case
+
+The first reference application is **medlog**: an on-device Gemma 4 E4B medical journal that runs entirely on the patient's phone, encrypts to both patient and clinic, and hands off to a single-file HTML reader the clinician opens cold. See the [submission writeup](https://capsules.run/competitions/gemma-4-good/) for the full architecture.
+
+Other verticals under active integration with our client products: lender-ready loan packets (ReadySet), compliance investigations (ComplianceQ), home-renovation project records (Fix.Now), and multi-party B2B correspondence. Same protocol; different domains. The [live gallery](https://capsules.run/load/) demonstrates this.
+
+## The minimum viable capsule
+
+```
+example.capsule (deterministic ZIP)
+├── manifest.json                   ~20 fields: id, originator, participants, content_index
+├── program.md                      the document: loan app, review, scope, etc.
+├── agents.md                       who's allowed to do what; skill-trust roots
+├── chain/events.jsonl              append-only signed decision log
+├── skills/                         carry-on context for foreign LLMs
+│   └── <id>/
+│       ├── skill.json              typed metadata
+│       └── SKILL.md                instructions (trust tier per agents.md)
+├── payload/                        whatever travels: PDFs, code, datasets, media
+└── provenance/envelope.json        signed envelope, optional encryption
+```
+
+There is no `state.json`, `handoff.md`, `plan.md`, `surface-citations.md`,
+or `skills_used_in_this_capsule.md`. State is computed. Handoff is a
+section of `program.md`. Plan is a section of `program.md`. Citations are
+markdown links. Skill inventory is computed at read.
+
+## Status
+
+Prototype. Not v1.0. The envelope schema is `0.6` on purpose; locked once a second independent implementation round-trips the test vectors and an outside party reviews the crypto. See [ROADMAP.md](ROADMAP.md) for the five review checkpoints.
+
+## Conformance
+
+Live signal at [capsules.run/conformance](https://capsules.run/conformance/) regenerated on every push to main plus nightly. Five SDK lanes target the same signed test vectors. The site mirrors the GitHub-side report.
+
+## Try the demo locally
+
+```sh
+cd sdk-js
+npm install
+npm test
+```
+
+The JS test suite builds capsules (clean and tampered) and runs verification on each. The clean capsule passes. Each tampered capsule fails at a distinct, reported check.
+
+For the cross-language conformance harness, see `tools/` and `.github/workflows/conformance.yml`.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Contributing welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security disclosure: see [SECURITY.md](SECURITY.md).
+
+---
+
+## Design rationale and history
+
+### What changed at a glance
 
 Six artifacts collapsed to two-plus-chain, custom parsers replaced with
 vetted libraries, the envelope reworked so signatures actually bind what
@@ -32,75 +142,4 @@ they claim to bind.
 | Skill instructions | Mixed metadata + markdown for foreign LLMs | Two trust tiers; decryption is metadata only |
 | Provenance version | `1.0` ahead of SDK `0.1.x` | `0.6` matched to SDK |
 
-## Layout
-
-```
-capsules-protocol/
-├── README.md                       you are here
-├── ROADMAP.md                      one-page roadmap with kill criteria
-├── spec/                           the v0.6 protocol specification
-│   ├── README.md                   stripped/replaced/kept summary
-│   ├── format.md                   file layout
-│   ├── manifest.md                 manifest.json schema
-│   ├── chain.md                    event chain rules
-│   ├── envelope.md                 provenance envelope schema
-│   └── trust.md                    trust model and skill trust tiers
-├── sdk-js/                         reference TypeScript-free JS SDK
-│   ├── package.json
-│   ├── src/                        builder, reader, verifier, crypto, zip
-│   └── test/
-├── skills/
-│   └── capsule/                    canonical self-describing skill
-│       ├── SKILL.md                cold-read instructions for foreign LLMs
-│       └── skill.json              typed metadata; regenerated by CI
-├── tools/
-│   ├── run-conformance.mjs         multi-target conformance harness
-│   └── regen-capsule-skill.mjs     regenerator + drift check
-└── examples/
-    └── tamper-detection/           the canonical first example
-```
-
-## The minimum viable capsule
-
-```
-example.capsule (deterministic ZIP)
-├── manifest.json                   ~20 fields: id, originator, participants, content_index
-├── program.md                      the document — loan app, review, scope, etc.
-├── agents.md                       who's allowed to do what; skill-trust roots
-├── chain/events.jsonl              append-only signed decision log
-├── skills/                         carry-on context for foreign LLMs
-│   └── <id>/
-│       ├── skill.json              typed metadata
-│       └── SKILL.md                instructions (trust tier per agents.md)
-├── payload/                        whatever travels: PDFs, code, datasets, media
-└── provenance/envelope.json        signed envelope, optional encryption
-```
-
-There is no `state.json`, `handoff.md`, `plan.md`, `surface-citations.md`,
-or `skills_used_in_this_capsule.md`. State is computed. Handoff is a
-section of `program.md`. Plan is a section of `program.md`. Citations are
-markdown links. Skill inventory is computed at read.
-
-## Try the demo
-
-```sh
-cd sdk-js
-npm install
-cd ../examples/tamper-detection
-npm install
-npm run build
-npm run verify
-```
-
-The demo builds four capsules — one clean, three tampered — and runs
-verification on each. The clean capsule passes. Each tampered capsule
-fails at a distinct, reported check.
-
-## Status
-
-Prototype. Not v1.0. Not production. The envelope schema is `0.6` on
-purpose — locked once a second independent implementation round-trips
-the test vectors and an outside party reviews the crypto.
-
-See `ROADMAP.md` for what would have to be true before any of this earns
-a `1.0`.
+For the full rationale see [CHANGELOG.md](CHANGELOG.md) and the normative [spec/](spec/) documents.
