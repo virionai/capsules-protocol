@@ -68,7 +68,7 @@ backwards-compatible with the prior `0.5.x` shape.
 
 ## The protocol earns its weight by being load-bearing in a specific use case
 
-The first reference application is **medlog**: an on-device Gemma 4 E4B medical journal that runs entirely on the patient's phone, encrypts to both patient and clinic, and hands off to a single-file HTML reader the clinician opens cold. See the [submission writeup](https://capsules.run/competitions/gemma-4-good/) for the full architecture.
+The first reference application is **Operators**: the [submission writeup](https://capsules.run/competitions/gemma-4-good/) for the full architecture.
 
 Other verticals under active integration with our client products: lender-ready loan packets (ReadySet), compliance investigations (ComplianceQ), home-renovation project records (Fix.Now), and multi-party B2B correspondence. Same protocol; different domains. The [live gallery](https://capsules.run/load/) demonstrates this.
 
