@@ -1,0 +1,119 @@
+<svg width="1440" height="620" viewBox="0 0 1440 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Capsules protocol GitHub hero</title>
+  <desc id="desc">A dark Capsules.Run protocol diagram showing portable work sealed into a verifiable capsule.</desc>
+  <defs>
+    <linearGradient id="edge" x1="140" y1="74" x2="1320" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7BA7C9" stop-opacity="0.72"/>
+      <stop offset="0.46" stop-color="#F5F5F0" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#C9A87B" stop-opacity="0.64"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="138" y1="78" x2="1308" y2="578" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111416"/>
+      <stop offset="1" stop-color="#050708"/>
+    </linearGradient>
+    <radialGradient id="blue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1010 230) rotate(90) scale(300 420)">
+      <stop stop-color="#7BA7C9" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7BA7C9" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gold" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(305 464) rotate(90) scale(210 340)">
+      <stop stop-color="#C9A87B" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#C9A87B" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="38" height="38" patternUnits="userSpaceOnUse">
+      <path d="M38 0H0V38" stroke="#F5F5F0" stroke-opacity="0.035"/>
+    </pattern>
+    <filter id="softShadow" x="82" y="36" width="1276" height="552" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#000000" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="620" fill="#0A0D0F"/>
+  <rect width="1440" height="620" fill="url(#grid)"/>
+  <rect width="1440" height="620" fill="url(#blue)"/>
+  <rect width="1440" height="620" fill="url(#gold)"/>
+
+  <g filter="url(#softShadow)">
+    <rect x="118" y="62" width="1204" height="500" fill="url(#panel)" stroke="#24455B"/>
+    <path d="M118 118H1322" stroke="#24455B"/>
+    <path d="M118 502H1322" stroke="#24455B"/>
+  </g>
+
+  <g transform="translate(166 88)">
+    <rect x="0" y="0" width="26" height="50" rx="13" stroke="#7BA7C9" stroke-width="2.6"/>
+    <path d="M2 15H24M1 25H25M2 35H24" stroke="#7BA7C9" stroke-width="1.3" stroke-linecap="round" opacity=".66"/>
+    <path d="M13 1V49" stroke="#F5F5F0" stroke-width="1.2" stroke-linecap="round" opacity=".78"/>
+    <path d="M8 25H18" stroke="#C9A87B" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="42" y="20" fill="#F5F5F0" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700" letter-spacing="4">CAPSULES.RUN</text>
+    <text x="43" y="42" fill="#7BA7C9" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="2.8">OPEN PROTOCOL</text>
+  </g>
+
+  <g transform="translate(166 204)">
+    <text fill="#C9A87B" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="4">CAPSULE V0.6</text>
+    <text y="80" fill="#F5F5F0" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="70" font-weight="800" letter-spacing="-2">Portable work,</text>
+    <text y="156" fill="#F5F5F0" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="70" font-weight="800" letter-spacing="-2">sealed context,</text>
+    <text y="232" fill="#F5F5F0" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="70" font-weight="800" letter-spacing="-2">verifiable chain.</text>
+    <text y="292" fill="#7BA7C9" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20">A file format for AI work that can move across tools,</text>
+    <text y="326" fill="#7BA7C9" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20">teams, models, and time without losing provenance.</text>
+  </g>
+
+  <g transform="translate(812 154)" opacity="0.96">
+    <ellipse cx="234" cy="160" rx="252" ry="118" stroke="url(#edge)" stroke-opacity="0.26"/>
+    <ellipse cx="234" cy="160" rx="296" ry="168" stroke="url(#edge)" stroke-opacity="0.18"/>
+    <ellipse cx="234" cy="160" rx="180" ry="76" stroke="#F5F5F0" stroke-opacity="0.13"/>
+    <path d="M-5 160C88 66 271 25 477 82" stroke="#7BA7C9" stroke-opacity="0.22"/>
+    <path d="M26 266C137 136 317 99 526 156" stroke="#F5F5F0" stroke-opacity="0.13"/>
+    <path d="M74 56C178 206 329 278 528 272" stroke="#C9A87B" stroke-opacity="0.2"/>
+    <path d="M44 236C182 199 342 107 478 28" stroke="#7BA7C9" stroke-opacity="0.18"/>
+
+    <g transform="translate(143 78)">
+      <rect x="0" y="0" width="185" height="250" rx="92.5" fill="#12171A" stroke="#7BA7C9" stroke-opacity="0.62" stroke-width="3"/>
+      <path d="M11 74H174M5 125H180M11 176H174" stroke="#7BA7C9" stroke-width="2" stroke-linecap="round" opacity=".4"/>
+      <path d="M92.5 1V249" stroke="#F5F5F0" stroke-width="1.6" stroke-linecap="round" opacity=".5"/>
+      <path d="M58 125H128" stroke="#C9A87B" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="92.5" cy="125" r="42" fill="#F5F5F0" fill-opacity="0.08" stroke="#F5F5F0" stroke-opacity="0.24"/>
+    </g>
+
+    <g font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+      <g transform="translate(0 42)">
+        <rect width="220" height="54" fill="#080B0C" stroke="#24455B"/>
+        <text x="16" y="23" fill="#888888">program.md</text>
+        <text x="134" y="23" fill="#F5F5F0">work product</text>
+        <path d="M204 48L154 126" stroke="#7BA7C9" stroke-opacity=".34"/>
+      </g>
+      <g transform="translate(300 0)">
+        <rect width="222" height="54" fill="#080B0C" stroke="#24455B"/>
+        <text x="16" y="23" fill="#888888">agents.md</text>
+        <text x="128" y="23" fill="#F5F5F0">authority</text>
+        <path d="M28 54L-8 134" stroke="#7BA7C9" stroke-opacity=".34"/>
+      </g>
+      <g transform="translate(330 250)">
+        <rect width="228" height="54" fill="#080B0C" stroke="#24455B"/>
+        <text x="16" y="23" fill="#888888">events.jsonl</text>
+        <text x="139" y="23" fill="#F5F5F0">audit chain</text>
+        <path d="M18 0L-58 -44" stroke="#C9A87B" stroke-opacity=".36"/>
+      </g>
+      <g transform="translate(8 278)">
+        <rect width="244" height="54" fill="#080B0C" stroke="#24455B"/>
+        <text x="16" y="23" fill="#888888">envelope.json</text>
+        <text x="158" y="23" fill="#F5F5F0">signature</text>
+        <path d="M226 0L232 -56" stroke="#C9A87B" stroke-opacity=".36"/>
+      </g>
+    </g>
+
+    <circle cx="36" cy="128" r="9" fill="#7BA7C9"/>
+    <circle cx="518" cy="124" r="9" fill="#C9A87B"/>
+    <circle cx="100" cy="274" r="8" fill="#F5F5F0" fill-opacity=".7"/>
+    <circle cx="472" cy="312" r="7" fill="#7BA7C9" fill-opacity=".9"/>
+  </g>
+
+  <g transform="translate(166 518)" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" letter-spacing="2">
+    <rect width="120" height="28" fill="#080B0C" stroke="#24455B"/>
+    <text x="14" y="18" fill="#A8A8A8">RFC 8785 JCS</text>
+    <rect x="132" width="134" height="28" fill="#080B0C" stroke="#24455B"/>
+    <text x="146" y="18" fill="#A8A8A8">ED25519 SIGNING</text>
+    <rect x="278" width="126" height="28" fill="#080B0C" stroke="#24455B"/>
+    <text x="292" y="18" fill="#A8A8A8">APPEND ONLY</text>
+    <rect x="416" width="148" height="28" fill="#080B0C" stroke="#24455B"/>
+    <text x="430" y="18" fill="#A8A8A8">OFFLINE VERIFY</text>
+  </g>
+</svg>

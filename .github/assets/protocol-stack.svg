@@ -1,0 +1,47 @@
+<svg width="980" height="430" viewBox="0 0 980 430" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Capsule protocol stack</title>
+  <desc id="desc">Layered diagram of a Capsule file, from portable work through signed verification.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="980" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111416"/>
+      <stop offset="1" stop-color="#07090A"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" stroke="#F5F5F0" stroke-opacity="0.035"/>
+    </pattern>
+  </defs>
+  <rect width="980" height="430" fill="url(#bg)"/>
+  <rect width="980" height="430" fill="url(#grid)"/>
+  <rect x="32" y="28" width="916" height="374" stroke="#24455B"/>
+  <text x="62" y="70" fill="#C9A87B" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" letter-spacing="4">CAPSULE FILE</text>
+  <text x="62" y="103" fill="#F5F5F0" font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28" font-weight="700">Two human-readable artifacts plus a signed chain.</text>
+
+  <g font-family="Space Mono, ui-monospace, SFMono-Regular, Menlo, monospace">
+    <g transform="translate(62 148)">
+      <rect width="856" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="18" y="31" fill="#F5F5F0" font-size="16" font-weight="700">program.md</text>
+      <text x="200" y="31" fill="#8AAEC8" font-size="14">work product, handoff, plan, citations</text>
+    </g>
+    <g transform="translate(62 206)">
+      <rect width="856" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="18" y="31" fill="#F5F5F0" font-size="16" font-weight="700">agents.md</text>
+      <text x="200" y="31" fill="#8AAEC8" font-size="14">participants, permissions, skill trust roots</text>
+    </g>
+    <g transform="translate(62 264)">
+      <rect width="418" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="18" y="31" fill="#F5F5F0" font-size="16" font-weight="700">chain/events.jsonl</text>
+      <text x="246" y="31" fill="#C9A87B" font-size="14">append-only</text>
+      <rect x="438" width="418" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="456" y="31" fill="#F5F5F0" font-size="16" font-weight="700">payload/</text>
+      <text x="602" y="31" fill="#C9A87B" font-size="14">files, media, data</text>
+    </g>
+    <g transform="translate(62 322)">
+      <rect width="271" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="18" y="31" fill="#F5F5F0" font-size="16" font-weight="700">manifest.json</text>
+      <rect x="292" width="271" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="310" y="31" fill="#F5F5F0" font-size="16" font-weight="700">content_index</text>
+      <rect x="585" width="271" height="48" fill="#0A0D0F" stroke="#24455B"/>
+      <text x="603" y="31" fill="#F5F5F0" font-size="16" font-weight="700">envelope.json</text>
+    </g>
+  </g>
+</svg>

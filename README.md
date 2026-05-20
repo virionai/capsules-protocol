@@ -1,29 +1,52 @@
-# Capsules
+<p align="center">
+  <img src=".github/assets/capsules-protocol-hero.svg" alt="Capsules protocol: portable work, sealed context, verifiable chain">
+</p>
+
+<p align="center">
+  <a href="./spec/">Protocol Spec</a>
+  &nbsp;|&nbsp;
+  <a href="https://capsules.run/load/">Live Reader</a>
+  &nbsp;|&nbsp;
+  <a href="https://capsules.run/conformance/">Conformance</a>
+  &nbsp;|&nbsp;
+  <a href="https://capsules.run/brand-system/">Brand System</a>
+  &nbsp;|&nbsp;
+  <a href="./ROADMAP.md">Roadmap</a>
+</p>
+
+<p align="center">
+  <img alt="Status: v0.6 prototype" src="https://img.shields.io/badge/status-v0.6%20prototype-7BA7C9?style=flat-square">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-C9A87B?style=flat-square">
+  <img alt="Runtime: Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-888888?style=flat-square">
+  <img alt="Verification: offline first" src="https://img.shields.io/badge/verify-offline%20first-F5F5F0?style=flat-square&labelColor=0A0D0F">
+</p>
+
+# Capsules Protocol
 
 > An open protocol for portable, signed, AI-readable records of multi-actor work.
 
-**The protocol behind [capsules.run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.6 prototype.
+**The canonical protocol source for [Capsules.Run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.6 prototype.
 
 [Kaggle Gemma 4 Good Hackathon submission](https://capsules.run/competitions/gemma-4-good/) · [Live in-browser reader](https://capsules.run/load/) · [Roadmap](https://capsules.run/roadmap/) · [Conformance](https://capsules.run/conformance/)
 
 ---
 
-## 20 minutes to a verified capsule
+## One minute to a verified capsule
 
 If you arrived here from the Kaggle submission and want to verify the work:
 
 1. **Clone and run.**
    ```sh
-   git clone https://github.com/virionai/capsules
-   cd capsules
+   git clone https://github.com/virionai/capsules-protocol
+   cd capsules-protocol
    ```
 
-2. **Pick an SDK lane and round-trip a capsule:**
+2. **Run the fast verification path:**
    - **JavaScript** (reference impl): `cd sdk-js && npm install && npm test`
    - **Python**: `cd sdk-py && pip install -e . && pytest`
    - **Rust verifier**: `cd verifier-rust && cargo test`
 
-   All three produce or verify the same canonical capsule artifacts. Cross-impl parity is the [ROADMAP.md](ROADMAP.md) milestone 5 unlock signal.
+   The JavaScript lane is the quickest local smoke test. The Python and Rust lanes verify cross-implementation parity against the same protocol shape.
 
 3. **Open a real capsule in your browser.**
    Visit [capsules.run/load](https://capsules.run/load/) and click any of the ten gallery capsules (health, crisis response, B2B sales, research, verifiability demos). The page parses and verifies the chain offline in your browser. Drop your own `.capsule` file too.
@@ -53,9 +76,15 @@ tools/                 conformance harness
 .github/workflows/     CI: conformance harness on every push + nightly
 ```
 
+## The capsule shape
+
+<p align="center">
+  <img src=".github/assets/protocol-stack.svg" alt="Capsule protocol stack">
+</p>
+
 ## What v0.6 is
 
-A redesign of the Capsule format around the actual product:
+Capsule v0.6 defines the portable work artifact:
 
 > A portable unit of intelligence. The work product (loan application, AML
 > review, scoping document, code, media) travels with the context needed to
@@ -99,7 +128,7 @@ Prototype. Not v1.0. The envelope schema is `0.6` on purpose; locked once a seco
 
 ## Conformance
 
-Live signal at [capsules.run/conformance](https://capsules.run/conformance/) regenerated on every push to main plus nightly. Five SDK lanes target the same signed test vectors. The site mirrors the GitHub-side report.
+The conformance harness runs on every push to main plus nightly. Five SDK lanes target the same signed test vectors. The published signal is available at [capsules.run/conformance](https://capsules.run/conformance/).
 
 ## Try the demo locally
 
@@ -121,25 +150,81 @@ MIT. See [LICENSE](LICENSE). Contributing welcome; see [CONTRIBUTING.md](CONTRIB
 
 ## Design rationale and history
 
-### What changed at a glance
+### The shift: documents to work artifacts
 
-Six artifacts collapsed to two-plus-chain, custom parsers replaced with
-vetted libraries, the envelope reworked so signatures actually bind what
-they claim to bind.
+The durable unit is not a document, a chat transcript, or an app-specific
+record. It is a portable work artifact that carries enough context to be
+opened, verified, continued, and handed off by another actor.
 
-| Topic | Old | New |
-|---|---|---|
-| Document artifacts | `surface.md` + `handoff.md` + `state.json` + `plan.md` + `skills_used_in_this_capsule.md` | `program.md` + `agents.md` (state is computed) |
-| Chain hash linkage | `SHA-256(prev_hash_hex_utf8 \|\| JCS(event))` | `SHA-256(prev_hash_raw32 \|\| JCS(event))` |
-| Envelope signing payload | `SHA-256(checkpoint_hash \|\| ciphertext_hash \|\| skill_hash)` | JCS-canonical envelope minus signers |
-| Signature input | `Ed25519.sign(utf8(hex_string))` | `Ed25519.sign(domain_sep_bytes \|\| canonical_payload)` |
-| Cipher enum | `none \| ChaCha20-Poly1305 \| AES-256-GCM` (last not implemented) | `none \| ChaCha20-Poly1305` (fail-closed on unknown) |
-| Capsule identity | `first_event_hash` (squattable) | `SHA-256("capsule-id-v0.6\x00" \|\| originator_pubkey \|\| first_event_hash)` |
-| Signers | Two fixed roles | `signers: [{role, public_key, signature}, ...]` |
-| Temporal anchor | None | Self-attested `signed_at` (RFC 3161/Rekor planned) |
-| JCS | In-house "matches RFC 8785 semantics" | RFC 8785 reference library |
-| ZIP | Custom deterministic ZIP_STORED writer | Standard ZIP via vetted library |
-| Skill instructions | Mixed metadata + markdown for foreign LLMs | Two trust tiers; decryption is metadata only |
-| Provenance version | `1.0` ahead of SDK `0.1.x` | `0.6` matched to SDK |
+The protocol starts with three pieces:
 
-For the full rationale see [CHANGELOG.md](CHANGELOG.md) and the normative [spec/](spec/) documents.
+| Layer | In v0.6 | Purpose |
+| --- | --- | --- |
+| Content | `program.md`, `payload/`, embedded skills | The readable work product plus the materials needed to continue it |
+| State | computed from the manifest, participants, payloads, and event chain | The current operating context without a separate mutable `state.json` |
+| Ledger | `chain/events.jsonl`, `provenance/envelope.json` | Append-only history and cryptographic proof of how the work evolved |
+
+That shape gives capsules five properties:
+
+| Property | What it means in the protocol |
+| --- | --- |
+| Multi-party | Humans, agents, tools, and organizations contribute with attribution |
+| Temporal depth | History matters as much as the latest output |
+| Continuation | Work can resume across tools, teams, models, and time |
+| Verification | Recipients can check who signed what, which files were committed, and whether content was changed |
+| Executable context | Skills and agent instructions travel with the artifact, but hosts decide what to run |
+
+In v0.6, `program.md` is the current human-readable surface, state is
+computed from protocol data, and the signed chain is the source of temporal
+truth.
+
+### Runtime model
+
+Capsules are meant to run anywhere a modern LLM or host can read files and
+use tools:
+
+| Mode | How it works |
+| --- | --- |
+| Skill | Install the Capsule skill so an LLM can read, append, verify, and hand off capsules |
+| MCP | Use a Capsule MCP server or compatible tool layer for protocol-native operations |
+| Raw | Drop a `.capsule` into a capable model with a bootstrap prompt and inspect it without bespoke infrastructure |
+
+Hosted services can improve distribution and UX, but they are not required
+for the core verification story. The file remains the unit.
+
+### v0.6 snapshot
+
+Capsule v0.6 is a small, inspectable file format for moving useful work
+between people, agents, tools, and organizations. The artifact carries the
+work product, the context required to continue it, the evidence or payload
+files it depends on, and the signed record of what happened.
+
+A reader verifies the envelope, checks the manifest content index, walks
+`chain/events.jsonl`, reads `program.md` for the current human and AI work
+surface, reads `agents.md` for actor and authority context, then renders the
+current view. State is computed from verified material at read time. If a
+host caches a view for speed, that cache is local convenience, not protocol
+truth.
+
+| Layer | What exists | Why it exists |
+| --- | --- | --- |
+| Container | A deterministic `.capsule` ZIP archive with safe, relative paths | Lets browsers, command-line tools, and offline machines inspect the same artifact without a custom storage service |
+| Manifest | `manifest.json` with identity, participants, structure, and content-index hashes | Gives the reader a typed inventory before it renders or reasons over package content |
+| Program | `program.md` as the readable work surface and continuation brief | Gives humans and AI systems a shared starting point while keeping authority in the verified chain and host policy |
+| Actors | `agents.md` describing participants, allowed roles, and skill trust context | Helps a receiving runtime separate author intent, agent capability, and local execution authority |
+| Event chain | `chain/events.jsonl` with append-only events and hash linkage over canonical bytes | Records observations, model turns, decisions, evidence references, and continuation updates in order |
+| Payload | Optional `payload/` files and embedded skill bundles | Moves evidence, documents, media, code, or task-specific instructions with the work instead of leaving context behind |
+| Envelope | `provenance/envelope.json` with Ed25519 signatures, content hashes, and optional encryption metadata | Lets a recipient verify what arrived before hydrating it into a local agent, workflow, or review tool |
+
+The cold-read order is fixed:
+
+1. Verify the seal: manifest, envelope, content index, signatures, and chain anchors.
+2. Read `program.md` as the current work surface.
+3. Walk `chain/events.jsonl` to rebuild temporal state.
+4. Inspect indexed files as inert evidence. Do not execute payloads by default.
+5. Continue by appending a semantic event, then checkpoint and seal.
+
+For normative details, read the five spec documents in [`spec/`](spec/):
+[`format.md`](spec/format.md), [`manifest.md`](spec/manifest.md),
+[`chain.md`](spec/chain.md), [`envelope.md`](spec/envelope.md), and
+[`trust.md`](spec/trust.md).
