@@ -1,8 +1,10 @@
 # Capsule Protocol Agent Notes
 
-Scope: this file applies to `virion/capsule/capsules-protocol`.
+Scope: this file applies to the entire `capsules-protocol` repository.
 
-This repo is the active Capsule protocol/spec/SDK workspace. It was renamed from `new-design`; legacy protocol material now lives under `virion/capsule/archive/`.
+This repository is the canonical Capsule protocol/spec/SDK workspace. Treat
+the checked-out repository root as the working directory; do not assume any
+specific parent folder, workstation path, or sibling archive checkout exists.
 
 ## Orientation
 
@@ -15,8 +17,11 @@ This repo is the active Capsule protocol/spec/SDK workspace. It was renamed from
 
 ## Working Rules
 
-- Treat archived repos as reference material, not active source of truth.
-- Do not copy legacy Python architecture from `archive/capsule-standard` into the JavaScript SDK without an explicit design decision.
+- Treat this repository as the active source of truth for v0.6 protocol,
+  SDK, CLI, verifier, and conformance work.
+- Do not copy legacy architecture from external or archived repositories
+  into the SDKs without an explicit design decision recorded in the issue,
+  PR, or docs change.
 - Keep spec/docs updates with behavior changes.
 - Preserve deterministic capsule semantics: canonical JSON, event-chain integrity, stable zip packaging, and fail-closed verification.
 - Do not hand-edit generated capsule outputs unless the task is specifically about fixtures or examples.
@@ -24,9 +29,9 @@ This repo is the active Capsule protocol/spec/SDK workspace. It was renamed from
 ## Useful Checks
 
 ```bash
-cd virion/capsule/capsules-protocol/sdk-js && npm test
-cd virion/capsule/capsules-protocol/cli && npm test
-cd virion/capsule/capsules-protocol/verifier-rust && cargo test
+cd sdk-js && npm test
+cd ../cli && npm test
+cd ../verifier-rust && cargo test
 ```
 
 Run the narrowest relevant check first, then broaden when protocol, verifier, or cross-lane contracts change.

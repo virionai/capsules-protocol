@@ -87,7 +87,7 @@ async function buildSkillJson() {
     ],
     issuer: {
       label: "capsules-protocol",
-      url: "https://github.com/virion-ai/capsule",
+      url: "https://github.com/virionai/capsules-protocol",
     },
     provenance: {
       generated_by: "tools/regen-capsule-skill.mjs",

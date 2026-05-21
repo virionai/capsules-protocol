@@ -9,7 +9,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/virion-ai/capsule"
+repository = "https://github.com/virionai/capsules-protocol"
 
 [workspace.dependencies]
 sha2 = "0.10"

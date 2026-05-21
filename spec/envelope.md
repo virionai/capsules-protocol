@@ -2,7 +2,16 @@
 
 `provenance/envelope.json` carries the signatures that bind the capsule
 to one or more keys at one moment in time. The schema and signing
-procedure below replace the prior format's `signing_hash` construction.
+procedure below are the v0.6 cryptographic profile: they define the
+interoperable working model for this spec version, not a permanent
+prescription for every Capsule deployment.
+
+Deployments may integrate different verification, encryption,
+authorization, identity, or key-management technologies as alternate
+profiles. Such profiles must be explicitly declared, versioned, and
+fail-closed in readers that do not understand them. They are outside the
+v0.6 conformance target unless and until a later spec version or profile
+registry defines them.
 
 ## Schema
 

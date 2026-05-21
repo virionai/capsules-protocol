@@ -5,7 +5,7 @@ it, and a verifiable audit trail.
 
 ## What v0.6 keeps
 
-These five things are the actual product. They survive untouched.
+These five things are the durable core. They survive untouched.
 
 1. **Skill bundles as foreign-LLM context.** A capsule carries the
    instructions a different model needs to pick up the work.
@@ -20,7 +20,29 @@ These five things are the actual product. They survive untouched.
    free-form prose. The reference library is a normalizer, not
    "deterministic compression" — that framing was misleading.
 5. **Offline-first verification.** The capsule file verifies without a
-   server. Hosted services are optional layers, never required.
+   server. External services are optional layers, never required.
+
+## Cryptographic profile vs extension points
+
+v0.6 specifies one working cryptographic profile so independent
+implementations can interoperate today: JCS canonicalization, SHA-256
+hashes, Ed25519 envelope signatures, X25519 recipient wrapping, and
+ChaCha20-Poly1305 content encryption.
+
+Those choices are not a claim that every Capsule deployment must use
+those technologies forever. They are the current conformance profile for
+this spec version. Capsule treats verification, encryption, signer
+identity, authorization, key custody, and host trust policy as extension
+points that deployments can replace with their own systems, provided the
+capsule declares the profile unambiguously and readers fail closed when
+they do not understand it.
+
+In v0.6, alternate profiles are experimental and outside the conformance
+target. A future version or profile registry can standardize additional
+bindings for enterprise KMS, hardware keys, transparency logs,
+organization identity providers, or jurisdiction-specific audit systems
+without changing the core idea: portable work, context, and verifiable
+history travel together.
 
 ## What v0.6 strips
 

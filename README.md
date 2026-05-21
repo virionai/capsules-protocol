@@ -99,7 +99,10 @@ backwards-compatible with the prior `0.5.x` shape.
 
 The first reference application is **Operators**: the [submission writeup](https://capsules.run/competitions/gemma-4-good/) for the full architecture.
 
-Other verticals under active integration with our client products: lender-ready loan packets (ReadySet), compliance investigations (ComplianceQ), home-renovation project records (Fix.Now), and multi-party B2B correspondence. Same protocol; different domains. The [live gallery](https://capsules.run/load/) demonstrates this.
+The same protocol applies across regulated work packets, investigations,
+project records, and multi-party correspondence. Different domains share
+the same capsule format; the [live gallery](https://capsules.run/load/)
+demonstrates this.
 
 ## The minimum viable capsule
 
@@ -189,8 +192,8 @@ use tools:
 | MCP | Use a Capsule MCP server or compatible tool layer for protocol-native operations |
 | Raw | Drop a `.capsule` into a capable model with a bootstrap prompt and inspect it without bespoke infrastructure |
 
-Hosted services can improve distribution and UX, but they are not required
-for the core verification story. The file remains the unit.
+External services can improve distribution, but they are not required for
+the core verification story. The file remains the unit.
 
 ### v0.6 snapshot
 

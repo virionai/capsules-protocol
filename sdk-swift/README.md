@@ -19,13 +19,15 @@ ChaCha20-Poly1305 multi-recipient) ships in this prototype.
 
 ## Install
 
-In Xcode: **File → Add Package Dependencies →**
-`https://github.com/virion-ai/capsule` (path: `new-design/sdk-swift`).
+For local development, clone this repository and add `sdk-swift/` as a
+local Swift package in Xcode. A remote SwiftPM package URL is not published
+yet.
 
-Or in `Package.swift`:
+For command-line verification:
 
-```swift
-.package(url: "https://github.com/virion-ai/capsule", from: "0.6.0-prototype.1"),
+```sh
+cd sdk-swift
+swift test
 ```
 
 Pick the targets you need:

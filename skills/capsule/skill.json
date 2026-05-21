@@ -86,7 +86,7 @@
   ],
   "issuer": {
     "label": "capsules-protocol",
-    "url": "https://github.com/virion-ai/capsule"
+    "url": "https://github.com/virionai/capsules-protocol"
   },
   "provenance": {
     "generated_by": "tools/regen-capsule-skill.mjs",
@@ -94,7 +94,7 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "022b2be01a9b1e7cf4e7de5309ec93302e8398197c9bc0eb5b20d675f0845b64"
+        "sha256": "94bc0cfa23dc6b39c5cdbc9c61c7717a357f7d9f7f254919bee82392ceab8cc1"
       },
       {
         "path": "spec/format.md",
@@ -114,12 +114,12 @@
       {
         "path": "spec/envelope.md",
         "title": "Provenance envelope",
-        "sha256": "dff28c020451832f21d8ff2dae61cc7f41b70e146f0e2783a95b17c4399b7b40"
+        "sha256": "13877c2e0ada919323ff5e48b63f8f1695d61f3694ab6a721c8e6b0803630997"
       },
       {
         "path": "spec/trust.md",
         "title": "Trust model",
-        "sha256": "850ad0122fcb8d9a2a4b936a36b3dc988626905c96437d60bcac14ad45516ace"
+        "sha256": "d30a698ca2165306aa61372f62e0513d5a2d734ebb9e0bd8b9642f8e9c7e548c"
       },
       {
         "path": "spec/pith.md",

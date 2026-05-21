@@ -1,58 +1,55 @@
-# Capsule Roadmap — v0.6 prototype to v1.0
+# Capsule Spec Roadmap — v0.6 to v1.0
 
-One page. Five rows. Each milestone has a review checkpoint.
+This roadmap tracks protocol stabilization only: the portable file shape,
+verifier semantics, profile system, federation model, and conformance
+suite required for a durable v1.0 spec.
 
-## Milestones
+Status labels:
 
-| # | Milestone | Why it matters | Review checkpoint |
+- `Complete in v0.6`: specified and implemented in the current profile.
+- `Partial`: specified or implemented in part, but not enough for v1.0.
+- `Open`: not yet specified.
+
+## Spec Work
+
+| Area | Status | Current repo evidence | Remaining v1.0 work |
 |---|---|---|---|
-| 1 | **Lock envelope at v0.6** with crypto fixes (raw-byte sign, full-envelope canonical, domain separation per role, drop AES-GCM placeholder, `capsule_id` derived from `originator_pubkey \|\| first_event_hash`, `signers[]`, self-attested `signed_at`) — plus signed test vectors | Without this, every v1.0 commitment is debt. | Pause and reassess if two independent reviewers each find a different envelope flaw we missed. |
-| 2 | **Tamper-detection demo as canonical first example** — clean PASS, payload-tampered FAIL, envelope-tampered FAIL, encrypted-blob-tampered FAIL (one screen) | The demo that earns the format its weight. | Pause and reassess if a reviewer replicates the same auditability with `git tag --sign` + a markdown file in <50 LOC and ≤2 deps. |
-| 3 | **Foreign-LLM cold-read benchmark vs plain markdown** — same work, two formats, measure time-to-first-correct-action and decision-attribution accuracy in a different vendor's model | Heart of the pitch. Currently no measurement exists. | Reframe the format as an audit shell, not a context-transfer mechanism, if Capsule wins by less than a meaningful margin (define before testing). |
-| 4 | **One real loan-application demo, end-to-end, reviewed by a real auditor** — platform produces, regulator opens cold months later, decrypts with custodial key, asks a question, gets an auditable answer | Proves the platform-as-issuer go-to-market. | Pause and reassess if a real auditor reviews and says "this isn't how we work." |
-| 5 | **Second independent implementation** (Python, Rust, or Go verifier) with bit-identical hashes against the JS SDK on signed test vectors | "Spec" vs "library." | Reframe the format as a JS library and sell it as such if, after 90 days, no second implementer engages. |
+| File layout and required artifacts | Complete in v0.6 | `spec/format.md`; SDK readers/builders handle `manifest.json`, `program.md`, `agents.md`, `chain/events.jsonl`, `payload/`, and `provenance/envelope.json` | Review wording for ambiguity; add malformed-layout vectors |
+| Current cryptographic profile | Complete in v0.6 | `spec/envelope.md`; JS/Python/Swift/Rust cover JCS, SHA-256, Ed25519, X25519, HKDF-SHA256, and ChaCha20-Poly1305; Kotlin covers the plain JCS/SHA-256/Ed25519 path and rejects encrypted capsules | Independent review; signed vectors for every cryptographic input |
+| Capsule identity | Complete in v0.6 | `spec/manifest.md`; SDKs derive `capsule_id` from domain separator, originator public key, and first event hash | Add identity test vectors and collision/mis-binding negative cases |
+| Envelope signing and verification | Complete in v0.6 | `spec/envelope.md`; SDK/verifier tests cover canonical payload, domain separation, role mismatch, unknown versions, and unknown ciphers | Lock vector format; external review of byte-level signing inputs |
+| Event-chain integrity | Complete in v0.6 | `spec/chain.md`; SDK tests cover raw previous-hash linkage and tamper detection | Add canonical chain vectors, malformed sequence vectors, and cross-language expected errors |
+| Encrypted capsule L2/L3 model | Complete in v0.6 | `spec/envelope.md`; JS/Python/Swift/Rust cover encrypted outer verification and decrypted inner verification | Add recipient-bundle vectors and negative vectors for AAD/key-wrap mistakes |
+| Verifier result vocabulary | Partial | JS/Python/Kotlin/Swift/Rust expose `valid`, `trusted`, allowlists, and `trustedSignerCount`; `spec/trust.md` states math-vs-trust boundary | Normalize result field names, error categories, and required renderer language |
+| Normative conformance suite | Partial | `tools/run-conformance.mjs`; `.github/workflows/conformance.yml`; SDK tests and parity tests exist | Replace ad hoc/example-dependent fixtures with checked-in signed vectors and expected-result manifests |
+| Independent implementation parity | Partial | JS, Python, Swift, Kotlin plain, and Rust lanes exist; Rust verifier, Python tests, Swift tests, and Kotlin plain tests compare against JS-built fixtures | Tie all lanes to the normative vector registry and publish pass/fail criteria |
+| Resource-limit and malformed-archive behavior | Partial | `spec/format.md`; JS/Python ZIP readers reject traversal and enforce limits; strictness tests exist | Make limits/profile names normative; add vectors for size, entry count, compression, symlink, and path edge cases |
+| Untrusted-content projection | Partial | `spec/chain.md`, `spec/trust.md`; JS/Python chain code marks common narrative fields untrusted | Define projection rules for host/model contexts and add conformance cases |
+| Signer-role policy and quorum | Open | Current spec supports multiple signers but leaves policy to hosts | Define policy expression for required roles, quorum, and failure reporting |
+| Federation vocabulary | Open | `spec/trust.md` requires out-of-band signer-key discovery but does not define a vocabulary | Define issuer metadata, trust roots, key discovery, and profile discovery documents |
+| Key lifecycle semantics | Open | Current profile has no rotation, revocation, retirement, or historical validation format | Specify key lifecycle records and how they affect old capsules |
+| Temporal anchoring profile | Open | `signed_at` is self-attested; `spec/envelope.md` names external anchoring as future work | Define external time evidence and verifier treatment |
+| Alternate profile declaration | Open | `spec/README.md`, `spec/envelope.md`, and `spec/trust.md` describe extension points conceptually | Specify profile identifiers, negotiation, required fields, and fail-closed behavior |
+| Encrypted outer metadata minimization | Open | v0.6 intentionally exposes outer metadata needed for L2 verification | Define optional profiles for reducing recipient and issuer metadata exposure |
 
-## Parking lot — blocked on adoption signal
+## v1.0 Gates
 
-These are not roadmap items until at least three of the five above land.
-They are explicitly de-prioritized so the project does not keep adding
-infrastructure to a format that has not yet proven itself in use.
+| Gate | Exit criterion |
+|---|---|
+| Wire-shape freeze | No unresolved ambiguity in bytes being signed, hashed, identified, encrypted, or canonicalized |
+| Vector registry | Every required verifier behavior has a checked-in vector and expected result |
+| Cross-implementation parity | At least two independently maintained implementations pass the normative suite without reference-code exceptions |
+| Trust semantics | Hosts can distinguish valid math, trusted signers, policy failure, and unsupported profile without out-of-band wording |
+| Profile and federation model | Alternate verification, encryption, identity, authorization, and key-management profiles can be declared and rejected safely |
 
-- Provenance ledger / envelope publication service
-- RFC 3161 / Rekor temporal anchoring
-- Identity registry / federation
-- Recipient rotation and key revocation policy
-- AES-256-GCM runtime support
-- Web Bluetooth / mesh networking
-- Microphone / Web Speech permission UX
-- Declarative view specs (capsule grows into a UI layout language)
-- Browser-safe SDK polish beyond what the demo requires
-- Embedded Android WebView host validation (if WebView decrypt benchmark
-  fails Milestone 3 implicitly, soften the mobile claim instead of
-  pursuing parity)
+## Operating Principle
 
-## Operating principle
+The file format must stand on its own:
 
-> Do not add infrastructure before the capsule file proves its value.
-
-Path:
-
+```text
+portable file -> deterministic verification -> explicit trust policy -> optional host integrations
 ```
-portable file → local verification → host-executed bridge → user-visible trust → optional hosted services
-```
 
-If any milestone above triggers its review checkpoint, the project should
-pause and reassess before continuing, not work around the signal.
-
-## What is *not* on this roadmap and should not be
-
-- Bespoke per-LLM-provider bridges (Gemma 4, OpenAI, Claude, Codex). One
-  MCP server replaces all of them; if MCP cannot carry capsule
-  operations for a specific reason, document the reason — do not write
-  six adapters.
-- "Production-Ready v1.0" examples while SDK is `0.6.x`. Any example
-  claiming production status against a deprecated runtime is
-  reputational liability.
-- "Mobile-readability is non-negotiable" as a foundational claim until
-  the encrypted-blob decrypt path on a mid-tier Android phone is
-  measured and documented.
+If a roadmap item does not change the portable file, verifier semantics,
+profile system, federation model, or conformance suite, it belongs outside
+the spec roadmap.
