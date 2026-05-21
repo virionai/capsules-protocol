@@ -4,8 +4,8 @@
 // chain events with full control over actor/kind/action/target/payload,
 // optionally add skills and arbitrary payload files, then seal to bytes.
 //
-// No domain knowledge is baked in. The medical-journal example layers
-// its lane mapping (symptom → observation/logged_symptom etc.) on top.
+// No domain knowledge is baked in. Host applications define their own
+// actor, action, and payload vocabulary on top of the protocol primitives.
 
 import Foundation
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // Capsule v0.6 conformance test harness.
 //
-// Runs each known target (SDK + examples) serially, captures structured
+// Runs each required repo-local target serially, captures structured
 // results, and writes both JSON and Markdown reports under output/.
 //
 // Invoke from the capsules-protocol/ directory:
 //   node tools/run-conformance.mjs
 //
-// Exits 0 if all targets pass, 1 otherwise. Skipped targets do not fail
-// the run. No new dependencies; Node stdlib only.
+// Exits 0 if all required targets pass, 1 otherwise. Skipped optional
+// targets do not fail the run. No new dependencies; Node stdlib only.
 
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, stat, readFile } from "node:fs/promises";
@@ -65,72 +65,67 @@ const TARGETS = [
     },
   },
   {
-    id: "example-symptom-tracker",
-    name: "symptom-tracker",
+    id: "cli",
+    name: "@capsule/cli",
     language: "javascript",
-    kind: "example",
-    cwd: "examples/symptom-tracker",
+    kind: "cli",
+    cwd: "cli",
     install_cmd: "npm install --prefer-offline --no-audit --no-fund",
     test_cmd: "npm test",
-    pass_signal: { type: "stdout_contains", value: "PASS:" },
-    capsule_path: "examples/symptom-tracker/output/symptom-tracker.capsule",
-  },
-  {
-    id: "example-medical-journal",
-    name: "medical-journal",
-    language: "javascript",
-    kind: "example",
-    cwd: "examples/medical-journal",
-    install_cmd: "npm install --prefer-offline --no-audit --no-fund",
-    test_cmd: "npm test",
-    pass_signal: { type: "stdout_contains", value: "PASS:" },
-    capsule_path: "examples/medical-journal/output/medical-journal.capsule",
-  },
-  {
-    id: "example-tamper-detection",
-    name: "tamper-detection",
-    language: "javascript",
-    kind: "example",
-    cwd: "examples/tamper-detection",
-    install_cmd: "npm install --prefer-offline --no-audit --no-fund",
-    test_cmd: "npm run build && npm run verify",
-    // verify.mjs exits 0 only when every expected outcome matches.
     pass_signal: { type: "exit_code", value: 0 },
-    // Multiple capsules; pick the canonical clean one for size reporting.
-    capsule_path: "examples/tamper-detection/output/clean.capsule",
   },
   {
-    id: "example-business-dr",
-    name: "business-dr",
+    id: "spec-vectors",
+    name: "spec/vectors registry",
     language: "javascript",
-    kind: "example",
-    cwd: "examples/business-dr",
-    install_cmd: "npm install --prefer-offline --no-audit --no-fund",
-    test_cmd: "npm test",
-    pass_signal: { type: "stdout_contains", value: "PASS:" },
-    capsule_path: "examples/business-dr/output/business-dr-plain.capsule",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node tools/check-spec-vectors.mjs",
+    pass_signal: { type: "exit_code", value: 0 },
   },
   {
-    id: "example-family-dr",
-    name: "family-dr",
+    id: "example-generic-report",
+    name: "generic-report",
     language: "javascript",
     kind: "example",
-    cwd: "examples/family-dr",
+    cwd: "examples/generic-report",
     install_cmd: "npm install --prefer-offline --no-audit --no-fund",
     test_cmd: "npm test",
-    pass_signal: { type: "stdout_contains", value: "PASS:" },
-    capsule_path: "examples/family-dr/output/family-dr.capsule",
+    pass_signal: { type: "exit_code", value: 0 },
+    capsule_path: "examples/generic-report/output/generic-report.capsule",
   },
   {
-    id: "example-town-dr",
-    name: "town-dr",
+    id: "example-generic-table-graph",
+    name: "generic-table-graph",
     language: "javascript",
     kind: "example",
-    cwd: "examples/town-dr",
+    cwd: "examples/generic-table-graph",
     install_cmd: "npm install --prefer-offline --no-audit --no-fund",
     test_cmd: "npm test",
-    pass_signal: { type: "stdout_contains", value: "PASS:" },
-    capsule_path: "examples/town-dr/output/town-dr.capsule",
+    pass_signal: { type: "exit_code", value: 0 },
+    capsule_path: "examples/generic-table-graph/output/generic-table-graph.capsule",
+  },
+  {
+    id: "example-generic-react-render",
+    name: "generic-react-render",
+    language: "javascript",
+    kind: "example",
+    cwd: "examples/generic-react-render",
+    install_cmd: "npm install --prefer-offline --no-audit --no-fund",
+    test_cmd: "npm test",
+    pass_signal: { type: "exit_code", value: 0 },
+    capsule_path: "examples/generic-react-render/output/generic-react-render.capsule",
+  },
+  {
+    id: "examples-generic-hygiene",
+    name: "generic examples hygiene",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node tools/check-generic-examples.mjs",
+    pass_signal: { type: "exit_code", value: 0 },
   },
 ];
 
@@ -311,11 +306,12 @@ async function runTarget(target) {
       skipped: false,
     };
     notes.push(`cwd ${target.cwd} does not exist`);
+    const missingStatus = target.optional ? "skip" : "fail";
     return {
       target,
       install: installEntry,
       test: { command: target.test_cmd, duration_ms: 0, exit_code: -1 },
-      status: "skip",
+      status: missingStatus,
       stdout_head: "",
       stdout_tail: "",
       stderr: `target cwd ${target.cwd} not found`,
@@ -342,13 +338,14 @@ async function runTarget(target) {
       skipped: false,
     };
     if (r.exit_code !== 0) {
-      // Install failed → skip the target with a note. Do not crash.
-      notes.push(`install failed (exit ${r.exit_code}); skipping target`);
+      // Install failed. Required targets fail closed; optional targets skip.
+      const installStatus = target.optional ? "skip" : "fail";
+      notes.push(`install failed (exit ${r.exit_code})`);
       return {
         target,
         install: installEntry,
         test: { command: target.test_cmd, duration_ms: 0, exit_code: -1 },
-        status: "skip",
+        status: installStatus,
         stdout_head: truncHead(stripRepoPath(r.stdout)),
         stdout_tail: truncTail(stripRepoPath(r.stdout)),
         stderr: truncStderr(stripRepoPath(r.stderr)),
@@ -431,7 +428,7 @@ function buildJsonReport(entries, totalDurationMs) {
     harness_version: HARNESS_VERSION,
     node_version: process.version,
     platform: process.platform,
-    repo: "capsules-v0.6-prototype",
+    repo: "capsules-protocol",
     targets,
     summary: {
       total: entries.length,

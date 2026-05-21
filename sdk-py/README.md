@@ -1,8 +1,8 @@
 # Capsule v0.6 — Python SDK
 
 Third independent implementation of the Capsule v0.6 portable
-AI-context format. Sibling to the [JS reference SDK](../sdk/) and the
-[Rust verifier](../verifier-rust/).
+AI-context format. Sibling to the [JS reference SDK](../sdk-js/) and
+the [Rust verifier](../verifier-rust/).
 
 ## Status
 
@@ -41,37 +41,37 @@ from capsule import (
     verify_capsule,
 )
 
-# Patient signs + encrypts to the clinician's X25519 public key.
-patient = generate_ed25519()
-clinic = generate_x25519()  # in practice, comes from the clinic's published trust anchor
+# The originator signs and encrypts to a recipient's X25519 public key.
+originator = generate_ed25519()
+recipient = generate_x25519()
 builder = CapsuleBuilder(
-    originator={"public_key": patient.public_key_hex, "label": "Patient"},
-    participants=[{"actor_id": "human:patient", "role": "originator", "label": "Patient"}],
+    originator={"public_key": originator.public_key_hex, "label": "Originator"},
+    participants=[{"actor_id": "human:originator", "role": "originator", "label": "Originator"}],
 )
-builder.set_program("# Symptom journal\n2026-05-08: itchy patch on left forearm.\n")
+builder.set_program("# Work packet\n\nInitial verified work surface.\n")
 builder.append_event({
-    "actor": "human:patient", "kind": "observation", "action": "logged_symptom",
+    "actor": "human:originator", "kind": "observation", "action": "created",
     "target": "program.md", "timestamp": "2026-05-08T12:00:00Z",
-    "payload": {"severity": 5},
+    "payload": {"summary": "created packet"},
 })
 capsule_bytes = builder.seal(
     signers=[{"role": "originator",
-              "public_key": patient.public_key,
-              "private_key": patient.private_key}],
+              "public_key": originator.public_key,
+              "private_key": originator.private_key}],
     signed_at="2026-05-08T12:00:00Z",
-    recipients=[clinic.public_key],  # encrypts to the clinician
+    recipients=[recipient.public_key],
 )
 
-# Clinician opens, decrypts, verifies.
+# Recipient opens, decrypts, verifies.
 outer = CapsuleReader.from_bytes(capsule_bytes)
-l2 = verify_capsule(outer, allowlist=[patient.public_key_hex])
+l2 = verify_capsule(outer, allowlist=[originator.public_key_hex])
 assert l2["ok"] and l2["level"] == "L2"
 
 inner = outer.decrypt(
-    recipient_public_key=clinic.public_key,
-    recipient_private_key=clinic.private_key,
+    recipient_public_key=recipient.public_key,
+    recipient_private_key=recipient.private_key,
 )
-l3 = verify_capsule(inner, allowlist=[patient.public_key_hex],
+l3 = verify_capsule(inner, allowlist=[originator.public_key_hex],
                     outer_envelope=outer.envelope())
 assert l3["ok"] and l3["level"] == "L3"
 print(inner.program())
@@ -81,12 +81,9 @@ print(inner.program())
 
 `tests/test_parity_jssdk.py` runs both directions:
 
-1. **JS → Python.** Reads each plain fixture under
-   `examples/tamper-detection/output/` and asserts the Python verifier
-   reaches the same PASS / FAIL outcome the JS reference does, with
-   the failure attributed to the same check (content_index, chain, or
-   envelope). Encrypted fixtures are rejected with a clear v0.2-status
-   error.
+1. **JS → Python.** Reads shared vector fixtures and asserts the Python
+   verifier reaches the same PASS / FAIL outcome the JS reference does,
+   with the failure attributed to the same check.
 
 2. **Python → JS.** Builds a plain capsule entirely in Python, hands
    the bytes to the JS SDK's `verifyCapsule()` via a Node subprocess,
@@ -94,10 +91,9 @@ print(inner.program())
    pins the build path against the reference verifier on the same
    bytes Python wrote.
 
-Run both with `pytest tests/test_parity_jssdk.py -v`. The first run
-builds the JS fixtures via `npm install && npm run build` in
-`examples/tamper-detection`; subsequent runs reuse them. Set
-`CAPSULE_PY_SKIP_JS_BUILD=1` to skip if Node tooling is unavailable.
+Run both with `pytest tests/test_parity_jssdk.py -v`. Until
+`spec/vectors/` is checked in, fixture-backed parity tests are expected
+to be treated as optional local checks.
 
 ## Module map (mirrors `sdk-js/src/`)
 
@@ -116,4 +112,4 @@ builds the JS fixtures via `npm install && npm run build` in
 
 ## License
 
-Apache-2.0 (matches the rest of this repo).
+MIT. See [../LICENSE](../LICENSE).

@@ -1,10 +1,9 @@
 // Cross-implementation parity tests against the JS reference's
-// tamper-detection corpus.
+// shared vector corpus.
 //
 // Mirrors sdk-py/tests/test_parity_jssdk.py and the Kotlin
-// ParityTest.kt. The JS SDK's examples/tamper-detection/build.mjs
-// produces six fixtures plus a keys.json — committed to the repo so
-// every SDK shares one source of truth. This file drives the Swift
+// ParityTest.kt. The shared vector registry produces six fixtures plus
+// a keys.json so every SDK shares one source of truth. This file drives the Swift
 // verifier against the four plain fixtures plus the two encrypted
 // fixtures (one clean, one with the encrypted blob tampered), then
 // proves Swift can decrypt a JS-produced encrypted capsule with the
@@ -29,11 +28,11 @@ final class ParityTests: XCTestCase {
 
     // MARK: - Fixture loading
 
-    /// Resolves the shared `examples/tamper-detection/output/` directory
+    /// Resolves the shared `spec/vectors/tamper-detection/output/` directory
     /// relative to this test file. Walks up from
     ///   <repo>/sdk-swift/Tests/CapsuleTests/ParityTests.swift
     /// to
-    ///   <repo>/examples/tamper-detection/output/
+    ///   <repo>/spec/vectors/tamper-detection/output/
     /// by deleting four trailing path components.
     private static let fixturesURL: URL = {
         let testFile = URL(fileURLWithPath: #file)
@@ -42,7 +41,7 @@ final class ParityTests: XCTestCase {
             .deletingLastPathComponent()  // Tests/
             .deletingLastPathComponent()  // sdk-swift/
             .deletingLastPathComponent()  // <repo-root>/
-        return repoRoot.appendingPathComponent("examples/tamper-detection/output")
+        return repoRoot.appendingPathComponent("spec/vectors/tamper-detection/output")
     }()
 
     private func loadFixture(_ name: String) throws -> Data {
@@ -50,7 +49,7 @@ final class ParityTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: url.path) else {
             XCTFail(
                 "Tamper-detection fixture missing at \(url.path). " +
-                "Regenerate via: cd examples/tamper-detection && npm install && npm run build"
+                "Populate spec/vectors before running parity tests."
             )
             throw CocoaError(.fileReadNoSuchFile)
         }

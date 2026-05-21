@@ -123,9 +123,9 @@ ExportCapsuleButton(
 
 ## The harness contract — wiring an LLM
 
-Your app probably already has an LLM (MediaPipe Gemma, Edge Gallery,
-the Anthropic API, OpenAI). The `:llm` module defines two interfaces
-that let capsule-bundled skills be surfaced to that LLM:
+Your app probably already has a model or tool runtime. The `:llm`
+module defines two interfaces that let capsule-bundled skills be
+surfaced to that runtime:
 
 ```kotlin
 import ai.virion.capsule.llm.*
@@ -157,16 +157,14 @@ for (call in response.toolCalls) {
 
 The interfaces live in `llm/src/main/kotlin/ai/virion/capsule/llm/CapsuleLLM.kt`.
 
-### Edge Gallery adapter
+### External bridge adapter
 
-For hosts that bridge to Edge Gallery's `run_js` skills, a
-`CapsuleSkillRuntime` adapter wraps Edge Gallery's bridge: each
-`invoke(actionId, input)` packages the JSON, dispatches via the bridge,
-and returns the JSON the skill emits — including the optional
-`webview` field that `WebviewSpec` mirrors exactly. The SDK doesn't
-bundle this adapter (Edge Gallery's bridge isn't a Kotlin API), but
-the `WebviewSpec` shape is intentionally identical to the Edge Gallery
-response shape so an adapter is a thin mapping.
+For hosts that bridge to external skill runtimes, a
+`CapsuleSkillRuntime` adapter packages each `invoke(actionId, input)`
+request as JSON, dispatches it through the host bridge, and returns the
+JSON the skill emits — including the optional `webview` field that
+`WebviewSpec` models. The SDK does not bundle host-specific adapters;
+the shared interface keeps those adapters thin.
 
 ## What ships in 0.6.0-prototype.1
 

@@ -152,10 +152,9 @@ ExportCapsuleButton(result: builderResult)   // verify badge + share sheet
 
 ## The harness contract — wiring an LLM
 
-Your app probably already has an LLM (Gemma via MediaPipe, Apple
-Intelligence, the Anthropic API, OpenAI). The `CapsuleLLM` target
-defines two protocols that let capsule-bundled skills be surfaced to
-that LLM in a uniform way:
+Your app probably already has a model or tool runtime. The `CapsuleLLM`
+target defines two protocols that let capsule-bundled skills be
+surfaced to that runtime in a uniform way:
 
 ```swift
 import CapsuleLLM
@@ -189,17 +188,14 @@ for call in response.toolCalls {
 The protocol lives in `Sources/CapsuleLLM/CapsuleLLM.swift` — read the
 inline comments for the exact contract.
 
-### Edge Gallery adapter
+### External bridge adapter
 
-For hosts that bridge to Edge Gallery's `run_js` skills (the JS
-reference), a `CapsuleSkillRuntime` adapter would wrap the Edge Gallery
-bridge: each `invoke(actionId:input:)` packages the input JSON,
-dispatches it via the bridge, and returns the JSON the skill emits
-(including the optional `webview` field, which `WebviewSpec` mirrors
-exactly). The SDK doesn't bundle this adapter (Edge Gallery's bridge
-isn't a Swift API), but the `WebviewSpec` shape is intentionally
-identical to the Edge Gallery response shape so adapters are a thin
-mapping.
+For hosts that bridge to external skill runtimes, a
+`CapsuleSkillRuntime` adapter packages each `invoke(actionId:input:)`
+request as JSON, dispatches it through the host bridge, and returns the
+JSON the skill emits, including the optional `webview` field modeled by
+`WebviewSpec`. The SDK does not bundle host-specific adapters; the
+shared protocol keeps those adapters thin.
 
 ## What ships in v0.6.0-prototype.1
 

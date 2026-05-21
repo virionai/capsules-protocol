@@ -1,6 +1,5 @@
-// Deterministic ZIP STORED writer + minimal reader. Mirrors the JS lib in
-// medical-journal-builder.js so the bytes produced here verify under the
-// reference SDK's verifyCapsule.
+// Deterministic ZIP STORED writer + minimal reader. Mirrors the JavaScript
+// reference SDK so the bytes produced here verify under verifyCapsule.
 
 import Foundation
 

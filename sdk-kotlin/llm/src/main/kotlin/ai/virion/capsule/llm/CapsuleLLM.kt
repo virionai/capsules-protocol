@@ -1,10 +1,9 @@
 // CapsuleLLM — the harness contract.
 //
-// A host app that wants Capsule support typically already has an LLM
-// runtime ("the harness"): Gemma via MediaPipe, Apple Intelligence,
-// the Anthropic API, OpenAI Responses, Edge Gallery's run_js bridge,
-// anything. CapsuleLLM defines two small interfaces the host implements
-// so capsule-bundled skills can be surfaced to that LLM in a uniform way.
+// A host app that wants Capsule support typically already has a model or
+// tool runtime ("the harness"). CapsuleLLM defines two small interfaces
+// the host implements so capsule-bundled skills can be surfaced to that
+// runtime in a uniform way.
 
 package ai.virion.capsule.llm
 

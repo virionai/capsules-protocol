@@ -1,17 +1,9 @@
-//! Parity tests against the JavaScript SDK's tamper-detection fixtures.
+//! Parity tests against the JavaScript SDK's shared vector fixtures.
 //!
-//! The fixtures are produced by `examples/tamper-detection/build.mjs`
-//! and live in `examples/tamper-detection/output/`. They are the source
-//! of truth for the Rust verifier's behavior: every assertion in this
-//! file is a byte-for-byte cross-check between the Rust port and the JS
-//! reference.
-//!
-//! If a fixture is missing the test panics with a clear message; rebuild
-//! via:
-//!
-//! ```sh
-//! cd examples/tamper-detection && npm install && npm run build
-//! ```
+//! The fixtures live in `spec/vectors/tamper-detection/output/`. They are
+//! the source of truth for the Rust verifier's behavior: every assertion
+//! in this file is a byte-for-byte cross-check between the Rust port and
+//! the JS reference.
 //!
 //! The whole suite reads the originator pubkey out of `keys.json` so a
 //! regenerated fixture (with a fresh keypair) does not silently drift
@@ -38,17 +30,16 @@ struct Keys {
 }
 
 /// Resolve a fixture by name under
-/// `<workspace>/../examples/tamper-detection/output/<name>`.
+/// `<workspace>/../spec/vectors/tamper-detection/output/<name>`.
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("examples/tamper-detection/output")
+        .join("spec/vectors/tamper-detection/output")
         .join(name)
         .canonicalize()
         .unwrap_or_else(|_| {
             panic!(
-                "fixture {name:?} missing; \
-                 run `cd examples/tamper-detection && npm install && npm run build`"
+                "fixture {name:?} missing; populate spec/vectors before running parity tests"
             )
         })
 }

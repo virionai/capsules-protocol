@@ -1,0 +1,15 @@
+{
+  "name": "@capsule/example-generic-table-graph",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "verify": "node verify.mjs",
+    "test": "npm run build && npm run verify"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

@@ -1,11 +1,9 @@
 // A starter skill runtime that executes registered closures in-process.
 //
-// Hosts that bridge to JS skills (Edge Gallery, etc.) implement
+// Hosts that bridge to external skill runtimes implement
 // CapsuleSkillRuntime themselves, mapping action ids onto whatever
-// bridge primitive their LLM runtime offers. This in-process variant is
-// for hosts that can run the skill action directly (e.g., a Capsule
-// shipping a skill whose action is a pure-Swift function the host
-// already knows about, by id).
+// bridge primitive their runtime offers. This in-process variant is for
+// hosts that can run the skill action directly.
 
 import Foundation
 import Capsule

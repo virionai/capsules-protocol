@@ -1,8 +1,4 @@
-"""Cross-implementation parity against the JS reference's tamper-detection corpus.
-
-The JS SDK's `examples/tamper-detection/build.mjs` produces six fixtures.
-Four are plain (this SDK's v0.1 scope); two are encrypted (v0.2 scope).
-"""
+"""Cross-implementation parity against shared JS reference vector fixtures."""
 
 from __future__ import annotations
 
@@ -144,7 +140,7 @@ def test_python_built_encrypted_capsule_verifies_and_decrypts_under_js_sdk(
     capsule_path = tmp_path / "py-enc.capsule"
     capsule_path.write_bytes(zip_bytes)
 
-    sdk_dir = pathlib.Path(__file__).resolve().parents[2] / "sdk"
+    sdk_dir = pathlib.Path(__file__).resolve().parents[2] / "sdk-js"
     if not (sdk_dir / "node_modules").exists():
         subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=sdk_dir, check=True)
 
@@ -218,7 +214,7 @@ def test_python_built_capsule_verifies_under_js_sdk(tmp_path: pathlib.Path):
     capsule_path = tmp_path / "py.capsule"
     capsule_path.write_bytes(zip_bytes)
 
-    sdk_dir = pathlib.Path(__file__).resolve().parents[2] / "sdk"
+    sdk_dir = pathlib.Path(__file__).resolve().parents[2] / "sdk-js"
     if not (sdk_dir / "node_modules").exists():
         subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=sdk_dir, check=True)
 

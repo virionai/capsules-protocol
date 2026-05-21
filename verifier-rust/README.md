@@ -2,8 +2,8 @@
 
 A Rust verifier for Capsule v0.6 capsules (plain and encrypted-outer).
 Written from the spec, not ported from the JS reference. Byte-compatible
-with the JS SDK (`sdk-js/`) on the canonical tamper-detection
-corpus (`examples/tamper-detection/`).
+with the JS SDK (`sdk-js/`) on the canonical shared vector corpus
+(`spec/vectors/tamper-detection/`).
 
 ## Why this exists
 
@@ -261,7 +261,7 @@ Full transcript (no `--decryption-key`):
 
 ```
 === clean.capsule ===
-File:                   ../examples/tamper-detection/output/clean.capsule (4493 bytes)
+File:                   ../spec/vectors/tamper-detection/output/clean.capsule (4493 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -284,7 +284,7 @@ Notes:
 Result: PASS
 
 === tampered-payload.capsule ===
-File:                   ../examples/tamper-detection/output/tampered-payload.capsule (4493 bytes)
+File:                   ../spec/vectors/tamper-detection/output/tampered-payload.capsule (4493 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -310,7 +310,7 @@ Notes:
 Result: FAIL
 
 === tampered-chain.capsule ===
-File:                   ../examples/tamper-detection/output/tampered-chain.capsule (4495 bytes)
+File:                   ../spec/vectors/tamper-detection/output/tampered-chain.capsule (4495 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -337,7 +337,7 @@ Notes:
 Result: FAIL
 
 === tampered-envelope.capsule ===
-File:                   ../examples/tamper-detection/output/tampered-envelope.capsule (4493 bytes)
+File:                   ../spec/vectors/tamper-detection/output/tampered-envelope.capsule (4493 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -361,7 +361,7 @@ Notes:
 Result: FAIL
 
 === clean-encrypted.capsule ===
-File:                   ../examples/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
+File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -385,7 +385,7 @@ Notes:
 Result: PASS
 
 === tampered-blob.capsule ===
-File:                   ../examples/tamper-detection/output/tampered-blob.capsule (7320 bytes)
+File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (7320 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -421,7 +421,7 @@ L3 transcript (with `--decryption-key`):
 
 ```
 === clean-encrypted.capsule (with --decryption-key) ===
-File:                   ../examples/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
+File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -449,7 +449,7 @@ Notes:
 Result: PASS
 
 === tampered-blob.capsule (with --decryption-key) ===
-File:                   ../examples/tamper-detection/output/tampered-blob.capsule (7320 bytes)
+File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (7320 bytes)
 Capsule ID:             d6d73f94c78e…
 Originator (Ed25519):   c172289fcacf…
 Sealed at:              2026-05-07T12:00:00Z
@@ -491,5 +491,5 @@ catch.
 - **Spec:** `spec/`. Anything that disagrees with the spec
   is a verifier bug.
 - **Reference SDK:** `sdk-js/` (TypeScript-free JS).
-- **Test fixtures:** `examples/tamper-detection/output/`,
+- **Test fixtures:** `spec/vectors/tamper-detection/output/`,
   produced by the JS SDK and consumed unchanged by the Rust verifier.

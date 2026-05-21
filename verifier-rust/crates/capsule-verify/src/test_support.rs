@@ -9,7 +9,7 @@ use zip::CompressionMethod;
 
 use crate::zip_reader::unpack_zip;
 
-/// Resolve a capsule fixture by name under `examples/tamper-detection/output`.
+/// Resolve a capsule fixture by name under `spec/vectors/tamper-detection/output`.
 /// Panics with a clear message if the fixture is missing — this only fires
 /// from tests, so the panic surfaces as a test failure with enough context
 /// for a reader to know how to regenerate.
@@ -19,13 +19,12 @@ fn fixture_path(name: &str) -> PathBuf {
         .join("..")
         .join("..")
         .join("..")
-        .join("examples/tamper-detection/output")
+        .join("spec/vectors/tamper-detection/output")
         .join(name)
         .canonicalize()
         .unwrap_or_else(|_| {
             panic!(
-                "fixture {name:?} missing; \
-                 run `cd examples/tamper-detection && npm install && npm run build`"
+                "fixture {name:?} missing; populate spec/vectors before running parity tests"
             )
         })
 }
@@ -51,7 +50,7 @@ pub fn tampered_capsule_bytes(name: &str) -> Vec<u8> {
 }
 
 /// Reads the recipient's X25519 32-byte secret from
-/// `examples/tamper-detection/output/keys.json` (the same fixture the JS
+/// `spec/vectors/tamper-detection/output/keys.json` (the same fixture the JS
 /// reference SDK uses to build `clean-encrypted.capsule`). Used by the
 /// decryption tests to round-trip an encrypted capsule end-to-end.
 pub fn recipient_x25519_private_key() -> [u8; 32] {
@@ -60,11 +59,10 @@ pub fn recipient_x25519_private_key() -> [u8; 32] {
         .join("..")
         .join("..")
         .join("..")
-        .join("examples/tamper-detection/output/keys.json")
+        .join("spec/vectors/tamper-detection/output/keys.json")
         .canonicalize()
         .expect(
-            "keys.json missing; \
-             run `cd examples/tamper-detection && npm install && npm run build`",
+            "keys.json missing; populate spec/vectors before running parity tests",
         );
     let bytes = std::fs::read(&path).expect("read keys.json");
     let v: serde_json::Value =

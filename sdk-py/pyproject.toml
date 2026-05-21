@@ -8,7 +8,7 @@ version = "0.6.0"
 description = "Capsule v0.6 — portable signed AI-context container (Python reference SDK)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 authors = [{ name = "Virion AI" }]
 dependencies = [
     "cryptography>=42",

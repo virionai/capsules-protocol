@@ -2,8 +2,8 @@
 
 Capsule is a portable, signed, append-only unit of intelligence. This
 repository holds the protocol spec, reference SDKs, the Rust verifier,
-and a small CLI. Example capsules live in
-[`virionai/capsules-examples`](https://github.com/virionai/capsules-examples).
+CLI, and generic examples. Examples under `examples/` are illustrative
+only and carry no warranty.
 
 Before contributing, please skim
 [`AGENTS.md`](AGENTS.md) — it documents the deterministic-output and
@@ -46,8 +46,8 @@ A new language SDK is admitted to the conformance matrix once it:
    unknown ciphers), the event chain, the envelope.
 2. **Passes the test vectors in `spec/vectors/` once they exist.**
    Until the vector set lands, an SDK passes by round-tripping the
-   `capsules-examples` gallery with bit-identical sealed bytes against
-   the JavaScript SDK.
+   generic local examples with bit-identical sealed bytes against the
+   JavaScript SDK.
 3. **Is added to the conformance matrix.** Open a PR that extends
    `tools/run-conformance.mjs` with the new target. The matrix is the
    gate: only SDKs that pass land in the report.

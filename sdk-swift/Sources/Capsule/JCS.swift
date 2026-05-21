@@ -1,4 +1,4 @@
-// JCS — RFC 8785 canonicalization, ported from medical-journal-builder.js.
+// JCS — RFC 8785 canonicalization, ported from the JavaScript reference SDK.
 //
 // Object keys sorted by UTF-16 code units. Numbers via shortest-roundtrip,
 // rejecting NaN/Infinity. Strings escape only RFC 8259 mandatory chars and

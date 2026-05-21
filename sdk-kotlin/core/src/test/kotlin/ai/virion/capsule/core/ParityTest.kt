@@ -1,10 +1,10 @@
 // Cross-implementation parity tests against the JS reference's
-// tamper-detection corpus.
+// shared vector corpus.
 //
 // Mirrors sdk-py/tests/test_parity_jssdk.py. The JS SDK's
-// examples/tamper-detection/build.mjs produces six fixtures; this file
-// drives the Kotlin verifier against the four plain ones plus the
-// encrypted tamper case.
+// The shared vector registry produces six fixtures; this file drives the
+// Kotlin verifier against the four plain ones plus the encrypted tamper
+// case.
 //
 // These are the tests that catch cross-SDK divergence — exactly the
 // class of bug the historical Envelope.kt domain-separator issue was
@@ -13,10 +13,8 @@
 // `jsCleanCapsuleVerifiesUnderKotlin` is the canonical regression
 // catcher for that class of bug.
 //
-// Fixtures live at examples/tamper-detection/output/ at the repo root —
-// authoritative there so every SDK shares one source of truth. They
-// are committed; if they go missing, regenerate via:
-//   cd examples/tamper-detection && npm install && npm run build
+// Fixtures live at spec/vectors/tamper-detection/output/ at the repo
+// root so every SDK shares one source of truth.
 
 package ai.virion.capsule.core
 
@@ -37,7 +35,7 @@ class ParityTest {
         assertTrue(
             clean.exists() && keys.exists(),
             "Tamper-detection fixtures missing at ${dir.absolutePath}. " +
-                "Regenerate with: cd examples/tamper-detection && npm install && npm run build",
+                "Populate spec/vectors before running parity tests.",
         )
     }
 
@@ -106,17 +104,17 @@ class ParityTest {
         private fun repoRoot(): File {
             var p: File? = File(System.getProperty("user.dir")).absoluteFile
             while (p != null) {
-                if (File(p, "examples/tamper-detection/output/keys.json").exists()) return p
+                if (File(p, "spec/vectors/tamper-detection/output/keys.json").exists()) return p
                 p = p.parentFile
             }
             error(
                 "could not locate repo root containing " +
-                    "examples/tamper-detection/output/keys.json " +
+                    "spec/vectors/tamper-detection/output/keys.json " +
                     "starting from ${System.getProperty("user.dir")}",
             )
         }
 
-        private fun fixturesDir(): File = File(repoRoot(), "examples/tamper-detection/output")
+        private fun fixturesDir(): File = File(repoRoot(), "spec/vectors/tamper-detection/output")
 
         private fun originatorPubkey(): String {
             val keysJson = File(fixturesDir(), "keys.json").readText(Charsets.UTF_8)

@@ -27,13 +27,13 @@
 
 **The canonical protocol source for [Capsules.Run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.6 prototype.
 
-[Kaggle Gemma 4 Good Hackathon submission](https://capsules.run/competitions/gemma-4-good/) · [Live in-browser reader](https://capsules.run/load/) · [Roadmap](https://capsules.run/roadmap/) · [Conformance](https://capsules.run/conformance/)
+[Live in-browser reader](https://capsules.run/load/) · [Roadmap](https://capsules.run/roadmap/) · [Conformance](https://capsules.run/conformance/)
 
 ---
 
 ## One minute to a verified capsule
 
-If you arrived here from the Kaggle submission and want to verify the work:
+To verify the protocol implementation locally:
 
 1. **Clone and run.**
    ```sh
@@ -49,7 +49,7 @@ If you arrived here from the Kaggle submission and want to verify the work:
    The JavaScript lane is the quickest local smoke test. The Python and Rust lanes verify cross-implementation parity against the same protocol shape.
 
 3. **Open a real capsule in your browser.**
-   Visit [capsules.run/load](https://capsules.run/load/) and click any of the ten gallery capsules (health, crisis response, B2B sales, research, verifiability demos). The page parses and verifies the chain offline in your browser. Drop your own `.capsule` file too.
+   Visit [capsules.run/load](https://capsules.run/load/) and use a gallery capsule or drop your own `.capsule` file. The page parses and verifies the chain offline in your browser.
 
 4. **Try the tamper-detection demo.**
    The "Tampered payload" card in the gallery is a capsule with one byte flipped. The reader names the failing check (content_index mismatch). Tamper-evident by construction.
@@ -72,9 +72,14 @@ sdk-swift/             Swift SDK (iOS/macOS via SwiftPM)
 sdk-kotlin/            Kotlin SDK (Android/JVM via Gradle)
 verifier-rust/         independent Rust verifier (cargo)
 cli/                   command-line verifier and inspector
+examples/              generic examples only; illustrative, no warranty
 tools/                 conformance harness
 .github/workflows/     CI: conformance harness on every push + nightly
 ```
+
+The `examples/` directory is intentionally generic. Examples demonstrate
+portable work products such as reports, tables, graphs, and rendered HTML;
+they are illustrative only and carry no warranty.
 
 ## The capsule shape
 
@@ -97,12 +102,11 @@ backwards-compatible with the prior `0.5.x` shape.
 
 ## The protocol earns its weight by being load-bearing in a specific use case
 
-The first reference application is **Operators**: the [submission writeup](https://capsules.run/competitions/gemma-4-good/) for the full architecture.
-
 The same protocol applies across regulated work packets, investigations,
 project records, and multi-party correspondence. Different domains share
-the same capsule format; the [live gallery](https://capsules.run/load/)
-demonstrates this.
+the same capsule format; this repository keeps the portable file shape,
+verification semantics, SDKs, CLI, and conformance work separate from
+application-specific examples.
 
 ## The minimum viable capsule
 

@@ -1,10 +1,9 @@
 // CapsuleLLM — the harness contract.
 //
-// A host app that wants Capsule support typically already has an LLM
-// runtime ("the harness") — Gemma via MediaPipe, Apple Intelligence,
-// the Anthropic API, OpenAI Responses, anything. CapsuleLLM defines two
-// small protocols the host implements so capsule-bundled skills can be
-// surfaced to that LLM in a uniform way:
+// A host app that wants Capsule support typically already has a model or
+// tool runtime ("the harness"). CapsuleLLM defines two small protocols
+// the host implements so capsule-bundled skills can be surfaced to that
+// runtime in a uniform way:
 //
 //   - CapsuleLocalLLM  — generate text / describe image / transcribe
 //                        audio. Optional tool-use hook for skill
@@ -107,8 +106,8 @@ public struct SkillInvocationResult: Equatable {
     public let result: String?
     /// Optional structured side-channel data. Hosts may render or pass on.
     public let data: Data?
-    /// Optional webview spec for hosts that support it (Edge Gallery
-    /// passes this back as `webview`).
+    /// Optional webview spec for hosts that support rendering a webview
+    /// returned by a skill invocation.
     public let webview: WebviewSpec?
     public init(result: String?, data: Data? = nil, webview: WebviewSpec? = nil) {
         self.result = result; self.data = data; self.webview = webview

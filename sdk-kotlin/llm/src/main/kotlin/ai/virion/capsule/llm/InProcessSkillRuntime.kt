@@ -1,7 +1,7 @@
 // In-process skill runtime: registered handlers run as suspending Kotlin
-// functions. Hosts that bridge to JS skills (Edge Gallery) implement
+// functions. Hosts that bridge to external skill runtimes implement
 // CapsuleSkillRuntime themselves, mapping action ids to whatever bridge
-// primitive their LLM runtime exposes.
+// primitive their runtime exposes.
 
 package ai.virion.capsule.llm
 
