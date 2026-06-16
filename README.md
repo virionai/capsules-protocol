@@ -5,6 +5,8 @@
 <p align="center">
   <a href="./spec/">Protocol Spec</a>
   &nbsp;|&nbsp;
+  <a href="#capsules-in-the-ai-ecosystem">AI Ecosystem</a>
+  &nbsp;|&nbsp;
   <a href="https://capsules.run/load/">Live Reader</a>
   &nbsp;|&nbsp;
   <a href="https://capsules.run/conformance/">Conformance</a>
@@ -47,6 +49,15 @@ To verify the protocol implementation locally:
    - **Rust verifier**: `cd verifier-rust && cargo test`
 
    The JavaScript lane is the quickest local smoke test. The Python and Rust lanes verify cross-implementation parity against the same protocol shape.
+
+   To verify a specific `.capsule` file:
+   ```sh
+   cd cli
+   node bin/capsule.mjs verify ../examples/generic-report/output/generic-report.capsule
+
+   cd ../verifier-rust
+   cargo run -p capsule-verify-cli -- verify ../examples/generic-report/output/generic-report.capsule
+   ```
 
 3. **Open a real capsule in your browser.**
    Visit [capsules.run/load](https://capsules.run/load/) and use a gallery capsule or drop your own `.capsule` file. The page parses and verifies the chain offline in your browser.
@@ -100,6 +111,36 @@ Capsule v0.6 defines the portable work artifact:
 This directory is a stripped, working prototype of that idea. It is not
 backwards-compatible with the prior `0.5.x` shape.
 
+## Capsules in the AI ecosystem
+
+Capsules occupies the artifact layer of the AI stack.
+
+Most open AI infrastructure is runtime-centered. Agent and RAG frameworks
+help applications call models, tools, memory, and retrieval. Runtime
+protocols help tools, resources, and independent agents communicate while
+work is happening. Capsules answers the follow-up question: what durable
+object remains after the work happens?
+
+A capsule is not an agent runtime, orchestration framework, chat memory
+store, vector database, or tool protocol. It is a portable, signed,
+AI-readable work artifact. It carries the work product, payloads,
+participants, continuation context, event chain, and provenance envelope
+so another host, model, team, auditor, or regulator can inspect and
+continue the work later.
+
+| Ecosystem layer | Examples | What they standardize | Capsule relationship |
+| --- | --- | --- | --- |
+| Agent and RAG frameworks | LangChain, LlamaIndex | How applications call models, tools, memory, and retrieval | Can emit or consume capsules as durable handoff artifacts |
+| Runtime interop | MCP, A2A | How tools, resources, and agents communicate live | Can transport, expose, or negotiate capsule artifacts |
+| Provenance and lineage | C2PA, SLSA/in-toto, OpenLineage, Sigstore/Rekor | How artifacts, builds, media, data jobs, and signatures are traced | Capsules applies similar discipline to AI-assisted work packets |
+| Capsule protocol | Capsules | How multi-actor AI work is packaged, verified, resumed, and audited | The portable file is the unit of continuity and trust evaluation |
+
+That design center is asynchronous continuity. A capsule should survive
+tool boundaries, model changes, air-gapped review, platform shutdown, and
+time. Verification is offline-first: the file carries enough structure
+for a reader to check hashes, event-chain integrity, envelope signatures,
+and payload bindings without trusting the original service.
+
 ## The protocol earns its weight by being load-bearing in a specific use case
 
 The same protocol applies across regulated work packets, investigations,
@@ -148,6 +189,19 @@ npm test
 The JS test suite builds capsules (clean and tampered) and runs verification on each. The clean capsule passes. Each tampered capsule fails at a distinct, reported check.
 
 For the cross-language conformance harness, see `tools/` and `.github/workflows/conformance.yml`.
+
+## Implementation example: Operators
+
+[Capsules.run Operators](https://github.com/virionai/operators) is a local-first workspace that
+sits above the protocol. A human operator and a local agent collaborate
+over visible evidence, decision gates, ledger events, payload assets, and
+continuation context. Operators is one possible work surface; the capsule
+is the sealed artifact that should move between work surfaces.
+
+The current Operators prototype uses Capsule-shaped local export,
+hydration, identity, and signing primitives. The next protocol gate is a
+verifier-compatible Capsule v0.6 archive: an export that passes both this
+repo's JS CLI verifier and the independent Rust verifier.
 
 ## License
 
