@@ -176,7 +176,7 @@ Prototype. Not v1.0. The envelope schema is `0.6` on purpose; locked once a seco
 
 ## Conformance
 
-The conformance harness runs on every push to main plus nightly. Five SDK lanes target the same signed test vectors. The published signal is available at [capsules.run/conformance](https://capsules.run/conformance/).
+The conformance harness runs on every push to main plus nightly. Three SDK lanes are gated in CI — JavaScript, Python, and Rust — and verify the same signed tamper-detection test vectors (`spec/vectors/tamper-detection/`) across implementations. The Swift and Kotlin SDKs are not yet wired into CI. See `.github/workflows/conformance.yml` for the gated lanes.
 
 ## Try the demo locally
 

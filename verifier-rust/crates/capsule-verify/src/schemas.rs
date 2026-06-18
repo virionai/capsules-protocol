@@ -265,22 +265,23 @@ mod tests {
             "manifest must have at least one participant"
         );
 
-        // The fixture must contain at least the three baseline files.
+        // The fixture must contain at least the two baseline files the
+        // generator emits (a program and the event chain).
         let paths: Vec<&str> = manifest
             .content_index
             .files
             .iter()
             .map(|f| f.path.as_str())
             .collect();
-        for required in ["program.md", "agents.md", "chain/events.jsonl"] {
+        for required in ["program.md", "chain/events.jsonl"] {
             assert!(
                 paths.contains(&required),
                 "content_index must list {required}; got {paths:?}"
             );
         }
         assert!(
-            manifest.content_index.files.len() >= 3,
-            "expected at least 3 content_index entries, got {}",
+            manifest.content_index.files.len() >= 2,
+            "expected at least 2 content_index entries, got {}",
             manifest.content_index.files.len()
         );
 
