@@ -116,7 +116,7 @@ jobs:
 
       - name: Install sdk-py and run pytest
         run: |
-          pip install -e sdk-py
+          pip install -e "sdk-py[dev]"
           python -m pytest sdk-py/tests/ -v --tb=short
 
   conformance-rust:

@@ -423,7 +423,7 @@ mod tests {
                 .expect("envelope parses");
 
         let got = build_aad(&envelope, &manifest);
-        let expected = br#"{"capsule_id":"d6d73f94c78e68442b7a3f19fcfbd93a035155732efb2dc5ee2bf44f4322ab95","cipher":"ChaCha20-Poly1305","first_event_hash":"577a1933292463b7ecf8f3a5b32dbc970804fef418aab805b8a94fccf819d076","originator_public_key":"c172289fcacf417de58632909bc0353d11c87d5a6b0b79288c70723c5cf3749e","version":"0.6"}"#;
+        let expected = br#"{"capsule_id":"260b65e936cf5cb0000e46eb770b715f0e0e27627958ae1d591cb5984e9b8049","cipher":"ChaCha20-Poly1305","first_event_hash":"331924b4ac4bb305b48f0fccf05fe3f963bcb9d08e3c87b5a6ed97d0ac2558ea","originator_public_key":"cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc","version":"0.6"}"#;
         assert_eq!(
             got,
             expected,
