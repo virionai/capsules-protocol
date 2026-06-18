@@ -1,0 +1,10 @@
+{
+  "originator": {
+    "publicKey": "cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc",
+    "privateKey": "98b92069f548b94fce98044147396952e5860432cf884e2a17a5855421c47a6b"
+  },
+  "recipient": {
+    "publicKey": "702f964dcdae5c581b727aabde1a201a3f2de91a256e4f6d56c6f000474de46a",
+    "privateKey": "504fe2e09804a9e6d9bb203edfab0395091d605db90ce70c640e92ae30cf1a50"
+  }
+}
