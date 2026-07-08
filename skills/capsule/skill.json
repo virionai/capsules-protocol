@@ -94,7 +94,7 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "94bc0cfa23dc6b39c5cdbc9c61c7717a357f7d9f7f254919bee82392ceab8cc1"
+        "sha256": "0f97015f92543066afd4bf9c601f7dcb080b0f787624fc350928aee0307e1027"
       },
       {
         "path": "spec/format.md",
@@ -119,7 +119,7 @@
       {
         "path": "spec/trust.md",
         "title": "Trust model",
-        "sha256": "d30a698ca2165306aa61372f62e0513d5a2d734ebb9e0bd8b9642f8e9c7e548c"
+        "sha256": "0b77ec90797a03a99835db66a33b981dff5809161595924718740b8e1029ddc9"
       },
       {
         "path": "spec/pith.md",
