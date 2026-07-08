@@ -3,10 +3,11 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { CapsuleReader, verifyCapsule } from "../sdk-js/src/index.js";
+import { jcs } from "../sdk-js/src/canonical.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -32,12 +33,54 @@ async function vectorFiles() {
   return out.sort();
 }
 
+// Not every JSON under spec/vectors is a capsule vector. keys.json is
+// fixture key material for the tamper-detection lane; jcs-numbers.json
+// is the number-serialization vector set with its own checker below.
+function isFixtureKeyFile(path) {
+  return path.endsWith(`${sep}keys.json`) || path.endsWith("/keys.json");
+}
+
+function checkNumberVectors(path, doc) {
+  const vectors = doc.vectors;
+  if (!Array.isArray(vectors) || vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  vectors.forEach((entry, i) => {
+    const { ieee_hex, expected } = entry ?? {};
+    if (typeof ieee_hex !== "string" || !/^[0-9a-f]{16}$/.test(ieee_hex)) {
+      fail(`${path}: vectors[${i}]: ieee_hex must be 16 lowercase hex chars`);
+      return;
+    }
+    if (typeof expected !== "string" || expected.length === 0) {
+      fail(`${path}: vectors[${i}]: missing expected string`);
+      return;
+    }
+    const value = Buffer.from(ieee_hex, "hex").readDoubleBE(0);
+    if (!Number.isFinite(value)) {
+      fail(`${path}: vectors[${i}]: bit pattern is not a finite double`);
+      return;
+    }
+    const got = Buffer.from(jcs(value)).toString("utf8");
+    if (got !== expected) {
+      fail(`${path}: vectors[${i}] (bits ${ieee_hex}): JS SDK serializes ${got}, vector says ${expected}`);
+    }
+  });
+}
+
 async function checkVector(path) {
+  if (isFixtureKeyFile(path)) return;
+
   let vector;
   try {
     vector = JSON.parse(await readFile(path, "utf8"));
   } catch (err) {
     fail(`${path}: cannot parse JSON: ${err.message}`);
+    return;
+  }
+
+  if (Array.isArray(vector.vectors) || path.endsWith("jcs-numbers.json")) {
+    checkNumberVectors(path, vector);
     return;
   }
 

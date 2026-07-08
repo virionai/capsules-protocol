@@ -121,3 +121,37 @@ def test_bytes_to_hex_rejects_non_bytes_like():
 def test_bytes_to_hex_accepts_bytearray_and_memoryview():
     assert bytes_to_hex(bytearray(b"\x00\xff")) == "00ff"
     assert bytes_to_hex(memoryview(b"\x00\xff")) == "00ff"
+
+
+def test_jcs_rejects_integers_beyond_ieee_exact_range():
+    assert jcs(2**53 - 1) == b"9007199254740991"
+    with pytest.raises(ValueError):
+        jcs(2**53 + 1)
+    with pytest.raises(ValueError):
+        jcs(-(2**53) - 1)
+
+
+def test_jcs_number_layout_matches_ecmascript():
+    # Exponent-notation thresholds and layout, per ECMA-262 7.1.12.1.
+    assert jcs(0.000015) == b"0.000015"
+    assert jcs(-0.0) == b"0"
+    assert jcs(1e21) == b"1e+21"
+    assert jcs(1e-7) == b"1e-7"
+    assert jcs(1e-6) == b"0.000001"
+    assert jcs(5e-324) == b"5e-324"
+    assert jcs(100.0) == b"100"
+
+
+def test_jcs_numbers_match_spec_vectors():
+    import json
+    import struct
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "spec" / "vectors" / "jcs-numbers.json"
+    doc = json.loads(path.read_text())
+    vectors = doc["vectors"]
+    assert vectors, "vector file is empty"
+    for entry in vectors:
+        value = struct.unpack(">d", bytes.fromhex(entry["ieee_hex"]))[0]
+        got = jcs(value).decode("utf-8")
+        assert got == entry["expected"], f"bits {entry['ieee_hex']}"

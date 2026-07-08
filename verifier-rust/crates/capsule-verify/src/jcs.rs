@@ -210,3 +210,37 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod vector_tests {
+    use super::jcs;
+    use serde_json::Value;
+
+    /// Vector-driven check against the normative JCS number vectors in
+    /// spec/vectors/jcs-numbers.json (Node JSON.stringify is the oracle).
+    /// Inputs are IEEE-754 bit patterns so no JSON parser sits between
+    /// the vector and the value under test.
+    #[test]
+    fn numbers_match_spec_vectors() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../spec/vectors/jcs-numbers.json"
+        );
+        let doc: Value = serde_json::from_str(
+            &std::fs::read_to_string(path).expect("read spec/vectors/jcs-numbers.json"),
+        )
+        .expect("parse jcs-numbers.json");
+        let vectors = doc["vectors"].as_array().expect("vectors array");
+        assert!(!vectors.is_empty(), "vector file is empty");
+        for entry in vectors {
+            let hex = entry["ieee_hex"].as_str().expect("ieee_hex");
+            let expected = entry["expected"].as_str().expect("expected");
+            let bits = u64::from_str_radix(hex, 16).expect("hex bits");
+            let value = f64::from_bits(bits);
+            let num = serde_json::Number::from_f64(value)
+                .expect("vectors contain only finite doubles");
+            let got = String::from_utf8(jcs(&Value::Number(num))).expect("utf8");
+            assert_eq!(got, expected, "bits {hex}");
+        }
+    }
+}
