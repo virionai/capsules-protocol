@@ -137,12 +137,67 @@ jobs:
         working-directory: verifier-rust
         run: cargo test --workspace
 
+  conformance-kotlin:
+    name: Kotlin parity (sdk-kotlin core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up JDK
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a  # v5.5.0
+        with:
+          distribution: temurin
+          # core pins jvmToolchain(17); provide it directly so Gradle
+          # does not need to auto-provision a toolchain.
+          java-version: "17"
+
+      - name: Run core tests
+        working-directory: sdk-kotlin
+        # :core only — the skills/llm/ui modules are Android libraries;
+        # they get their own lane when an Android-emulator lane exists.
+        # Note the core module is a plain-capsule (L2) verifier today:
+        # it has no X25519/ChaCha20 path and rejects encrypted capsules.
+        run: ./gradlew --no-daemon :core:test
+
+  conformance-swift:
+    name: Swift parity (sdk-swift)
+    # CryptoKit and SwiftUI are Apple-only, so this lane needs a macOS
+    # runner; Linux Swift cannot build the package.
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Run swift test
+        working-directory: sdk-swift
+        run: swift test
+
   conformance-summary:
     name: Conformance summary
     runs-on: ubuntu-latest
-    # Gate the overall conformance signal on all three in-CI SDK lanes:
-    # JS (harness), Python (sdk-py), and Rust (verifier-rust).
-    needs: [conformance, conformance-python, conformance-rust]
+    # Gate the overall conformance signal on all five in-CI SDK lanes:
+    # JS (harness), Python (sdk-py), Rust (verifier-rust), Kotlin
+    # (sdk-kotlin core), and Swift (sdk-swift).
+    needs:
+      [
+        conformance,
+        conformance-python,
+        conformance-rust,
+        conformance-kotlin,
+        conformance-swift,
+      ]
     if: always()
     steps:
       - name: Assert all lanes passed
@@ -150,10 +205,14 @@ jobs:
           echo "JS harness:    ${{ needs.conformance.result }}"
           echo "Python parity: ${{ needs.conformance-python.result }}"
           echo "Rust parity:   ${{ needs.conformance-rust.result }}"
+          echo "Kotlin parity: ${{ needs.conformance-kotlin.result }}"
+          echo "Swift parity:  ${{ needs.conformance-swift.result }}"
           if [ "${{ needs.conformance.result }}" != "success" ] \
             || [ "${{ needs.conformance-python.result }}" != "success" ] \
-            || [ "${{ needs.conformance-rust.result }}" != "success" ]; then
+            || [ "${{ needs.conformance-rust.result }}" != "success" ] \
+            || [ "${{ needs.conformance-kotlin.result }}" != "success" ] \
+            || [ "${{ needs.conformance-swift.result }}" != "success" ]; then
             echo "One or more conformance lanes failed."
             exit 1
           fi
-          echo "All conformance lanes passed (JS + Python + Rust)."
+          echo "All conformance lanes passed (JS + Python + Rust + Kotlin + Swift)."
