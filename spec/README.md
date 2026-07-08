@@ -95,6 +95,8 @@ procedure.
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
 - [trust.md](trust.md) — trust model, allowlists, skill trust tiers
 - [pith.md](pith.md) — context-style discipline for narrative fields
+- [federation.md](federation.md) — key discovery, issuer metadata, and
+  temporal anchoring (informative draft, proposed for v0.7)
 
 ## Versioning
 

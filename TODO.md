@@ -36,7 +36,11 @@ Priority legend:
 - [ ] **P2** - Specify key lifecycle records: rotation, retirement,
       revocation, and historical validation.
 - [ ] **P2** - Specify temporal anchoring profiles such as RFC 3161 or Rekor.
+      *Draft anchor shapes in `spec/federation.md`; proof formats and
+      verifier treatment remain.*
 - [ ] **P2** - Specify federation/profile discovery vocabulary.
+      *Informative draft landed as `spec/federation.md`; needs review and
+      resolution of its open questions before becoming normative in v0.7.*
 
 ## SDKs And Verifiers
 
