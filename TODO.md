@@ -14,9 +14,14 @@ Priority legend:
 
 ## Capsule v0.6 Spec
 
-- [ ] **P0** - Create a checked-in normative vector registry under
+- [~] **P0** - Create a checked-in normative vector registry under
       `spec/vectors/` with capsule bytes, expected hashes, verifier
-      results, and negative cases.
+      results, and negative cases. (Done: positive embedded vector
+      `plain-basic.json` plus a language-neutral outcome registry
+      `tamper-detection/vectors.json` covering all six tamper fixtures,
+      cross-checked by the JS `spec-vectors` lane. Remaining: wire the
+      Python/Rust lanes to the same registry; add malformed-layout and
+      byte-level vectors below.)
 - [ ] **P0** - Add explicit malformed-layout vectors for missing required
       files, duplicate entries, unsafe paths, compressed entries, over-limit
       archives, and invalid JSON.
