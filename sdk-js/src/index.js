@@ -35,6 +35,7 @@ export {
 
 export {
   buildContentIndex,
+  contentIndexExclusions,
   buildManifest,
   computeCapsuleId,
   manifestHash,

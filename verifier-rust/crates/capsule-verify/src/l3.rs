@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use crate::crypto::hex_to_bytes;
 use crate::decrypt::decrypt_inner_zip;
-use crate::manifest::{compute_capsule_id, manifest_hash, CONTENT_INDEX_EXCLUDED};
+use crate::manifest::{compute_capsule_id, content_index_exclusions, manifest_hash};
 use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
 use crate::verifier::{
     chain_walk_into, verify_content_index, verify_envelope_signatures, ChainCheck,
@@ -265,11 +265,13 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // the inner manifest and the inner envelope. Set `inner_content_index_check`
     // BEFORE Step 4 so even cross-check failures don't suppress the inner
     // content_index outcome in `result.inner_content_index`.
+    // The decrypted inner capsule is plain (cipher "none"); key the exclusion
+    // off its own envelope so any stray inner content.enc is indexed.
     let inner_ci = verify_content_index(
         &inner_files,
         &inner_manifest,
         Some(&inner_envelope.content_index_hash),
-        CONTENT_INDEX_EXCLUDED,
+        content_index_exclusions(inner_envelope.cipher != "none"),
     );
     *inner_content_index_check = Some(inner_ci);
 

@@ -26,23 +26,37 @@ export function computeCapsuleId(originatorPubKeyRaw, firstEventHashHex) {
 }
 
 /**
- * Build the content_index.files array from a Map<path, bytes>.
- *
- * Three files are excluded by definition:
+ * Files excluded from the content index by structural necessity, for every
+ * capsule regardless of profile:
  *   - manifest.json: the index lives inside it (would be circular)
  *   - provenance/envelope.json: it commits to the index hash (would be circular)
- *   - content.enc: bound separately by envelope.encrypted_blob_hash
  */
-export const CONTENT_INDEX_EXCLUDED = new Set([
+export const STRUCTURAL_EXCLUDED = new Set([
   "manifest.json",
   "provenance/envelope.json",
+]);
+
+/**
+ * `content.enc` is excluded from the content index ONLY for encrypted
+ * capsules, where it is bound separately by envelope.encrypted_blob_hash.
+ * In a plain capsule there is no content.enc; if one is present it MUST be
+ * indexed (and will therefore fail verification), so that a signed plain
+ * capsule cannot smuggle an unaccounted-for blob past the verifier.
+ */
+export const CONTENT_INDEX_EXCLUDED = new Set([
+  ...STRUCTURAL_EXCLUDED,
   "content.enc",
 ]);
 
-export function buildContentIndex(files) {
+/** Choose the content-index exclusion set for the capsule's profile. */
+export function contentIndexExclusions(encrypted) {
+  return encrypted ? CONTENT_INDEX_EXCLUDED : STRUCTURAL_EXCLUDED;
+}
+
+export function buildContentIndex(files, excluded = STRUCTURAL_EXCLUDED) {
   const entries = [];
   for (const [path, bytes] of files.entries()) {
-    if (CONTENT_INDEX_EXCLUDED.has(path)) continue;
+    if (excluded.has(path)) continue;
     entries.push({ path, sha256: sha256Hex(bytes) });
   }
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

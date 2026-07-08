@@ -41,7 +41,7 @@ use crate::decrypt::decrypt_inner_zip;
 use crate::envelope::verify_signatures;
 use crate::l3::l3_attempt_decrypt_and_verify;
 use crate::manifest::{
-    build_content_index, compute_capsule_id, manifest_hash, CONTENT_INDEX_EXCLUDED,
+    build_content_index, compute_capsule_id, content_index_exclusions, manifest_hash,
 };
 use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
 use crate::zip_reader::unpack_zip;
@@ -481,11 +481,14 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (7) content_index check ----------------------------------------
+    // Key the content.enc exclusion off the signed envelope.cipher, not file
+    // presence: a stray content.enc injected into a plain (cipher="none")
+    // capsule is indexed here and therefore fails verification.
     content_index_check = verify_content_index(
         &files,
         &manifest,
         Some(&envelope.content_index_hash),
-        CONTENT_INDEX_EXCLUDED,
+        content_index_exclusions(envelope.cipher != "none"),
     );
 
     // ---- (8) encryption-shape check -------------------------------------
@@ -678,7 +681,11 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
 ///
 /// `ContentIndexCheck::ok` is `true` iff `errors.is_empty()`.
 ///
-/// `excluded` accepts the [`CONTENT_INDEX_EXCLUDED`] constant directly.
+/// `excluded` selects which files are outside the content index: pass
+/// [`STRUCTURAL_EXCLUDED`] for a plain capsule and [`CONTENT_INDEX_EXCLUDED`]
+/// for an encrypted one (see [`content_index_exclusions`]). Keying this on the
+/// signed `envelope.cipher` is what stops a stray `content.enc` from being
+/// smuggled into a plain capsule unindexed.
 /// `envelope_content_index_hash` is `Option<&str>` so future call sites can
 /// skip the envelope-side comparison if needed; outer and inner both pass
 /// `Some`.
@@ -686,18 +693,10 @@ pub(crate) fn verify_content_index(
     files: &BTreeMap<String, Vec<u8>>,
     manifest: &Manifest,
     envelope_content_index_hash: Option<&str>,
-    _excluded: &[&str],
+    excluded: &[&str],
 ) -> ContentIndexCheck {
-    // The `_excluded` parameter documents the contract — both call sites
-    // (outer pipeline + L3 inner) pass [`CONTENT_INDEX_EXCLUDED`]. The actual
-    // filtering happens inside [`build_content_index`], which uses the
-    // in-tree [`is_content_index_excluded`] predicate kept in sync with
-    // [`CONTENT_INDEX_EXCLUDED`]. The parameter is held in the signature
-    // both for readability at the call site (so callers see what's excluded)
-    // and as a single seam if a future caller wants a different exclusion
-    // set without forking [`build_content_index`].
     let mut content_index_check = ContentIndexCheck::default();
-    let recomputed = build_content_index(files);
+    let recomputed = build_content_index(files, excluded);
     let ci_errors = &mut content_index_check.errors;
 
     // Per-file: present in ZIP but missing from manifest, or hash mismatch.
@@ -2076,7 +2075,7 @@ mod tests {
             &inner_files,
             &inner_manifest,
             Some(&inner_envelope.content_index_hash),
-            CONTENT_INDEX_EXCLUDED,
+            content_index_exclusions(inner_envelope.cipher != "none"),
         );
         assert!(
             pre.ok,
@@ -2105,7 +2104,7 @@ mod tests {
             &inner_files,
             &inner_manifest,
             Some(&inner_envelope.content_index_hash),
-            CONTENT_INDEX_EXCLUDED,
+            content_index_exclusions(inner_envelope.cipher != "none"),
         );
         assert!(
             !post.ok,

@@ -24,6 +24,7 @@ import {
   buildContentIndex,
   buildManifest,
   computeCapsuleId,
+  CONTENT_INDEX_EXCLUDED,
   manifestBytes,
   manifestHash,
 } from "./manifest.js";
@@ -283,7 +284,9 @@ export class CapsuleBuilder {
       Buffer.from(JSON.stringify(decryptionMeta, null, 2), "utf8"),
     );
     outerSidecars.set("content.enc", contentEnc);
-    const outerContentIndex = buildContentIndex(outerSidecars);
+    // Encrypted profile: content.enc is bound by envelope.encrypted_blob_hash,
+    // so it is excluded from the content index here.
+    const outerContentIndex = buildContentIndex(outerSidecars, CONTENT_INDEX_EXCLUDED);
 
     const outerManifest = buildManifest({
       originator: this.originator,

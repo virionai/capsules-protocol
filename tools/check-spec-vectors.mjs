@@ -18,6 +18,20 @@ function fail(message) {
   errors.push(message);
 }
 
+// A vector is a JSON document carrying `capsule_bytes_b64` + `expected`.
+// Other JSON files live under spec/vectors/ too (e.g. the tamper-detection
+// keypair `keys.json`, which is consumed by the Rust/Python parity lanes),
+// so we filter by shape rather than by walking every *.json blindly.
+function isVectorDocument(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    typeof value.capsule_bytes_b64 === "string" &&
+    value.expected &&
+    typeof value.expected === "object"
+  );
+}
+
 async function vectorFiles() {
   if (!existsSync(VECTOR_DIR)) return [];
   const out = [];
@@ -25,7 +39,18 @@ async function vectorFiles() {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) await walk(path);
-      else if (entry.name.endsWith(".json")) out.push(path);
+      else if (!entry.name.endsWith(".json")) continue;
+      else {
+        let parsed;
+        try {
+          parsed = JSON.parse(await readFile(path, "utf8"));
+        } catch {
+          // A malformed .json under spec/vectors is itself a failure.
+          out.push(path);
+          continue;
+        }
+        if (isVectorDocument(parsed)) out.push(path);
+      }
     }
   }
   await walk(VECTOR_DIR);

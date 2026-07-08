@@ -45,9 +45,11 @@ from .envelope import (
 )
 from .manifest import (
     CONTENT_INDEX_EXCLUDED,
+    STRUCTURAL_EXCLUDED,
     build_content_index,
     build_manifest,
     compute_capsule_id,
+    content_index_exclusions,
     manifest_bytes,
     manifest_hash,
 )
@@ -61,6 +63,7 @@ SPEC_VERSION = "0.6"
 
 __all__ = [
     "CONTENT_INDEX_EXCLUDED",
+    "STRUCTURAL_EXCLUDED",
     "PITH_VERSION",
     "SPEC_VERSION",
     "CapsuleBuilder",
@@ -73,6 +76,7 @@ __all__ = [
     "__version__",
     "build_chain_events",
     "build_content_index",
+    "content_index_exclusions",
     "build_envelope",
     "build_manifest",
     "bytes_to_hex",

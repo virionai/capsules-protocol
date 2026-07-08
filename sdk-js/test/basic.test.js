@@ -197,3 +197,24 @@ test("tampered encrypted blob fails AEAD on decrypt", async () => {
     }),
   );
 });
+
+test("smuggled content.enc in a plain capsule fails verification", async () => {
+  // A signed plain capsule (cipher="none") must not carry an unaccounted-for
+  // content.enc blob past verification. content.enc is only excluded from the
+  // content index for capsules that declare a cipher.
+  const { builder, ed } = basicBuilder();
+  const bytes = await builder.seal({
+    signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
+    signedAt: TS,
+  });
+  const { unpackZip, packZip } = await import("../src/zip.js");
+  const files = await unpackZip(bytes);
+  files.set("content.enc", Buffer.from("smuggled payload, covered by no hash"));
+  const tampered = await packZip(files);
+  const result = await verifyCapsule(await CapsuleReader.fromBytes(tampered), {
+    allowlist: [ed.publicKeyHex],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.contentIndex.ok, false);
+  assert.ok(result.contentIndex.errors.some((e) => e.includes("content.enc")));
+});

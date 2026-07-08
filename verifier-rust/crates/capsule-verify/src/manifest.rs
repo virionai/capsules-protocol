@@ -19,25 +19,30 @@ use crate::schemas::{ContentIndex, ContentIndexEntry, Manifest};
 /// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant.
 const CAPSULE_ID_DOMAIN: &[u8] = b"capsule-id-v0.6\x00";
 
-/// Three paths excluded from the content index, by spec:
+/// Paths excluded from the content index by structural necessity, for every
+/// capsule regardless of profile:
 ///   * `manifest.json` — the index lives inside it
 ///   * `provenance/envelope.json` — commits to the index hash already
-///   * `content.enc` — bound separately by `envelope.encrypted_blob_hash`
-///
-/// Surfaced as both a constant (for callers that want a slice they can pass
-/// to a helper) and a predicate (for callers that want a `match`-style
-/// boolean check). Both are kept in sync — adding/removing an entry must be
-/// done in one place. Tests in this module assert the two stay aligned.
-pub const CONTENT_INDEX_EXCLUDED: &[&str] = &[
-    "manifest.json",
-    "provenance/envelope.json",
-    "content.enc",
-];
+pub const STRUCTURAL_EXCLUDED: &[&str] = &["manifest.json", "provenance/envelope.json"];
 
-/// Predicate form of [`CONTENT_INDEX_EXCLUDED`] — returns `true` if `path`
-/// is in the excluded set.
-pub fn is_content_index_excluded(path: &str) -> bool {
-    CONTENT_INDEX_EXCLUDED.contains(&path)
+/// The exclusion set for an encrypted capsule: the structural files plus
+/// `content.enc`, which is bound separately by `envelope.encrypted_blob_hash`.
+///
+/// `content.enc` is excluded ONLY for encrypted capsules. In a plain capsule
+/// a stray `content.enc` must be indexed (and will therefore fail
+/// verification), so a signed plain capsule cannot smuggle an unaccounted-for
+/// blob past the verifier. Choose the set with [`content_index_exclusions`].
+pub const CONTENT_INDEX_EXCLUDED: &[&str] =
+    &["manifest.json", "provenance/envelope.json", "content.enc"];
+
+/// Choose the content-index exclusion set for the capsule's profile, keyed on
+/// whether the (signed) envelope declares a cipher.
+pub fn content_index_exclusions(encrypted: bool) -> &'static [&'static str] {
+    if encrypted {
+        CONTENT_INDEX_EXCLUDED
+    } else {
+        STRUCTURAL_EXCLUDED
+    }
 }
 
 /// Errors returned by [`compute_capsule_id`].
@@ -76,15 +81,20 @@ pub fn compute_capsule_id(
 
 /// Recompute the content index from per-file bytes.
 ///
-/// Files in [`is_content_index_excluded`] are skipped. The output `files`
-/// array is sorted by path (matching the JS reference's `sort` step), and
+/// Files in `excluded` are skipped (pass [`STRUCTURAL_EXCLUDED`] for a plain
+/// capsule, [`CONTENT_INDEX_EXCLUDED`] for an encrypted one — see
+/// [`content_index_exclusions`]). The output `files` array is sorted by path
+/// (matching the JS reference's `sort` step), and
 /// `index_hash = sha256_hex(jcs(files_as_value))`.
 ///
 /// Mirrors `buildContentIndex` in `sdk-js/src/manifest.js`.
-pub fn build_content_index(files: &BTreeMap<String, Vec<u8>>) -> ContentIndex {
+pub fn build_content_index(
+    files: &BTreeMap<String, Vec<u8>>,
+    excluded: &[&str],
+) -> ContentIndex {
     let mut entries: Vec<ContentIndexEntry> = Vec::new();
     for (path, bytes) in files {
-        if is_content_index_excluded(path) {
+        if excluded.contains(&path.as_str()) {
             continue;
         }
         entries.push(ContentIndexEntry {
@@ -168,9 +178,23 @@ mod tests {
     #[test]
     fn content_index_matches_stored() {
         let (manifest, files) = load_clean();
-        let recomputed = build_content_index(&files);
+        // clean.capsule is plain; structural exclusions reproduce its index.
+        let recomputed = build_content_index(&files, STRUCTURAL_EXCLUDED);
         assert_eq!(recomputed.index_hash, manifest.content_index.index_hash);
         assert_eq!(recomputed.files, manifest.content_index.files);
+    }
+
+    #[test]
+    fn plain_profile_indexes_stray_content_enc() {
+        // A content.enc present in a plain capsule must be indexed (structural
+        // exclusions only), so it cannot be smuggled past the verifier.
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        files.insert("a.txt".into(), b"a".to_vec());
+        files.insert("content.enc".into(), b"smuggled".to_vec());
+        let plain = build_content_index(&files, STRUCTURAL_EXCLUDED);
+        assert!(plain.files.iter().any(|f| f.path == "content.enc"));
+        let encrypted = build_content_index(&files, CONTENT_INDEX_EXCLUDED);
+        assert!(!encrypted.files.iter().any(|f| f.path == "content.enc"));
     }
 
     #[test]
@@ -185,11 +209,16 @@ mod tests {
     }
 
     #[test]
-    fn excluded_set_is_correct() {
-        assert!(is_content_index_excluded("manifest.json"));
-        assert!(is_content_index_excluded("provenance/envelope.json"));
-        assert!(is_content_index_excluded("content.enc"));
-        assert!(!is_content_index_excluded("program.md"));
-        assert!(!is_content_index_excluded("chain/events.jsonl"));
+    fn excluded_sets_are_correct() {
+        assert_eq!(
+            STRUCTURAL_EXCLUDED,
+            &["manifest.json", "provenance/envelope.json"]
+        );
+        assert_eq!(
+            CONTENT_INDEX_EXCLUDED,
+            &["manifest.json", "provenance/envelope.json", "content.enc"]
+        );
+        assert_eq!(content_index_exclusions(false), STRUCTURAL_EXCLUDED);
+        assert_eq!(content_index_exclusions(true), CONTENT_INDEX_EXCLUDED);
     }
 }
