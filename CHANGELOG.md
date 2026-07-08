@@ -46,6 +46,51 @@ signed append-only audit trail. Not backwards-compatible with the
 - **Provenance version matched to SDK.** Previous: provenance `1.0`
   ahead of SDK `0.1.x`. Now: both at `0.6`.
 
+### Added
+
+- **JCS number vector set.** `spec/vectors/jcs-numbers.json`: 256
+  IEEE-754 bit patterns with their canonical serializations (Node
+  `JSON.stringify` as oracle), covering exponent-notation thresholds,
+  subnormals, extremes, and the 2^53 boundary. Vector-driven tests run
+  in all five lanes; `tools/check-spec-vectors.mjs` validates the set
+  against the JS SDK.
+- **Kotlin and Swift CI lanes.** `conformance-kotlin` runs the Kotlin
+  `:core` tests on every push; `conformance-swift` runs `swift test` on
+  macOS. The conformance summary now gates on all five SDK lanes.
+
+### Fixed
+
+- **Cross-implementation JCS number canonicalization.** The Python,
+  Kotlin, and Swift SDKs previously punted on ECMAScript
+  `Number::toString` layout for non-integer doubles (e.g. emitting
+  `1.5e-05`/`1.5E-5` where the reference emits `0.000015`), so a capsule
+  containing such a number could verify under JS/Rust and fail under the
+  other lanes. All three now implement the full ECMA-262 §7.1.12.1
+  layout; Kotlin derives shortest-round-trip digits from the IEEE-754
+  bits via exact BigDecimal arithmetic so results do not depend on the
+  runtime's `Double.toString` (which differs between pre-19 JDKs,
+  JDK 19+, and Android ART). Integers outside ±(2^53 − 1) are now
+  rejected fail-closed in Python/Kotlin/Swift rather than serialized
+  in a way JS cannot represent.
+- **`tools/check-spec-vectors.mjs` no longer misclassifies non-capsule
+  JSON.** It previously failed on `tamper-detection/output/keys.json`
+  (fixture key material) and any non-capsule vector file; it now
+  dispatches by vector type.
+- **Kotlin SDK license metadata.** `sdk-kotlin/README.md` claimed
+  Apache-2.0; the repository (and every other package) is MIT.
+
+### Changed (docs)
+
+- **Conformance harness framed as the JavaScript lane.**
+  `tools/run-conformance.mjs` runs JS targets only; cross-implementation
+  gating lives in the CI workflow. The harness banner, report header,
+  and README now say so instead of implying the harness itself is the
+  cross-language check.
+- **Kotlin SDK scope labeled honestly.** The Kotlin core module is a
+  plain-capsule (L2) implementation — no X25519/HKDF/ChaCha20-Poly1305,
+  encrypted capsules rejected fail-closed. README and module docs now
+  state this instead of presenting five equal SDKs.
+
 ### Notes
 
 This release is **prototype**. The envelope schema is locked at `0.6`

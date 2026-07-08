@@ -1,18 +1,29 @@
 # Capsule SDK (Kotlin)
 
 Native Kotlin library for Capsule v0.6: a portable, signed, verifiable
-container for AI work product. Build, read, verify, and sign capsules
-on Android (or any JVM); embed skills; expose them to your app's LLM
-through a small documented contract.
+container for AI work product. Build, read, verify, and sign **plain
+(unencrypted) capsules** on Android (or any JVM); embed skills; expose
+them to your app's LLM through a small documented contract.
 
-This is one of three implementations of Capsule v0.6 — the JS SDK (Node)
-is the reference; this Kotlin SDK and the sibling [Swift SDK](../sdk-swift)
-make the format real on phones.
+The JS SDK (Node) is the reference implementation; this Kotlin SDK and
+the sibling [Swift SDK](../sdk-swift) make the format real on phones.
+
+**Scope: plain-capsule (L2) only.** This SDK implements JCS, SHA-256
+hashing, Ed25519 signing/verification, the event chain, and the
+envelope — but not the encryption profile. There is no X25519 key
+agreement, HKDF, or ChaCha20-Poly1305 here, so encrypted capsules are
+rejected (fail closed) rather than decrypted. Use the JS, Python,
+Swift, or Rust implementations for encrypted (L3) capsules until the
+Kotlin encryption path lands.
 
 ## Status
 
-`0.6.0-prototype.1` — code-complete, untested in a Gradle build in this
-session.
+`0.6.0-prototype.1` — the `:core` module compiles and its tests
+(round-trip, JS-fixture parity, JCS number vectors) run in CI on every
+push; see the `conformance-kotlin` lane in
+[.github/workflows/conformance.yml](../.github/workflows/conformance.yml).
+The Android modules (`:skills`, `:llm`, `:ui`) are not yet
+compile-tested in CI.
 
 ## Modules
 
@@ -181,7 +192,9 @@ the shared interface keeps those adapters thin.
 ## What's deferred
 
 - **Encryption** (X25519-HKDF + ChaCha20-Poly1305 multi-recipient):
-  parking-lot per format spec.
+  not implemented — encrypted capsules are rejected, not decrypted.
+  The JS, Python, Swift, and Rust implementations cover the full
+  encrypted L2/L3 profile; Kotlin parity is open work.
 - **Maven Central publishing**: tagged release after first compile-test
   + audit.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `List<Signer>`
@@ -190,4 +203,4 @@ the shared interface keeps those adapters thin.
 
 ## License
 
-Apache-2.0 — same as the JS SDK.
+MIT — same as the JS SDK and the repository [LICENSE](../LICENSE).

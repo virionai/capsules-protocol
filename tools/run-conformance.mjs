@@ -1,8 +1,14 @@
 #!/usr/bin/env node
-// Capsule v0.6 conformance test harness.
+// Capsule v0.6 conformance harness — JavaScript lane.
 //
-// Runs each required repo-local target serially, captures structured
-// results, and writes both JSON and Markdown reports under output/.
+// Runs the repo-local JavaScript targets (JS SDK, CLI, examples, and
+// repo hygiene checks) serially, captures structured results, and
+// writes both JSON and Markdown reports under output/.
+//
+// This file is NOT the cross-implementation gate. The Python, Rust,
+// Kotlin, and Swift lanes run as separate jobs in
+// .github/workflows/conformance.yml; the workflow's summary job gates
+// on all lanes together.
 //
 // Invoke from the capsules-protocol/ directory:
 //   node tools/run-conformance.mjs
@@ -445,7 +451,13 @@ function buildMarkdown(report) {
   const lines = [];
   const s = report.summary;
   const overall = s.overall_status === "pass" ? "PASS" : "FAIL";
-  lines.push(`# Capsule v0.6 conformance report`);
+  lines.push(`# Capsule v0.6 conformance report — JavaScript lane`);
+  lines.push("");
+  lines.push(
+    "This report covers the JavaScript targets only (JS SDK, CLI, " +
+      "examples, repo hygiene). The Python, Rust, Kotlin, and Swift " +
+      "lanes run as separate CI jobs in .github/workflows/conformance.yml.",
+  );
   lines.push("");
   lines.push(`**Generated:** ${report.generated_at}  `);
   lines.push(`**Node:** ${report.node_version}  `);
@@ -500,7 +512,7 @@ async function main() {
   const overallStart = process.hrtime.bigint();
   const entries = [];
 
-  console.log(`Capsule v0.6 conformance harness v${HARNESS_VERSION}`);
+  console.log(`Capsule v0.6 conformance harness (JavaScript lane) v${HARNESS_VERSION}`);
   console.log(`Node ${process.version} on ${process.platform}`);
   console.log(`Targets: ${TARGETS.length}`);
   console.log("");
