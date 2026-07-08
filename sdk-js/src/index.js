@@ -53,4 +53,8 @@ export {
   PITH_VERSION,
 } from "./pith.js";
 
+// Federation — optional, non-normative identity/encryption/policy overlay
+// (e.g. Clerk). Never touches core verification; see spec/federation.md.
+export * as federation from "./federation/index.js";
+
 export const SPEC_VERSION = "0.6";

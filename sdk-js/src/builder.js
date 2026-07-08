@@ -103,6 +103,24 @@ export class CapsuleBuilder {
   }
 
   /**
+   * Compute the capsule_id that seal() will assign, given the events
+   * appended so far. capsule_id depends only on the originator key and the
+   * first event hash, so it is knowable before sealing — letting an issuer
+   * attest to the id (and the signer key) so the attestation can be embedded
+   * under payload/ and bound by the content index. Requires at least one
+   * appended event (so the first-event hash is final and no seal-time
+   * backstop event is inserted).
+   */
+  previewCapsuleId() {
+    if (this.bareEvents.length === 0) {
+      throw new Error("previewCapsuleId requires at least one appended event");
+    }
+    const events = buildChainEvents(this.bareEvents);
+    const { firstEventHash } = firstAndEntryHash(events);
+    return computeCapsuleId(hexToBytes(this.originator.public_key), firstEventHash);
+  }
+
+  /**
    * Seal and emit the capsule bytes.
    *
    * options:
