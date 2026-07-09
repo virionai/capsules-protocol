@@ -126,6 +126,32 @@ def test_capsule_id_mismatch_recorded_as_error():
     assert any("manifest.id mismatch" in e for e in result["errors"])
 
 
+def test_smuggled_content_enc_in_plain_capsule_fails():
+    # A signed plain capsule (cipher="none") must not be able to carry an
+    # unaccounted-for content.enc blob past verification. content.enc is only
+    # excluded from the content index for capsules that declare a cipher.
+    zip_bytes, kp = _clean()
+    buf = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(zip_bytes)) as src,
+        zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as dst,
+    ):
+        for zi in src.infolist():
+            data = src.read(zi)
+            new_zi = zipfile.ZipInfo(zi.filename, date_time=(1980, 1, 1, 0, 0, 0))
+            new_zi.compress_type = zipfile.ZIP_STORED
+            dst.writestr(new_zi, data)
+        # Inject an unindexed blob, leaving the signed envelope/manifest intact.
+        smuggle = zipfile.ZipInfo("content.enc", date_time=(1980, 1, 1, 0, 0, 0))
+        smuggle.compress_type = zipfile.ZIP_STORED
+        dst.writestr(smuggle, b"smuggled payload, covered by no hash")
+    reader = CapsuleReader.from_bytes(buf.getvalue())
+    result = verify_capsule(reader, allowlist=[kp.public_key_hex])
+    assert result["ok"] is False
+    assert result["content_index"]["ok"] is False
+    assert any("content.enc" in e for e in result["content_index"]["errors"])
+
+
 def _build_enc():
     kp = generate_ed25519()
     rec = generate_x25519()

@@ -66,11 +66,19 @@ here.
   cryptographically bound to a key by default — only `originator` is.
 - `first_event_hash`: 32 bytes of SHA-256, lowercase hex; equals the
   hash of the first event in `chain/events.jsonl`.
-- `content_index.files`: every file in the capsule *except*
-  `manifest.json` itself and (for encrypted capsules) `content.enc`,
-  which is hashed in the envelope.
+- `content_index.files`: every file in the capsule *except* the
+  structural files `manifest.json` (the index lives inside it) and
+  `provenance/envelope.json` (it commits to the index hash), plus — **only
+  when the envelope declares a cipher other than `none`** — `content.enc`,
+  which is bound instead by `envelope.encrypted_blob_hash`.
   - Sorted by `path`, ASCII order.
   - `sha256` is over the raw file bytes as stored in the ZIP.
+  - The `content.enc` exclusion is conditional on the *signed*
+    `envelope.cipher`, not on file presence. In a plain capsule
+    (`cipher: "none"`) a `content.enc` entry MUST be indexed like any other
+    file, so a signed plain capsule cannot carry an unaccounted-for blob
+    past verification. Forcing the exclusion by editing `cipher` invalidates
+    the envelope signature.
 - `content_index.index_hash`: SHA-256 over the JCS-canonical
   serialization of `content_index.files`.
 - `skill_trust`: per-skill trust assertion (see [trust.md](trust.md)).

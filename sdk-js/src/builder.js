@@ -24,6 +24,7 @@ import {
   buildContentIndex,
   buildManifest,
   computeCapsuleId,
+  CONTENT_INDEX_EXCLUDED,
   manifestBytes,
   manifestHash,
 } from "./manifest.js";
@@ -99,6 +100,24 @@ export class CapsuleBuilder {
       ...(event.untrusted_payload_fields ? { untrusted_payload_fields: event.untrusted_payload_fields } : {}),
     });
     return this;
+  }
+
+  /**
+   * Compute the capsule_id that seal() will assign, given the events
+   * appended so far. capsule_id depends only on the originator key and the
+   * first event hash, so it is knowable before sealing — letting an issuer
+   * attest to the id (and the signer key) so the attestation can be embedded
+   * under payload/ and bound by the content index. Requires at least one
+   * appended event (so the first-event hash is final and no seal-time
+   * backstop event is inserted).
+   */
+  previewCapsuleId() {
+    if (this.bareEvents.length === 0) {
+      throw new Error("previewCapsuleId requires at least one appended event");
+    }
+    const events = buildChainEvents(this.bareEvents);
+    const { firstEventHash } = firstAndEntryHash(events);
+    return computeCapsuleId(hexToBytes(this.originator.public_key), firstEventHash);
   }
 
   /**
@@ -283,7 +302,9 @@ export class CapsuleBuilder {
       Buffer.from(JSON.stringify(decryptionMeta, null, 2), "utf8"),
     );
     outerSidecars.set("content.enc", contentEnc);
-    const outerContentIndex = buildContentIndex(outerSidecars);
+    // Encrypted profile: content.enc is bound by envelope.encrypted_blob_hash,
+    // so it is excluded from the content index here.
+    const outerContentIndex = buildContentIndex(outerSidecars, CONTENT_INDEX_EXCLUDED);
 
     const outerManifest = buildManifest({
       originator: this.originator,

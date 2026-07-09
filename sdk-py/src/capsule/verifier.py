@@ -8,9 +8,9 @@ from .canonical import hex_to_bytes, sha256_hex
 from .chain import first_and_entry_hash, verify_chain
 from .envelope import verify_envelope_signatures
 from .manifest import (
-    CONTENT_INDEX_EXCLUDED,
     build_content_index,
     compute_capsule_id,
+    content_index_exclusions,
     manifest_hash,
 )
 
@@ -95,11 +95,16 @@ def verify_capsule(
     except Exception as e:
         errors.append(f"manifest hash recompute failed: {e}")
 
-    # Content index
+    # Content index. content.enc is excluded only when the capsule declares a
+    # cipher (bound instead by envelope.encrypted_blob_hash). Key off the signed
+    # envelope.cipher, not file presence: a stray content.enc injected into a
+    # plain (cipher="none") capsule is indexed here and therefore fails
+    # verification, and forcing its exclusion would break the envelope signature.
+    excluded = content_index_exclusions(envelope.get("cipher") not in (None, "none"))
     files = reader.files()
-    index_files = {p: b for p, b in files.items() if p not in CONTENT_INDEX_EXCLUDED}
+    index_files = {p: b for p, b in files.items() if p not in excluded}
     try:
-        recomputed = build_content_index(index_files)
+        recomputed = build_content_index(index_files, excluded)
     except Exception as e:
         result["content_index"]["errors"].append(f"recompute failed: {e}")
         recomputed = {"files": [], "index_hash": ""}

@@ -15,13 +15,26 @@ from .canonical import (
 
 _ID_DOMAIN = b"capsule-id-v0.6\x00"
 
-CONTENT_INDEX_EXCLUDED: frozenset[str] = frozenset(
+# Excluded from the content index by structural necessity, for every capsule:
+# manifest.json holds the index (circular) and provenance/envelope.json commits
+# to the index hash (circular).
+STRUCTURAL_EXCLUDED: frozenset[str] = frozenset(
     {
         "manifest.json",
         "provenance/envelope.json",
-        "content.enc",
     }
 )
+
+# content.enc is excluded ONLY for encrypted capsules, where it is bound by
+# envelope.encrypted_blob_hash. In a plain capsule a stray content.enc must be
+# indexed (and will therefore fail verification), so a signed plain capsule
+# cannot smuggle an unaccounted-for blob past the verifier.
+CONTENT_INDEX_EXCLUDED: frozenset[str] = STRUCTURAL_EXCLUDED | {"content.enc"}
+
+
+def content_index_exclusions(encrypted: bool) -> frozenset[str]:
+    """Choose the content-index exclusion set for the capsule's profile."""
+    return CONTENT_INDEX_EXCLUDED if encrypted else STRUCTURAL_EXCLUDED
 
 
 def compute_capsule_id(originator_pub_raw: bytes, first_event_hash_hex: str) -> str:
@@ -34,11 +47,14 @@ def compute_capsule_id(originator_pub_raw: bytes, first_event_hash_hex: str) -> 
     return bytes_to_hex(out)
 
 
-def build_content_index(files: Mapping[str, bytes]) -> dict:
+def build_content_index(
+    files: Mapping[str, bytes],
+    excluded: frozenset[str] = STRUCTURAL_EXCLUDED,
+) -> dict:
     entries = [
         {"path": path, "sha256": sha256_hex(data)}
         for path, data in files.items()
-        if path not in CONTENT_INDEX_EXCLUDED
+        if path not in excluded
     ]
     entries.sort(key=lambda e: e["path"])
     return {"files": entries, "index_hash": sha256_hex(jcs(entries))}

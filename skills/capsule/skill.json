@@ -104,7 +104,7 @@
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "09a53b55b4521244d0591412602695c06730d16a5c996b9796bcb3de033d7af4"
+        "sha256": "54ba6367253d5312dedca1d049879e3984daf8d5ab480394ba45b28603f97282"
       },
       {
         "path": "spec/chain.md",

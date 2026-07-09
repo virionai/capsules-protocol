@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "name": "tamper-detection",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected verifier outcomes for the tamper-detection fixtures. Independent implementations SHOULD reproduce ok and the failing areas below.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "clean",
+      "capsule_file": "output/clean.capsule",
+      "expected": { "ok": true }
+    },
+    {
+      "name": "clean-encrypted",
+      "capsule_file": "output/clean-encrypted.capsule",
+      "expected": { "ok": true },
+      "note": "Encrypted outer verifies at L2 without recipient key material."
+    },
+    {
+      "name": "tampered-payload",
+      "capsule_file": "output/tampered-payload.capsule",
+      "expected": { "ok": false, "failing": ["content_index"] }
+    },
+    {
+      "name": "tampered-chain",
+      "capsule_file": "output/tampered-chain.capsule",
+      "expected": { "ok": false, "failing": ["chain", "content_index"] }
+    },
+    {
+      "name": "tampered-envelope",
+      "capsule_file": "output/tampered-envelope.capsule",
+      "expected": { "ok": false, "failing": ["envelope"] }
+    },
+    {
+      "name": "tampered-blob",
+      "capsule_file": "output/tampered-blob.capsule",
+      "expected": { "ok": false, "failing": ["encrypted_blob"], "error_includes": "encrypted_blob_hash" }
+    }
+  ]
+}

@@ -14,9 +14,16 @@ Priority legend:
 
 ## Capsule v0.6 Spec
 
-- [ ] **P0** - Create a checked-in normative vector registry under
+- [~] **P0** - Create a checked-in normative vector registry under
       `spec/vectors/` with capsule bytes, expected hashes, verifier
-      results, and negative cases.
+      results, and negative cases. (Done: positive embedded vector
+      `plain-basic.json` (capsule bytes + expected hashes), a
+      language-neutral outcome registry `tamper-detection/vectors.json`
+      covering all six tamper fixtures, cross-checked by the JS
+      `spec-vectors` lane, and `jcs-numbers.json` (number
+      canonicalization, all five lanes). Remaining: wire the Python/Rust
+      lanes to the same outcome registry; add the malformed-layout and
+      byte-level vectors below, plus negative-case capsule vectors.)
 - [ ] **P0** - Add explicit malformed-layout vectors for missing required
       files, duplicate entries, unsafe paths, compressed entries, over-limit
       archives, and invalid JSON.
@@ -29,22 +36,39 @@ Priority legend:
       path validation.
 - [ ] **P1** - Define untrusted-content projection rules for host/model
       contexts and add conformance cases.
-- [ ] **P2** - Specify signer-role policy and quorum language.
+- [ ] **P1** - Freeze the federation wire shapes (issuer metadata,
+      identity attestation `ed25519-jcs` + JWT) and add attestation vectors
+      plus negative cases to `spec/vectors/`. Reference: `spec/federation.md`,
+      `spec/profiles/clerk.md`, `sdk-js/src/federation/`.
+- [ ] **P2** - Specify signer-role policy and quorum language. A minimal
+      reference exists (`federation.evaluateSignerPolicy`); make it normative.
 - [ ] **P2** - Specify key lifecycle records: rotation, retirement,
       revocation, and historical validation.
 - [ ] **P2** - Specify temporal anchoring profiles such as RFC 3161 or Rekor.
+      (Draft anchor shapes in `spec/federation.md`; proof formats and
+      verifier treatment remain.)
 - [ ] **P2** - Specify federation/profile discovery vocabulary.
+      (Informative draft landed as `spec/federation.md`; needs review and
+      resolution of its open questions before becoming normative in v0.7.)
 
 ## SDKs And Verifiers
 
 - [ ] **P0** - Keep the JavaScript SDK as the reference implementation and
       require all behavior changes to update `spec/` in the same change.
-- [ ] **P0** - Run Python, Rust, Swift, and Kotlin lanes against the
-      checked-in vector registry once `spec/vectors/` lands.
-- [ ] **P1** - Compile-test Swift with SwiftPM/Xcode and add any missing
-      package ceremony.
-- [ ] **P1** - Compile-test Kotlin with Gradle and add any missing module
-      ceremony.
+- [x] **P0** - Run Python, Rust, Swift, and Kotlin lanes against the
+      checked-in vector registry once `spec/vectors/` lands. (All five
+      lanes are CI-gated: Python/Rust/Swift/Kotlin parity tests read the
+      tamper-detection fixtures and `jcs-numbers.json`. Extend as the
+      registry grows.)
+- [x] **P1** - Compile-test Swift with SwiftPM/Xcode and add any missing
+      package ceremony. (`conformance-swift` CI lane runs `swift test`
+      on macOS on every push.)
+- [x] **P1** - Compile-test Kotlin with Gradle and add any missing module
+      ceremony. (`conformance-kotlin` CI lane runs `:core:test` on every
+      push. Android modules (`:skills`, `:llm`, `:ui`) still need a lane.)
+- [ ] **P1** - Implement the Kotlin encryption path (X25519-HKDF +
+      ChaCha20-Poly1305) so the Kotlin SDK reaches encrypted L2/L3 parity;
+      until then it is documented as a plain-capsule (L2) verifier.
 - [ ] **P1** - Add cross-implementation parity tests for `manifest_hash`,
       `content_index_hash`, `first_event_hash`, `entry_hash`, and encrypted
       L2/L3 anchors.
@@ -56,9 +80,13 @@ Priority legend:
 
 ## CLI And Conformance
 
-- [ ] **P0** - Make `tools/run-conformance.mjs` fail closed for required
+- [x] **P0** - Make `tools/run-conformance.mjs` fail closed for required
       repo-local targets. Missing required lanes must not produce an overall
-      PASS.
+      PASS. (Implemented: required targets that fail to run return `fail`;
+      the harness fails closed on missing dir / failing lane, and the CI
+      workflow's `HARNESS_EXIT` capture no longer swallows a red harness.
+      The harness is also now explicitly framed as the JavaScript lane, with
+      cross-implementation gating in the CI workflow's summary job.)
 - [ ] **P0** - Keep CLI smoke tests self-contained. They should generate
       local fixtures or use `spec/vectors/`, not require a sibling checkout.
 - [ ] **P1** - Add CLI coverage for encrypted L2 verification and explicit
