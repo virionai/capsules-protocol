@@ -130,6 +130,11 @@ trustworthy in proportion to the verifier's ability to obtain the
 issuer's public key out-of-band. The format does not provide that
 binding; the format only provides the integrity over the bound result.
 
+[federation.md](federation.md) is the informative draft that picks the
+mechanisms for v0.7: a `.well-known/capsule-signers` signer document,
+Sigstore identities, key lifecycle status, and bundled temporal
+anchors. It changes nothing about v0.6 conformance.
+
 ## Threat model summary
 
 `Anticipated Roadmap fix` uses three labels:

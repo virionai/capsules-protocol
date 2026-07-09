@@ -80,7 +80,7 @@ spec/                  v0.6 protocol specification (normative)
 sdk-js/                JavaScript reference SDK (npm)
 sdk-py/                Python SDK
 sdk-swift/             Swift SDK (iOS/macOS via SwiftPM)
-sdk-kotlin/            Kotlin SDK (Android/JVM via Gradle)
+sdk-kotlin/            Kotlin SDK (Android/JVM via Gradle; plain capsules only — no encryption/L3 path yet)
 verifier-rust/         independent Rust verifier (cargo)
 cli/                   command-line verifier and inspector
 examples/              generic examples only; illustrative, no warranty
@@ -176,7 +176,9 @@ Prototype. Not v1.0. The envelope schema is `0.6` on purpose; locked once a seco
 
 ## Conformance
 
-The conformance harness runs on every push to main plus nightly. Three SDK lanes are gated in CI — JavaScript, Python, and Rust — and verify the same signed tamper-detection test vectors (`spec/vectors/tamper-detection/`) across implementations. The Swift and Kotlin SDKs are not yet wired into CI. See `.github/workflows/conformance.yml` for the gated lanes.
+The conformance harness (`tools/run-conformance.mjs`) is the JavaScript lane: it runs the JS SDK, CLI, and example checks and emits the conformance report. Cross-implementation coverage lives in the CI workflow, which gates five SDK lanes — JavaScript, Python, Rust, Kotlin, and Swift — against the same signed tamper-detection test vectors (`spec/vectors/tamper-detection/`) and the shared JCS number vectors (`spec/vectors/jcs-numbers.json`). See `.github/workflows/conformance.yml` for the gated lanes.
+
+Lane scope differs by SDK: JavaScript, Python, Rust, and Swift implement the full v0.6 profile including encrypted capsules (L2 + L3); the Kotlin lane covers the plain-capsule path only — the Kotlin core module has no X25519/ChaCha20-Poly1305 implementation yet and rejects encrypted capsules.
 
 ## Try the demo locally
 

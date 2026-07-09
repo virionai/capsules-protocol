@@ -37,17 +37,16 @@ public enum JCS {
         switch v {
         case .null: return "null"
         case .bool(let b): return b ? "true" : "false"
-        case .integer(let i): return String(i)
+        case .integer(let i):
+            precondition(
+                i.magnitude <= (UInt64(1) << 53) - 1,
+                "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1); "
+                    + "not representable identically across implementations"
+            )
+            return String(i)
         case .decimal(let d):
             precondition(d.isFinite, "JCS: non-finite number")
-            // Mirror ECMAScript Number.toString shortest-roundtrip. For
-            // integral doubles within 2^53 emit without the decimal point.
-            if d == 0 { return "0" }
-            if d.truncatingRemainder(dividingBy: 1) == 0,
-               abs(d) < Double(1 << 53) {
-                return String(Int64(d))
-            }
-            return "\(d)"
+            return serializeNumber(d)
         case .string(let s): return encodeString(s)
         case .array(let arr):
             return "[" + arr.map(canonical).joined(separator: ",") + "]"
@@ -64,6 +63,69 @@ public enum JCS {
 
     public static func bytes(_ v: JCSValue) -> Data {
         return Data(canonical(v).utf8)
+    }
+
+    /// RFC 8785 §3.2.2.3: serialize per ECMAScript Number::toString
+    /// (ECMA-262 §7.1.12.1).
+    ///
+    /// Swift's `"\(d)"` already yields the shortest digit string that
+    /// round-trips (the same digits ECMAScript selects), but lays it
+    /// out with Swift's own rules for where scientific notation begins
+    /// (e.g. `1.5e-05` where ECMAScript emits `0.000015`). This
+    /// re-lays those digits out with ECMAScript's thresholds: plain
+    /// decimal for 10^-6 ≤ |x| < 10^21, exponent notation outside,
+    /// lowercase `e`, explicit `+`, no zero-padded exponent.
+    internal static func serializeNumber(_ v: Double) -> String {
+        if v == 0 { return "0" } // covers -0.0: JCS serializes negative zero as "0"
+
+        var s = "\(v)"
+        var negative = false
+        if s.hasPrefix("-") {
+            negative = true
+            s.removeFirst()
+        }
+
+        var mantissa = s
+        var exponent = 0
+        if let eIndex = s.firstIndex(of: "e") {
+            mantissa = String(s[..<eIndex])
+            exponent = Int(s[s.index(after: eIndex)...]) ?? 0
+        }
+        let parts = mantissa.split(
+            separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let intPart = String(parts[0])
+        let fracPart = parts.count > 1 ? String(parts[1]) : ""
+
+        // digits = shortest significant digits; n such that
+        // value == 0.digits × 10^n
+        let strippedInt = intPart.drop(while: { $0 == "0" })
+        var n: Int
+        if !strippedInt.isEmpty {
+            n = strippedInt.count
+        } else {
+            n = -fracPart.prefix(while: { $0 == "0" }).count
+        }
+        n += exponent
+        var digits = String((intPart + fracPart).drop(while: { $0 == "0" }))
+        while digits.hasSuffix("0") { digits.removeLast() }
+        let k = digits.count
+
+        let out: String
+        if k <= n && n <= 21 {
+            out = digits + String(repeating: "0", count: n - k)
+        } else if 0 < n && n <= 21 {
+            let point = digits.index(digits.startIndex, offsetBy: n)
+            out = String(digits[..<point]) + "." + String(digits[point...])
+        } else if -6 < n && n <= 0 {
+            out = "0." + String(repeating: "0", count: -n) + digits
+        } else {
+            let e = n - 1
+            let head = k > 1
+                ? String(digits.first!) + "." + String(digits.dropFirst())
+                : digits
+            out = head + "e" + (e >= 0 ? "+" : "-") + String(abs(e))
+        }
+        return negative ? "-" + out : out
     }
 
     private static func encodeString(_ s: String) -> String {

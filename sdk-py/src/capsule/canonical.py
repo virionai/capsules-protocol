@@ -18,6 +18,11 @@ def _jcs_value(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
+        if abs(v) > _MAX_SAFE_INTEGER:
+            raise ValueError(
+                "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1); "
+                "not representable identically across implementations"
+            )
         return str(v)
     if isinstance(v, float):
         if math.isnan(v) or math.isinf(v):
@@ -34,20 +39,52 @@ def _jcs_value(v: Any) -> str:
     raise TypeError(f"JCS: unsupported type {type(v).__name__}")
 
 
+_MAX_SAFE_INTEGER = 2**53 - 1
+
+
 def _jcs_number(v: float) -> str:
-    # Integer-valued floats get integer form; otherwise rely on Python's
-    # shortest round-trip repr() and normalize the exponent format to
-    # match ECMAScript Number.toString.
-    if v.is_integer() and abs(v) < 1e16:
-        return str(int(v))
+    # RFC 8785 §3.2.2.3: serialize per ECMAScript Number::toString
+    # (ECMA-262 §7.1.12.1). Python's repr() already yields the shortest
+    # digit string that round-trips (same digits ECMAScript uses); the
+    # work here is re-laying those digits out with ECMAScript's rules
+    # for where plain decimal ends and scientific notation begins.
+    if v == 0.0:
+        return "0"  # covers -0.0: JCS serializes negative zero as "0"
+
     s = repr(v)
-    # Python may emit "1e+21"; ECMAScript emits "1e+21" — already
-    # aligned. But Python emits "1.5e-05" while ECMAScript emits
-    # "0.000015"; for the format's narrow numeric range (severities,
-    # durations, sequence numbers, hash counts) we never hit these
-    # edges. If a future payload needs scientific notation parity, this
-    # is the place to extend.
-    return s
+    negative = s.startswith("-")
+    if negative:
+        s = s[1:]
+
+    if "e" in s:
+        mantissa, _, exp_str = s.partition("e")
+        exponent = int(exp_str)
+    else:
+        mantissa, exponent = s, 0
+    int_part, _, frac_part = mantissa.partition(".")
+
+    # digits = shortest significant digits; n such that value = 0.digits * 10^n
+    stripped_int = int_part.lstrip("0")
+    if stripped_int:
+        n = len(stripped_int)
+    else:
+        n = -(len(frac_part) - len(frac_part.lstrip("0")))
+    n += exponent
+    digits = (int_part + frac_part).strip("0")
+    k = len(digits)
+
+    if k <= n <= 21:
+        out = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        out = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        out = "0." + "0" * (-n) + digits
+    else:
+        e = n - 1
+        head = digits[0] + ("." + digits[1:] if k > 1 else "")
+        out = f"{head}e{'+' if e >= 0 else '-'}{abs(e)}"
+
+    return ("-" + out) if negative else out
 
 
 def _jcs_string(s: str) -> str:

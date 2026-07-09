@@ -1,0 +1,1030 @@
+{
+  "description": "JCS (RFC 8785) number serialization vectors. ieee_hex is the big-endian IEEE-754 binary64 bit pattern of the input; expected is its canonical serialization per ECMAScript Number::toString (ECMA-262 7.1.12.1). Implementations must parse the bit pattern (not the expected string) and serialize it.",
+  "oracle": "Node.js 22 JSON.stringify over the decoded double. Targeted edges (zeros, subnormals, extremes, 2^53 boundary, exponent-notation thresholds at 1e21 and 1e-7) plus mulberry32(8785)-seeded random bit patterns and magnitudes.",
+  "vectors": [
+    {
+      "ieee_hex": "0000000000000000",
+      "expected": "0"
+    },
+    {
+      "ieee_hex": "8000000000000000",
+      "expected": "0"
+    },
+    {
+      "ieee_hex": "3ff0000000000000",
+      "expected": "1"
+    },
+    {
+      "ieee_hex": "bff0000000000000",
+      "expected": "-1"
+    },
+    {
+      "ieee_hex": "4004000000000000",
+      "expected": "2.5"
+    },
+    {
+      "ieee_hex": "c004000000000000",
+      "expected": "-2.5"
+    },
+    {
+      "ieee_hex": "3fe0000000000000",
+      "expected": "0.5"
+    },
+    {
+      "ieee_hex": "3fd0000000000000",
+      "expected": "0.25"
+    },
+    {
+      "ieee_hex": "4011666666666666",
+      "expected": "4.35"
+    },
+    {
+      "ieee_hex": "404c000000000000",
+      "expected": "56"
+    },
+    {
+      "ieee_hex": "c04c000000000000",
+      "expected": "-56"
+    },
+    {
+      "ieee_hex": "3fb999999999999a",
+      "expected": "0.1"
+    },
+    {
+      "ieee_hex": "3fc999999999999a",
+      "expected": "0.2"
+    },
+    {
+      "ieee_hex": "3fd3333333333333",
+      "expected": "0.3"
+    },
+    {
+      "ieee_hex": "3fd5555555555555",
+      "expected": "0.3333333333333333"
+    },
+    {
+      "ieee_hex": "405edd2f1a9fbe77",
+      "expected": "123.456"
+    },
+    {
+      "ieee_hex": "c05edd2f1a9fbe77",
+      "expected": "-123.456"
+    },
+    {
+      "ieee_hex": "3eef75104d551d69",
+      "expected": "0.000015"
+    },
+    {
+      "ieee_hex": "beef75104d551d69",
+      "expected": "-0.000015"
+    },
+    {
+      "ieee_hex": "3eb0c6f7a0b5ed8d",
+      "expected": "0.000001"
+    },
+    {
+      "ieee_hex": "beb0c6f7a0b5ed8d",
+      "expected": "-0.000001"
+    },
+    {
+      "ieee_hex": "3e7ad7f29abcaf48",
+      "expected": "1e-7"
+    },
+    {
+      "ieee_hex": "3e112e0be826d695",
+      "expected": "1e-9"
+    },
+    {
+      "ieee_hex": "0000000000000001",
+      "expected": "5e-324"
+    },
+    {
+      "ieee_hex": "8000000000000001",
+      "expected": "-5e-324"
+    },
+    {
+      "ieee_hex": "000fffffffffffff",
+      "expected": "2.225073858507201e-308"
+    },
+    {
+      "ieee_hex": "0010000000000000",
+      "expected": "2.2250738585072014e-308"
+    },
+    {
+      "ieee_hex": "7fefffffffffffff",
+      "expected": "1.7976931348623157e+308"
+    },
+    {
+      "ieee_hex": "ffefffffffffffff",
+      "expected": "-1.7976931348623157e+308"
+    },
+    {
+      "ieee_hex": "433fffffffffffff",
+      "expected": "9007199254740991"
+    },
+    {
+      "ieee_hex": "4340000000000000",
+      "expected": "9007199254740992"
+    },
+    {
+      "ieee_hex": "4340000000000001",
+      "expected": "9007199254740994"
+    },
+    {
+      "ieee_hex": "c33fffffffffffff",
+      "expected": "-9007199254740991"
+    },
+    {
+      "ieee_hex": "430c6bf526340000",
+      "expected": "1000000000000000"
+    },
+    {
+      "ieee_hex": "4341c37937e08000",
+      "expected": "10000000000000000"
+    },
+    {
+      "ieee_hex": "4415af1d78b58c40",
+      "expected": "100000000000000000000"
+    },
+    {
+      "ieee_hex": "444b1ae4d6e2ef50",
+      "expected": "1e+21"
+    },
+    {
+      "ieee_hex": "c44b1ae4d6e2ef50",
+      "expected": "-1e+21"
+    },
+    {
+      "ieee_hex": "4480f0cf064dd592",
+      "expected": "1e+22"
+    },
+    {
+      "ieee_hex": "552192cc621cf3da",
+      "expected": "1.23e+102"
+    },
+    {
+      "ieee_hex": "2b9ae7370fa078fc",
+      "expected": "1.23e-98"
+    },
+    {
+      "ieee_hex": "41b3de4355555555",
+      "expected": "333333333.3333333"
+    },
+    {
+      "ieee_hex": "444b1ae4d6e2ef4f",
+      "expected": "999999999999999900000"
+    },
+    {
+      "ieee_hex": "3ea0c6f7a0b5ed8d",
+      "expected": "5e-7"
+    },
+    {
+      "ieee_hex": "400921fb54442d18",
+      "expected": "3.141592653589793"
+    },
+    {
+      "ieee_hex": "4005bf0a8b145769",
+      "expected": "2.718281828459045"
+    },
+    {
+      "ieee_hex": "3ff0000000000001",
+      "expected": "1.0000000000000002"
+    },
+    {
+      "ieee_hex": "3fd3333333333334",
+      "expected": "0.30000000000000004"
+    },
+    {
+      "ieee_hex": "40503fffffffffff",
+      "expected": "64.99999999999999"
+    },
+    {
+      "ieee_hex": "8e3a24fa0a6ee7b2",
+      "expected": "-3.9208733847689987e-240"
+    },
+    {
+      "ieee_hex": "ba64d0e3c572172f",
+      "expected": "-2.1018763887195544e-27"
+    },
+    {
+      "ieee_hex": "5495db047cd4531a",
+      "expected": "2.98772122732159e+99"
+    },
+    {
+      "ieee_hex": "c21a23886d0aa192",
+      "expected": "-28066323266.657784"
+    },
+    {
+      "ieee_hex": "aebcea6831a65406",
+      "expected": "-1.4884498582919881e-83"
+    },
+    {
+      "ieee_hex": "44d3b237a4cab17d",
+      "expected": "3.720499726883019e+23"
+    },
+    {
+      "ieee_hex": "7cc73291bd99d0c7",
+      "expected": "1.157464452008465e+293"
+    },
+    {
+      "ieee_hex": "0fa1cc652964f93e",
+      "expected": "2.239106681608232e-233"
+    },
+    {
+      "ieee_hex": "aef880dd177d20a2",
+      "expected": "-2.0181204272519724e-82"
+    },
+    {
+      "ieee_hex": "d666fd76603599a9",
+      "expected": "-1.6872874851955393e+108"
+    },
+    {
+      "ieee_hex": "ed49e867c3ac0acc",
+      "expected": "-2.8579719894759337e+218"
+    },
+    {
+      "ieee_hex": "7f9ca6354d179973",
+      "expected": "5.0295470216459333e+306"
+    },
+    {
+      "ieee_hex": "53b495c60c548059",
+      "expected": "1.7175549540114665e+95"
+    },
+    {
+      "ieee_hex": "1a2cf5d2734d82eb",
+      "expected": "1.3631223363772368e-182"
+    },
+    {
+      "ieee_hex": "0a71aa78f8da92d9",
+      "expected": "2.297945386350075e-258"
+    },
+    {
+      "ieee_hex": "6bfbe441cd5e751f",
+      "expected": "1.4671375938292623e+212"
+    },
+    {
+      "ieee_hex": "e0f1feee63aeee77",
+      "expected": "-9.883015806504712e+158"
+    },
+    {
+      "ieee_hex": "67ea6fdd6f802ed3",
+      "expected": "3.769284923250688e+192"
+    },
+    {
+      "ieee_hex": "e4ace44f1b3768df",
+      "expected": "-9.146660383124988e+176"
+    },
+    {
+      "ieee_hex": "3e218ebe34e28f35",
+      "expected": "2.0439724696466437e-9"
+    },
+    {
+      "ieee_hex": "e6c825322c6a1eab",
+      "expected": "-1.31322721257929e+187"
+    },
+    {
+      "ieee_hex": "40e884d9b9a2820b",
+      "expected": "50214.803910497656"
+    },
+    {
+      "ieee_hex": "d50430a29f5b7d91",
+      "expected": "-3.5328441199369744e+101"
+    },
+    {
+      "ieee_hex": "4baf05c1c1783c11",
+      "expected": "3.8033459287756657e+56"
+    },
+    {
+      "ieee_hex": "e2a327ed0c6757ec",
+      "expected": "-1.411989772554851e+167"
+    },
+    {
+      "ieee_hex": "9674f1ffce50f144",
+      "expected": "-1.7102109366881945e-200"
+    },
+    {
+      "ieee_hex": "de6d106cb8ffb41a",
+      "expected": "-7.258479691960771e+146"
+    },
+    {
+      "ieee_hex": "9d02926679b9cf03",
+      "expected": "-6.151318581552433e-169"
+    },
+    {
+      "ieee_hex": "b816cab5f5c734b0",
+      "expected": "-1.674479873624702e-38"
+    },
+    {
+      "ieee_hex": "f6a27e31f7fa0f10",
+      "expected": "-2.911604740942937e+263"
+    },
+    {
+      "ieee_hex": "0b37a7d39089ff61",
+      "expected": "1.2603673096771408e-254"
+    },
+    {
+      "ieee_hex": "aed9fb7565481b10",
+      "expected": "-5.349807199601534e-83"
+    },
+    {
+      "ieee_hex": "7283ea2e2ab10632",
+      "expected": "4.249342510168363e+243"
+    },
+    {
+      "ieee_hex": "5d69a7db7d81c04d",
+      "expected": "9.776687272387026e+141"
+    },
+    {
+      "ieee_hex": "3f920ee47d111f4b",
+      "expected": "0.017634935506321708"
+    },
+    {
+      "ieee_hex": "214abdbda9b87f44",
+      "expected": "2.6141628402323866e-148"
+    },
+    {
+      "ieee_hex": "9a32adb194cd6a8f",
+      "expected": "-1.7583463410253937e-182"
+    },
+    {
+      "ieee_hex": "6b139f02e9c3f413",
+      "expected": "6.299429533738152e+207"
+    },
+    {
+      "ieee_hex": "e8d37b5301c0c2ea",
+      "expected": "-9.101748284365297e+196"
+    },
+    {
+      "ieee_hex": "cd63c9893dcf19eb",
+      "expected": "-6.512002138129232e+64"
+    },
+    {
+      "ieee_hex": "4959eec7fc0bf499",
+      "expected": "2.313277620934292e+45"
+    },
+    {
+      "ieee_hex": "60bee444bb840b00",
+      "expected": "1.0603254492224464e+158"
+    },
+    {
+      "ieee_hex": "eb1b6ec5309ff48e",
+      "expected": "-8.807355414013222e+207"
+    },
+    {
+      "ieee_hex": "cc266eb06258255d",
+      "expected": "-7.04051622881795e+58"
+    },
+    {
+      "ieee_hex": "4a6c6ebff72d36cb",
+      "expected": "3.324345264360719e+50"
+    },
+    {
+      "ieee_hex": "bd34aa3967340b05",
+      "expected": "-7.341660933367745e-14"
+    },
+    {
+      "ieee_hex": "a381ff72935b1b3b",
+      "expected": "-1.2090727299501735e-137"
+    },
+    {
+      "ieee_hex": "7fc81a3eed0ecd07",
+      "expected": "3.3850734019621393e+307"
+    },
+    {
+      "ieee_hex": "199ba08be45aa7ec",
+      "expected": "2.5397941759715997e-185"
+    },
+    {
+      "ieee_hex": "a80e122f07b5afb6",
+      "expected": "-9.539815679922247e-116"
+    },
+    {
+      "ieee_hex": "5f8f773613d8d54b",
+      "expected": "2.0599885014650391e+152"
+    },
+    {
+      "ieee_hex": "1e63836b7189ab43",
+      "expected": "2.71084298051512e-162"
+    },
+    {
+      "ieee_hex": "a6c73f58ae4cfe28",
+      "expected": "-7.033427730821482e-122"
+    },
+    {
+      "ieee_hex": "73f2c1d929cf3c8f",
+      "expected": "3.357413865455271e+250"
+    },
+    {
+      "ieee_hex": "e2e5eb843699eeae",
+      "expected": "-2.585162629312085e+168"
+    },
+    {
+      "ieee_hex": "59b2aae23c9b4729",
+      "expected": "1.2340271947989586e+124"
+    },
+    {
+      "ieee_hex": "5cc015e6394a912a",
+      "expected": "5.986097364981057e+138"
+    },
+    {
+      "ieee_hex": "2f0eac3ffcd30cbc",
+      "expected": "5.052488604059035e-82"
+    },
+    {
+      "ieee_hex": "6f8da17ff3ec3181",
+      "expected": "2.2462130933837172e+229"
+    },
+    {
+      "ieee_hex": "543018fe8efe0e33",
+      "expected": "3.438433807860195e+97"
+    },
+    {
+      "ieee_hex": "3902ba851f79a2ab",
+      "expected": "4.508744950759283e-34"
+    },
+    {
+      "ieee_hex": "cc26488c6d506af6",
+      "expected": "-6.993756163841976e+58"
+    },
+    {
+      "ieee_hex": "5da283ab64064e5a",
+      "expected": "1.1288495159155344e+143"
+    },
+    {
+      "ieee_hex": "202341b6cf7d9ebc",
+      "expected": "7.181149900728585e-154"
+    },
+    {
+      "ieee_hex": "2a914b584859ff7b",
+      "expected": "1.2064932215159323e-103"
+    },
+    {
+      "ieee_hex": "c41ffe4ab369fb39",
+      "expected": "-147543180396668530000"
+    },
+    {
+      "ieee_hex": "86cbf08b3bc3b843",
+      "expected": "-6.304556634051667e-276"
+    },
+    {
+      "ieee_hex": "ae75cfb6b37becf9",
+      "expected": "-7.017208913913604e-85"
+    },
+    {
+      "ieee_hex": "51f457309663ded4",
+      "expected": "6.322403518885684e+86"
+    },
+    {
+      "ieee_hex": "4af60b1cd7794ea6",
+      "expected": "1.3195869434283896e+53"
+    },
+    {
+      "ieee_hex": "4dff1ab536c1d5a7",
+      "expected": "5.2410688333602804e+67"
+    },
+    {
+      "ieee_hex": "dadd7f1cc346c0fb",
+      "expected": "-5.1115088825013717e+129"
+    },
+    {
+      "ieee_hex": "41a8d65995f681c0",
+      "expected": "208350410.98145866"
+    },
+    {
+      "ieee_hex": "e28921692e3e585a",
+      "expected": "-4.6309377395892125e+166"
+    },
+    {
+      "ieee_hex": "abf69219f3f9cb88",
+      "expected": "-6.604297021775943e-97"
+    },
+    {
+      "ieee_hex": "62ee35e791f0c34d",
+      "expected": "3.5629230037468664e+168"
+    },
+    {
+      "ieee_hex": "b93c5bddbd74b29d",
+      "expected": "-5.461716270751483e-33"
+    },
+    {
+      "ieee_hex": "8036dc798ddbf58d",
+      "expected": "-1.2716981183051378e-307"
+    },
+    {
+      "ieee_hex": "79709c3eadd1fb24",
+      "expected": "9.201408794251193e+276"
+    },
+    {
+      "ieee_hex": "4fa26827738c9767",
+      "expected": "4.162827826271571e+75"
+    },
+    {
+      "ieee_hex": "a7723e0c5969d240",
+      "expected": "-1.130324440851443e-118"
+    },
+    {
+      "ieee_hex": "8a34fb95637908c6",
+      "expected": "-1.705870724637343e-259"
+    },
+    {
+      "ieee_hex": "45529f5ea72122d2",
+      "expected": "9.005306824291077e+25"
+    },
+    {
+      "ieee_hex": "df1739ce97be6427",
+      "expected": "-1.1879241210778166e+150"
+    },
+    {
+      "ieee_hex": "f0c11598fa15d257",
+      "expected": "-1.358017869930828e+235"
+    },
+    {
+      "ieee_hex": "1a60c8af9f5bce98",
+      "expected": "1.2639976814756003e-181"
+    },
+    {
+      "ieee_hex": "90be1005418f58b4",
+      "expected": "-4.957121317800885e-228"
+    },
+    {
+      "ieee_hex": "ea31277ea8561adf",
+      "expected": "-3.3614719327407385e+203"
+    },
+    {
+      "ieee_hex": "66ae354a519b0d2a",
+      "expected": "4.107444291903102e+186"
+    },
+    {
+      "ieee_hex": "24f9218990a6a7e9",
+      "expected": "1.416223357044484e-130"
+    },
+    {
+      "ieee_hex": "ef6eea4709d9f1d1",
+      "expected": "-5.858926294818587e+228"
+    },
+    {
+      "ieee_hex": "92d51960d9a8cbba",
+      "expected": "-5.977062259822564e-218"
+    },
+    {
+      "ieee_hex": "40b98e15d99ae1ed",
+      "expected": "6542.085351638944"
+    },
+    {
+      "ieee_hex": "2fbbebfdb9948ad9",
+      "expected": "9.419442151185703e-79"
+    },
+    {
+      "ieee_hex": "3a9939f6dfbcb0f2",
+      "expected": "2.0377742416701045e-26"
+    },
+    {
+      "ieee_hex": "47410273922e74bf",
+      "expected": "1.766375357879237e+35"
+    },
+    {
+      "ieee_hex": "80da2c0a18bce09b",
+      "expected": "-1.4908082608842042e-304"
+    },
+    {
+      "ieee_hex": "f7a2d6833c727cc1",
+      "expected": "-1.943746226979401e+268"
+    },
+    {
+      "ieee_hex": "97d0cde34e2cc93c",
+      "expected": "-5.754954921290334e-194"
+    },
+    {
+      "ieee_hex": "a9134522a7b1e59c",
+      "expected": "-8.012806814731446e-111"
+    },
+    {
+      "ieee_hex": "42e4ad1917651899",
+      "expected": "181869462890692.78"
+    },
+    {
+      "ieee_hex": "66764031c4eb4831",
+      "expected": "3.781831582688497e+185"
+    },
+    {
+      "ieee_hex": "46db3782c1d7a498",
+      "expected": "2.2080923025167385e+33"
+    },
+    {
+      "ieee_hex": "1a59fbe6e904c8af",
+      "expected": "9.784271700346789e-182"
+    },
+    {
+      "ieee_hex": "d3c26851ac85e3b1",
+      "expected": "-3.071732292442785e+95"
+    },
+    {
+      "ieee_hex": "4cf5a3be06fe93eb",
+      "expected": "5.56376415498972e+62"
+    },
+    {
+      "ieee_hex": "80742d4fd7ae1591",
+      "expected": "-1.7958125696607995e-306"
+    },
+    {
+      "ieee_hex": "2e4e99159c194196",
+      "expected": "1.2305069921793498e-85"
+    },
+    {
+      "ieee_hex": "91d8d361aad6201c",
+      "expected": "-1.0731115724885321e-222"
+    },
+    {
+      "ieee_hex": "ac3aa053b186e3ef",
+      "expected": "-1.2465561172959677e-95"
+    },
+    {
+      "ieee_hex": "89b8caca497bb183",
+      "expected": "-7.873320978527483e-262"
+    },
+    {
+      "ieee_hex": "0228746102629a5b",
+      "expected": "2.9212919526070076e-298"
+    },
+    {
+      "ieee_hex": "c2da217f8fccd8b4",
+      "expected": "-114924705493858.81"
+    },
+    {
+      "ieee_hex": "7274cec10fe1ae20",
+      "expected": "2.2199295964473064e+243"
+    },
+    {
+      "ieee_hex": "435755d5d0c11597",
+      "expected": "26273205132219996"
+    },
+    {
+      "ieee_hex": "990e267d8da3788b",
+      "expected": "-5.413587043861115e-188"
+    },
+    {
+      "ieee_hex": "8fc76e54c719d90f",
+      "expected": "-1.1790815243667346e-232"
+    },
+    {
+      "ieee_hex": "6b714666761ee158",
+      "expected": "3.5495645557856615e+209"
+    },
+    {
+      "ieee_hex": "878f52a78d617846",
+      "expected": "-2.8950460014593393e-272"
+    },
+    {
+      "ieee_hex": "f09dc46036c3d9c2",
+      "expected": "-2.957692838743747e+234"
+    },
+    {
+      "ieee_hex": "1b77117008fe858e",
+      "expected": "2.2770610358581274e-176"
+    },
+    {
+      "ieee_hex": "d24b550447a16a38",
+      "expected": "-2.7185773432864904e+88"
+    },
+    {
+      "ieee_hex": "bb5b7920f1908195",
+      "expected": "-9.0901057728662e-23"
+    },
+    {
+      "ieee_hex": "9141b0ea0b016ebd",
+      "expected": "-1.4935762085354732e-225"
+    },
+    {
+      "ieee_hex": "0bbd2e7c5e09eba7",
+      "expected": "3.980269897633721e-252"
+    },
+    {
+      "ieee_hex": "0d78e828588c7e66",
+      "expected": "9.119323005044308e-244"
+    },
+    {
+      "ieee_hex": "2006f3df6885ec92",
+      "expected": "2.1398564748573983e-154"
+    },
+    {
+      "ieee_hex": "ec2a9b1f1abe8071",
+      "expected": "-1.1196070231750448e+213"
+    },
+    {
+      "ieee_hex": "60afbc8af890bd41",
+      "expected": "5.446615506127063e+157"
+    },
+    {
+      "ieee_hex": "487974cba2e90a02",
+      "expected": "1.3859691137616655e+41"
+    },
+    {
+      "ieee_hex": "e2caea4d853eaf8b",
+      "expected": "-7.935712865358806e+167"
+    },
+    {
+      "ieee_hex": "c6220ed0b7e3e184",
+      "expected": "-7.15346020180732e+29"
+    },
+    {
+      "ieee_hex": "c25cab72716bea08",
+      "expected": "-492541953455.65674"
+    },
+    {
+      "ieee_hex": "425e74c47dc4f510",
+      "expected": "523232212755.8291"
+    },
+    {
+      "ieee_hex": "c186d352a70fe450",
+      "expected": "-47868500.88275969"
+    },
+    {
+      "ieee_hex": "c250b19b994ca9b5",
+      "expected": "-286796965170.6517"
+    },
+    {
+      "ieee_hex": "3e932b8f72b45282",
+      "expected": "2.8565760841593144e-7"
+    },
+    {
+      "ieee_hex": "3b44fe75f3daa0ab",
+      "expected": "3.4731638571247457e-23"
+    },
+    {
+      "ieee_hex": "451383d97559f452",
+      "expected": "5.89805799536407e+24"
+    },
+    {
+      "ieee_hex": "3fe631eedb800000",
+      "expected": "0.6935953414067626"
+    },
+    {
+      "ieee_hex": "bd1d89bc980dcfdb",
+      "expected": "-2.6235044328495858e-14"
+    },
+    {
+      "ieee_hex": "3adb31b105a1bcbb",
+      "expected": "3.5147560015320783e-25"
+    },
+    {
+      "ieee_hex": "429828c090101fab",
+      "expected": "6640827106311.917"
+    },
+    {
+      "ieee_hex": "408e2384f4db0000",
+      "expected": "964.4399201497436"
+    },
+    {
+      "ieee_hex": "46bf2d004105296e",
+      "expected": "6.32320043630898e+32"
+    },
+    {
+      "ieee_hex": "c476999e372487bb",
+      "expected": "-6.670363442972303e+21"
+    },
+    {
+      "ieee_hex": "bc91042ce7f4ff0b",
+      "expected": "-5.903718560002744e-17"
+    },
+    {
+      "ieee_hex": "414b85c0f9a8ec00",
+      "expected": "3607425.9504675865"
+    },
+    {
+      "ieee_hex": "bf9f6ed338000000",
+      "expected": "-0.030696201603859663"
+    },
+    {
+      "ieee_hex": "41cd5ffdcb6ad5b0",
+      "expected": "985660310.8346462"
+    },
+    {
+      "ieee_hex": "45b2cd19dfa737df",
+      "expected": "5.818682154640555e+27"
+    },
+    {
+      "ieee_hex": "44d9d039178aad87",
+      "expected": "4.87600794993341e+23"
+    },
+    {
+      "ieee_hex": "bd4dba418f3b064d",
+      "expected": "-2.1122703840956095e-13"
+    },
+    {
+      "ieee_hex": "c5e7d444b0303c11",
+      "expected": "-5.899817496538161e+28"
+    },
+    {
+      "ieee_hex": "bb8e4e549c9b6d45",
+      "expected": "-8.021925734356046e-22"
+    },
+    {
+      "ieee_hex": "3ea65795b035bd51",
+      "expected": "6.658472958952188e-7"
+    },
+    {
+      "ieee_hex": "c062eaba0b740000",
+      "expected": "-151.33521053940058"
+    },
+    {
+      "ieee_hex": "c4b812a430d75e8f",
+      "expected": "-1.1368066817522049e+23"
+    },
+    {
+      "ieee_hex": "3c2166d7d2c23056",
+      "expected": "4.71674855798483e-19"
+    },
+    {
+      "ieee_hex": "46d012afbe33d8fa",
+      "expected": "1.3039962016046046e+33"
+    },
+    {
+      "ieee_hex": "c2981c0074bb5383",
+      "expected": "-6627136450260.878"
+    },
+    {
+      "ieee_hex": "417e4060f69f6900",
+      "expected": "31720975.413918495"
+    },
+    {
+      "ieee_hex": "3ea5501ed740c415",
+      "expected": "6.351760206744074e-7"
+    },
+    {
+      "ieee_hex": "c4c221a1703c5b4d",
+      "expected": "-1.7124594422057272e+23"
+    },
+    {
+      "ieee_hex": "c332edda08e2c300",
+      "expected": "-5328070288524032"
+    },
+    {
+      "ieee_hex": "4441ec887006ad1f",
+      "expected": "661277290433645200000"
+    },
+    {
+      "ieee_hex": "3ae5698c1c61d6ea",
+      "expected": "5.534948315471412e-25"
+    },
+    {
+      "ieee_hex": "c020079925480000",
+      "expected": "-8.014840283431113"
+    },
+    {
+      "ieee_hex": "433939fa4b22b83d",
+      "expected": "7100621582940221"
+    },
+    {
+      "ieee_hex": "43d781da8f3fda6b",
+      "expected": "6775500974617898000"
+    },
+    {
+      "ieee_hex": "3f13f9516a7ef9db",
+      "expected": "0.000076194376219064"
+    },
+    {
+      "ieee_hex": "c725adf9e9b608c8",
+      "expected": "-5.628344551660121e+34"
+    },
+    {
+      "ieee_hex": "441b1a5318c779e1",
+      "expected": "124989744275808340000"
+    },
+    {
+      "ieee_hex": "c2c98a220105d589",
+      "expected": "-56162133347243.07"
+    },
+    {
+      "ieee_hex": "c3a990cc3ef98a28",
+      "expected": "-921098409220576300"
+    },
+    {
+      "ieee_hex": "c3a2446e028e9985",
+      "expected": "-658148974180221600"
+    },
+    {
+      "ieee_hex": "be3add8089524eac",
+      "expected": "-6.255051717162132e-9"
+    },
+    {
+      "ieee_hex": "3dcab19baf4da9e5",
+      "expected": "4.855570625513792e-11"
+    },
+    {
+      "ieee_hex": "be37b7ff1f2f7030",
+      "expected": "-5.522448709234595e-9"
+    },
+    {
+      "ieee_hex": "c30c4fe692991d67",
+      "expected": "-996143883559852.9"
+    },
+    {
+      "ieee_hex": "beea9c0801a36e2f",
+      "expected": "-0.000012688397010788322"
+    },
+    {
+      "ieee_hex": "438c3df5b984cf13",
+      "expected": "254381597973406300"
+    },
+    {
+      "ieee_hex": "c25cdbd111cce3db",
+      "expected": "-495787984691.56024"
+    },
+    {
+      "ieee_hex": "c68565d3effbd785",
+      "expected": "-5.424977969378232e+31"
+    },
+    {
+      "ieee_hex": "bb14d0087d0b4328",
+      "expected": "-4.303950909525156e-24"
+    },
+    {
+      "ieee_hex": "bd2c7ca4da38fbde",
+      "expected": "-5.060288268141448e-14"
+    },
+    {
+      "ieee_hex": "bbbd2926dd35c1e1",
+      "expected": "-6.17502884939313e-21"
+    },
+    {
+      "ieee_hex": "c48046d03bb138e8",
+      "expected": "-9.608017574064434e+21"
+    },
+    {
+      "ieee_hex": "c648542e8ed02e9f",
+      "expected": "-3.855057852342724e+30"
+    },
+    {
+      "ieee_hex": "3ae6c20124bf5586",
+      "expected": "5.882761161774398e-25"
+    },
+    {
+      "ieee_hex": "bcbfb02f927cd95f",
+      "expected": "-4.397624749690295e-16"
+    },
+    {
+      "ieee_hex": "c51d598a82ac4a70",
+      "expected": "-8.870423613116146e+24"
+    },
+    {
+      "ieee_hex": "c052d9e455840000",
+      "expected": "-75.4045614041388"
+    },
+    {
+      "ieee_hex": "c6acab693f36dfb2",
+      "expected": "-2.9074402851983905e+32"
+    },
+    {
+      "ieee_hex": "40448e07bbb7ffff",
+      "expected": "41.10961100086569"
+    },
+    {
+      "ieee_hex": "c729cb0d63d94acd",
+      "expected": "-6.696290574036539e+34"
+    },
+    {
+      "ieee_hex": "c6c202d95147298c",
+      "expected": "-7.306181713938713e+32"
+    },
+    {
+      "ieee_hex": "3d37060b906da4a0",
+      "expected": "8.1796308234334e-14"
+    },
+    {
+      "ieee_hex": "3fe2db697b000000",
+      "expected": "0.5892836954444647"
+    },
+    {
+      "ieee_hex": "3bb8c69a7112ce9a",
+      "expected": "5.2464784728363156e-21"
+    },
+    {
+      "ieee_hex": "3c2e2b2cb12cf624",
+      "expected": "8.177229156717659e-19"
+    },
+    {
+      "ieee_hex": "41598b2ea6be1d00",
+      "expected": "6696122.605353594"
+    },
+    {
+      "ieee_hex": "3d26f8660e821396",
+      "expected": "4.080346240662038e-14"
+    },
+    {
+      "ieee_hex": "c615fdc1497be8cb",
+      "expected": "-4.355811974965036e+29"
+    },
+    {
+      "ieee_hex": "4474609195b810d6",
+      "expected": "6.014294223859906e+21"
+    },
+    {
+      "ieee_hex": "c5200772d0f2349e",
+      "expected": "-9.688993832096457e+24"
+    },
+    {
+      "ieee_hex": "be71f66af6181fb2",
+      "expected": "-6.691578626632691e-8"
+    }
+  ]
+}
