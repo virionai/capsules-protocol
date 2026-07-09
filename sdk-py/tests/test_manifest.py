@@ -3,9 +3,11 @@ import pytest
 from capsule.canonical import jcs, sha256_hex
 from capsule.manifest import (
     CONTENT_INDEX_EXCLUDED,
+    STRUCTURAL_EXCLUDED,
     build_content_index,
     build_manifest,
     compute_capsule_id,
+    content_index_exclusions,
     manifest_bytes,
     manifest_hash,
 )
@@ -43,8 +45,8 @@ def test_build_content_index_sorts_and_hashes():
         "a.txt": b"a",
         "manifest.json": b"excluded",
         "provenance/envelope.json": b"excluded",
-        "content.enc": b"excluded",
     }
+    # Default (plain profile) excludes only the structural files.
     ci = build_content_index(files)
     paths = [f["path"] for f in ci["files"]]
     assert paths == ["a.txt", "z.txt"]
@@ -53,12 +55,32 @@ def test_build_content_index_sorts_and_hashes():
     assert ci["index_hash"] == sha256_hex(jcs(ci["files"]))
 
 
-def test_content_index_excluded_set():
+def test_build_content_index_indexes_content_enc_in_plain_profile():
+    # In a plain capsule a stray content.enc MUST be indexed (structural
+    # exclusion only), so it cannot be smuggled past the verifier.
+    files = {"a.txt": b"a", "content.enc": b"smuggled"}
+    ci = build_content_index(files)
+    assert [f["path"] for f in ci["files"]] == ["a.txt", "content.enc"]
+
+
+def test_build_content_index_excludes_content_enc_for_encrypted_profile():
+    files = {"a.txt": b"a", "content.enc": b"blob"}
+    ci = build_content_index(files, CONTENT_INDEX_EXCLUDED)
+    assert [f["path"] for f in ci["files"]] == ["a.txt"]
+
+
+def test_content_index_excluded_sets():
+    assert STRUCTURAL_EXCLUDED == {
+        "manifest.json",
+        "provenance/envelope.json",
+    }
     assert CONTENT_INDEX_EXCLUDED == {
         "manifest.json",
         "provenance/envelope.json",
         "content.enc",
     }
+    assert content_index_exclusions(False) == STRUCTURAL_EXCLUDED
+    assert content_index_exclusions(True) == CONTENT_INDEX_EXCLUDED
 
 
 def test_build_manifest_shape():

@@ -53,8 +53,17 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p output
+          # `set -e` (GitHub's default) would abort this step the instant the
+          # `node ... | tee` pipeline fails under pipefail — i.e. exactly when
+          # the harness reports FAIL — before HARNESS_EXIT is written. An unset
+          # HARNESS_EXIT is then coerced to 0 by the fail gate below, so a red
+          # harness would report green. Disable errexit around the pipeline so
+          # we always capture and record the real exit code.
+          set +e
           node tools/run-conformance.mjs | tee output/harness.log
-          echo "HARNESS_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          harness_exit=${PIPESTATUS[0]}
+          set -e
+          echo "HARNESS_EXIT=${harness_exit}" >> "$GITHUB_ENV"
         continue-on-error: true
 
       - name: Upload conformance report

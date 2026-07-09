@@ -22,6 +22,7 @@ from .manifest import (
     build_content_index,
     build_manifest,
     compute_capsule_id,
+    CONTENT_INDEX_EXCLUDED,
     manifest_bytes,
     manifest_hash,
 )
@@ -261,7 +262,11 @@ class CapsuleBuilder:
             "content.enc": content_enc,
         }
 
-        outer_content_index = build_content_index(outer_sidecars)
+        # Encrypted profile: content.enc is bound by envelope.encrypted_blob_hash,
+        # so it is excluded from the content index here.
+        outer_content_index = build_content_index(
+            outer_sidecars, CONTENT_INDEX_EXCLUDED
+        )
 
         outer_manifest = build_manifest(
             originator=self.originator,

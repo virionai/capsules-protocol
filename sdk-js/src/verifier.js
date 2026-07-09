@@ -9,7 +9,7 @@ import { sha256Hex, jcs } from "./canonical.js";
 import { verifyChain, firstAndEntryHash } from "./chain.js";
 import {
   buildContentIndex,
-  CONTENT_INDEX_EXCLUDED,
+  contentIndexExclusions,
   manifestBytes,
   manifestHash,
   computeCapsuleId,
@@ -87,14 +87,20 @@ export async function verifyCapsule(reader, options = {}) {
     );
   }
 
-  // Content index
+  // Content index. content.enc is excluded only when the capsule declares a
+  // cipher (bound instead by envelope.encrypted_blob_hash). We key off the
+  // signed envelope.cipher, not file presence: an attacker who injects a
+  // content.enc into a plain (cipher="none") capsule cannot force its
+  // exclusion without breaking the envelope signature, so the stray blob is
+  // indexed here and fails verification.
+  const excluded = contentIndexExclusions(envelope.cipher !== "none");
   const files = reader.files_();
   const indexFiles = new Map();
   for (const [path, bytes] of files.entries()) {
-    if (CONTENT_INDEX_EXCLUDED.has(path)) continue;
+    if (excluded.has(path)) continue;
     indexFiles.set(path, bytes);
   }
-  const recomputedIndex = buildContentIndex(indexFiles);
+  const recomputedIndex = buildContentIndex(indexFiles, excluded);
   result.contentIndex.ok = true;
   if (recomputedIndex.index_hash !== manifest.content_index.index_hash) {
     result.contentIndex.ok = false;
