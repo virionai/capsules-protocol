@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Two vector shapes are recognized under spec/vectors/:
+// Three vector shapes are recognized under spec/vectors/:
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
 //      `expected` map of observed hashes (capsule_id, first_event_hash,
@@ -11,17 +11,28 @@
 //
 //   2. A collection of outcome vectors: a JSON doc with a `vectors` array,
 //      each entry referencing a checked-in `capsule_file` (path relative to
-//      spec/vectors/) and an `expected` outcome — `{ ok, failing?, error_includes? }`.
-//      This is the language-neutral registry for the tamper fixtures, which
-//      were previously asserted only inside the Rust verifier's own tests.
+//      the collection file) and an `expected` outcome — `{ ok, failing?,
+//      error_includes? }`. This is the language-neutral registry for the
+//      tamper fixtures, which were previously asserted only inside the Rust
+//      verifier's own tests.
 //
-// Non-vector JSON (e.g. the tamper-detection keypair keys.json) is ignored.
+//   3. A JCS number-serialization vector set (jcs-numbers.json): a `vectors`
+//      array of `{ ieee_hex, expected }` entries, where `ieee_hex` is the
+//      big-endian IEEE-754 binary64 bit pattern of the input and `expected`
+//      its canonical RFC 8785 serialization. Implementations must parse the
+//      bit pattern (not the expected string) and serialize it.
+//
+// keys.json (the tamper-detection fixture keypair, consumed by the
+// Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
+// unrecognized JSON under spec/vectors/ is a hard failure: this checker
+// fails closed rather than silently skipping a vector file it cannot read.
 
 import { readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CapsuleReader, verifyCapsule } from "../sdk-js/src/index.js";
+import { jcs } from "../sdk-js/src/canonical.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -39,6 +50,19 @@ function isEmbeddedVector(v) {
 }
 function isCollection(v) {
   return v && typeof v === "object" && Array.isArray(v.vectors);
+}
+// Fixture key material for the tamper-detection lane, not a vector.
+function isFixtureKeyFile(path) {
+  return path.endsWith(`${sep}keys.json`) || path.endsWith("/keys.json");
+}
+// The number-serialization set also carries a `vectors` array, so detect it
+// (by name or by entry shape) before treating a doc as an outcome collection.
+function isNumberVectorSet(path, doc) {
+  if (path.endsWith("jcs-numbers.json")) return true;
+  return (
+    isCollection(doc) &&
+    doc.vectors.some((v) => v && typeof v === "object" && typeof v.ieee_hex === "string")
+  );
 }
 
 async function jsonFiles() {
@@ -160,7 +184,36 @@ async function checkCollection(path, doc) {
   }
 }
 
+function checkNumberVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  doc.vectors.forEach((entry, i) => {
+    checked++;
+    const { ieee_hex, expected } = entry ?? {};
+    if (typeof ieee_hex !== "string" || !/^[0-9a-f]{16}$/.test(ieee_hex)) {
+      fail(`${path}: vectors[${i}]: ieee_hex must be 16 lowercase hex chars`);
+      return;
+    }
+    if (typeof expected !== "string" || expected.length === 0) {
+      fail(`${path}: vectors[${i}]: missing expected string`);
+      return;
+    }
+    const value = Buffer.from(ieee_hex, "hex").readDoubleBE(0);
+    if (!Number.isFinite(value)) {
+      fail(`${path}: vectors[${i}]: bit pattern is not a finite double`);
+      return;
+    }
+    const got = Buffer.from(jcs(value)).toString("utf8");
+    if (got !== expected) {
+      fail(`${path}: vectors[${i}] (bits ${ieee_hex}): JS SDK serializes ${got}, vector says ${expected}`);
+    }
+  });
+}
+
 async function checkFile(path) {
+  if (isFixtureKeyFile(path)) return;
   let doc;
   try {
     doc = JSON.parse(await readFile(path, "utf8"));
@@ -168,9 +221,15 @@ async function checkFile(path) {
     fail(`${path}: cannot parse JSON: ${err.message}`);
     return;
   }
-  if (isCollection(doc)) await checkCollection(path, doc);
+  if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
+  else if (isCollection(doc)) await checkCollection(path, doc);
   else if (isEmbeddedVector(doc)) await checkEmbeddedVector(path, doc);
-  // else: not a vector document (e.g. keys.json) — ignore.
+  else {
+    fail(
+      `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
+        `an outcome-vector collection, or a jcs number set)`
+    );
+  }
 }
 
 async function main() {
