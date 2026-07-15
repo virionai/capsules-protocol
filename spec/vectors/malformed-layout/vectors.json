@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "name": "malformed-layout",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected outcomes for malformed-container fixtures. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the container before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "generator": "sdk-js/tools/generate-malformed-fixtures.mjs (derived from ../tamper-detection/output/clean.capsule)",
+  "keys_file": "../tamper-detection/output/keys.json",
+  "reasons": {
+    "missing_required_file": "a required top-level file (manifest.json or provenance/envelope.json) is absent",
+    "invalid_json": "a required JSON document does not parse",
+    "duplicate_entry": "two ZIP entries share the same name (parser differential)",
+    "unsafe_path": "an entry name is absolute, contains a parent-traversal segment, or a NUL byte (checked on the RAW stored name, before any library-level sanitization)",
+    "unsupported_compression": "an entry uses a compression method other than STORED",
+    "symlink_entry": "an entry's Unix mode bits mark it as a symlink",
+    "entry_count_limit": "RESERVED: archive exceeds the 10,000-entry cap (no checked-in fixture yet; a >10k-entry archive is ~1 MiB of registry weight, deferred until the limits profile is normative)",
+    "total_size_limit": "RESERVED: archive exceeds the 1 GiB total-uncompressed cap (cannot be checked in; covered by per-lane unit tests)"
+  },
+  "notes": [
+    "The 'reason' field is normative: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
+    "missing-chain: the failing chain-file case surfaces differently per lane today (JS: content_index only, chain deferred; Python/Rust: chain error plus content_index). The registry therefore pins only the content_index area; chain-area treatment is flagged for the verifier result-vocabulary normalization (TODO P1)."
+  ],
+  "vectors": [
+    {
+      "name": "missing-manifest",
+      "capsule_file": "output/missing-manifest.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "missing_required_file", "detail": "manifest.json" }
+    },
+    {
+      "name": "missing-envelope",
+      "capsule_file": "output/missing-envelope.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "missing_required_file", "detail": "provenance/envelope.json" }
+    },
+    {
+      "name": "invalid-manifest-json",
+      "capsule_file": "output/invalid-manifest-json.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "invalid_json", "detail": "manifest.json" }
+    },
+    {
+      "name": "missing-chain",
+      "capsule_file": "output/missing-chain.capsule",
+      "expected": { "ok": false, "failing": ["content_index"] }
+    },
+    {
+      "name": "duplicate-entry",
+      "capsule_file": "output/duplicate-entry.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "duplicate_entry", "detail": "program.md" }
+    },
+    {
+      "name": "traversal-path",
+      "capsule_file": "output/traversal-path.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "unsafe_path", "detail": "../escape.txt" }
+    },
+    {
+      "name": "absolute-path",
+      "capsule_file": "output/absolute-path.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "unsafe_path", "detail": "/absolute.txt" }
+    },
+    {
+      "name": "compressed-entry",
+      "capsule_file": "output/compressed-entry.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "unsupported_compression", "detail": "program.md" }
+    },
+    {
+      "name": "symlink-entry",
+      "capsule_file": "output/symlink-entry.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "symlink_entry", "detail": "link" }
+    }
+  ]
+}

@@ -32,7 +32,15 @@ import { existsSync } from "node:fs";
 import { join, resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CapsuleReader, verifyCapsule } from "../sdk-js/src/index.js";
-import { jcs } from "../sdk-js/src/canonical.js";
+import {
+  bytesToHex,
+  concatBytes,
+  hexToBytes,
+  jcs,
+  sha256,
+} from "../sdk-js/src/canonical.js";
+import { envelopeCanonicalPayload, envelopeSigningInput } from "../sdk-js/src/envelope.js";
+import { ed25519Verify } from "../sdk-js/src/crypto.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -126,6 +134,18 @@ const FAILING_AREA = {
   encrypted_blob: (r) => r.errors.some((e) => e.includes("encrypted_blob_hash")),
 };
 
+// Map an open-stage `reason` category to the JS reference lane's error
+// message. The category is the normative contract; the exact string is
+// implementation-defined per lane.
+const OPEN_REASON = {
+  missing_required_file: /missing (manifest\.json|provenance\/envelope\.json)/,
+  invalid_json: /JSON/,
+  duplicate_entry: /duplicate entry/,
+  unsafe_path: /(parent traversal|absolute|NUL)/,
+  unsupported_compression: /only STORED supported/,
+  symlink_entry: /symlink/,
+};
+
 async function checkCollection(path, doc) {
   // capsule_file / keys_file paths are relative to the collection file.
   const base = dirname(path);
@@ -150,12 +170,43 @@ async function checkCollection(path, doc) {
       fail(`${label}: vector requires capsule_file and expected`);
       continue;
     }
-    let reader;
+    let bytes;
     try {
-      const bytes = await readFile(join(base, v.capsule_file));
-      reader = await CapsuleReader.fromBytes(bytes);
+      bytes = await readFile(join(base, v.capsule_file));
     } catch (err) {
       fail(`${label}: capsule_file unreadable: ${err.message}`);
+      continue;
+    }
+
+    // Open-stage vectors: the reader must REFUSE the container, for the
+    // named reason category. Verification is never reached.
+    if (v.expected.stage === "open") {
+      const pattern = OPEN_REASON[v.expected.reason];
+      if (!pattern) {
+        fail(`${label}: unknown open-stage reason '${v.expected.reason}'`);
+        continue;
+      }
+      let openError = null;
+      try {
+        await CapsuleReader.fromBytes(bytes);
+      } catch (err) {
+        openError = err;
+      }
+      if (!openError) {
+        fail(`${label}: expected open to fail (${v.expected.reason}), but capsule opened`);
+      } else if (!pattern.test(openError.message)) {
+        fail(
+          `${label}: open failed, but not for reason '${v.expected.reason}': ${openError.message}`,
+        );
+      }
+      continue;
+    }
+
+    let reader;
+    try {
+      reader = await CapsuleReader.fromBytes(bytes);
+    } catch (err) {
+      fail(`${label}: capsule_file cannot be opened: ${err.message}`);
       continue;
     }
     const result = await verifyCapsule(reader, { allowlist });
@@ -212,6 +263,135 @@ function checkNumberVectors(path, doc) {
   });
 }
 
+// Byte-level signing-input vector (meta.kind === "signing-input"): every
+// canonical byte string and hash must be reproducible from the referenced
+// embedded capsule, and each pinned signature must verify over the
+// reconstructed signing input.
+async function checkSigningInput(path, doc) {
+  const sha256Hex = (b) => bytesToHex(sha256(b));
+  const base = dirname(path);
+  let reader;
+  try {
+    const refDoc = JSON.parse(await readFile(join(base, doc.meta.capsule_ref), "utf8"));
+    reader = await CapsuleReader.fromBytes(Buffer.from(refDoc.capsule_bytes_b64, "base64"));
+  } catch (err) {
+    fail(`${path}: capsule_ref unreadable: ${err.message}`);
+    return;
+  }
+  const manifest = reader.manifest();
+  const envelope = reader.envelope();
+
+  // capsule_id preimage
+  checked++;
+  const cid = doc.capsule_id;
+  const idDomain = hexToBytes(cid.domain_hex);
+  if (Buffer.from(cid.domain_utf8, "utf8").toString("hex") !== cid.domain_hex) {
+    fail(`${path}: capsule_id.domain_utf8 and domain_hex disagree`);
+  }
+  const derivedId = sha256Hex(
+    concatBytes(idDomain, hexToBytes(cid.originator_public_key_hex), hexToBytes(cid.first_event_hash_hex)),
+  );
+  if (derivedId !== cid.capsule_id_hex) fail(`${path}: capsule_id preimage does not hash to capsule_id_hex`);
+  if (cid.capsule_id_hex !== manifest.id) fail(`${path}: capsule_id_hex != manifest.id`);
+  if (cid.originator_public_key_hex !== manifest.originator.public_key) {
+    fail(`${path}: originator_public_key_hex != manifest originator key`);
+  }
+  if (cid.first_event_hash_hex !== manifest.first_event_hash) {
+    fail(`${path}: first_event_hash_hex != manifest.first_event_hash`);
+  }
+
+  // per-event canonical bytes + hash preimage
+  const events = reader.events();
+  if (!Array.isArray(doc.events) || doc.events.length !== events.length) {
+    fail(`${path}: events length mismatch`);
+  } else {
+    doc.events.forEach((pin, i) => {
+      checked++;
+      const { hash, ...rest } = events[i];
+      const canon = jcs(rest);
+      if (bytesToHex(canon) !== pin.canonical_bytes_hex) {
+        fail(`${path}: events[${i}] canonical bytes mismatch`);
+      }
+      if (rest.prev_hash !== pin.prev_hash_hex) fail(`${path}: events[${i}] prev_hash mismatch`);
+      const recomputed = sha256Hex(concatBytes(hexToBytes(pin.prev_hash_hex), canon));
+      if (recomputed !== pin.hash_hex) fail(`${path}: events[${i}] preimage does not hash to hash_hex`);
+      if (recomputed !== hash) fail(`${path}: events[${i}] hash_hex != stored event hash`);
+    });
+  }
+
+  // manifest canonical bytes
+  checked++;
+  const manifestCanon = jcs(manifest);
+  if (bytesToHex(manifestCanon) !== doc.manifest.canonical_bytes_hex) {
+    fail(`${path}: manifest canonical bytes mismatch`);
+  }
+  if (sha256Hex(manifestCanon) !== doc.manifest.sha256_hex) {
+    fail(`${path}: manifest sha256 mismatch`);
+  }
+  if (doc.manifest.sha256_hex !== envelope.manifest_hash) {
+    fail(`${path}: manifest.sha256_hex != envelope.manifest_hash`);
+  }
+
+  // content_index canonical bytes
+  checked++;
+  const indexCanon = jcs(manifest.content_index.files);
+  if (bytesToHex(indexCanon) !== doc.content_index.canonical_bytes_hex) {
+    fail(`${path}: content_index canonical bytes mismatch`);
+  }
+  if (sha256Hex(indexCanon) !== doc.content_index.sha256_hex) {
+    fail(`${path}: content_index sha256 mismatch`);
+  }
+  if (doc.content_index.sha256_hex !== envelope.content_index_hash) {
+    fail(`${path}: content_index.sha256_hex != envelope.content_index_hash`);
+  }
+
+  // envelope canonical payload + per-role signing input + signature
+  checked++;
+  const envCanon = envelopeCanonicalPayload(envelope);
+  if (bytesToHex(envCanon) !== doc.envelope.canonical_payload_hex) {
+    fail(`${path}: envelope canonical payload mismatch`);
+  }
+  if (sha256Hex(envCanon) !== doc.envelope.canonical_payload_sha256) {
+    fail(`${path}: envelope canonical payload sha256 mismatch`);
+  }
+  if (!Array.isArray(doc.envelope.signers) || doc.envelope.signers.length !== envelope.signers.length) {
+    fail(`${path}: envelope signers length mismatch`);
+    return;
+  }
+  doc.envelope.signers.forEach((pin, i) => {
+    checked++;
+    const stored = envelope.signers[i];
+    if (pin.role !== stored.role) fail(`${path}: signers[${i}] role mismatch`);
+    if (pin.public_key_hex !== stored.public_key) fail(`${path}: signers[${i}] public key mismatch`);
+    if (pin.signature_hex !== stored.signature) fail(`${path}: signers[${i}] signature mismatch`);
+    if (Buffer.from(pin.domain_utf8, "utf8").toString("hex") !== pin.domain_hex) {
+      fail(`${path}: signers[${i}] domain_utf8 and domain_hex disagree`);
+    }
+    const input = envelopeSigningInput(envelope, pin.role);
+    const domainBytes = hexToBytes(pin.domain_hex);
+    if (bytesToHex(input.subarray(0, domainBytes.length)) !== pin.domain_hex) {
+      fail(`${path}: signers[${i}] signing input does not start with domain bytes`);
+    }
+    if (bytesToHex(input.subarray(domainBytes.length)) !== doc.envelope.canonical_payload_hex) {
+      fail(`${path}: signers[${i}] signing input does not end with canonical payload`);
+    }
+    if (sha256Hex(input) !== pin.signing_input_sha256) {
+      fail(`${path}: signers[${i}] signing input sha256 mismatch`);
+    }
+    let valid = false;
+    try {
+      valid = ed25519Verify(hexToBytes(pin.public_key_hex), input, hexToBytes(pin.signature_hex));
+    } catch {
+      valid = false;
+    }
+    if (!valid) fail(`${path}: signers[${i}] pinned signature does not verify over signing input`);
+  });
+}
+
+function isSigningInputVector(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "signing-input";
+}
+
 async function checkFile(path) {
   if (isFixtureKeyFile(path)) return;
   let doc;
@@ -222,12 +402,13 @@ async function checkFile(path) {
     return;
   }
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
+  else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
   else if (isCollection(doc)) await checkCollection(path, doc);
   else if (isEmbeddedVector(doc)) await checkEmbeddedVector(path, doc);
   else {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
-        `an outcome-vector collection, or a jcs number set)`
+        `an outcome-vector collection, a signing-input doc, or a jcs number set)`
     );
   }
 }
