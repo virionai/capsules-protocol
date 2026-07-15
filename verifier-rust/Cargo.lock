@@ -128,6 +128,7 @@ dependencies = [
 name = "capsule-verifier-rust-parity-tests"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "capsule-verify",
  "hex",
  "serde",

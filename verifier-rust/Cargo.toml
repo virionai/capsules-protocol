@@ -48,3 +48,4 @@ capsule-verify = { path = "crates/capsule-verify" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+base64 = { workspace = true }
