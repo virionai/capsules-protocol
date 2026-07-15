@@ -172,3 +172,51 @@ test("CapsuleReader rejects envelope with wrong version", async () => {
     /envelope\.version/,
   );
 });
+
+// --- Container strictness over the raw central directory (2026-07-15) ---
+// JSZip alone silently inflates DEFLATE entries, ignores symlink mode
+// bits, and lets the last duplicate name win. unpackZip must reject all
+// three before JSZip parses anything.
+
+test("unpackZip rejects duplicate entry names", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([
+    { name: "program.md", data: "# first\n" },
+    { name: "program.md", data: "# second\n" },
+  ]);
+  await assert.rejects(() => unpackZip(bytes), /duplicate entry: program\.md/);
+});
+
+test("unpackZip rejects non-STORED compression", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([
+    { name: "blob.bin", data: Buffer.alloc(1024, 0x41), method: 8 },
+  ]);
+  await assert.rejects(() => unpackZip(bytes), /only STORED supported, got method 8/);
+});
+
+test("unpackZip rejects symlink entries", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([
+    { name: "link", data: "target", mode: 0o120777 },
+  ]);
+  await assert.rejects(() => unpackZip(bytes), /symlink: link/);
+});
+
+test("unpackZip still accepts its own packZip output", async () => {
+  const files = new Map([
+    ["a.txt", Buffer.from("aaa")],
+    ["dir/b.txt", Buffer.from("bbb")],
+  ]);
+  const packed = await packZip(files);
+  const round = await unpackZip(packed);
+  assert.deepEqual([...round.keys()], ["a.txt", "dir/b.txt"]);
+});
+
+test("unpackZip rejects ZIP64 sentinel EOCD", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([{ name: "a.txt", data: "a" }]);
+  // Forge the EOCD total-entry count to the ZIP64 sentinel 0xFFFF.
+  bytes.writeUInt16LE(0xffff, bytes.length - 22 + 10);
+  await assert.rejects(() => unpackZip(bytes), /ZIP64/);
+});

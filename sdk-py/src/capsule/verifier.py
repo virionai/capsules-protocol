@@ -161,9 +161,17 @@ def verify_capsule(
 
     # Chain
     if not reader.is_encrypted():
-        events = reader.events()
-        chain_result = verify_chain(events)
-        result["chain"] = chain_result
+        # Fail closed, matching the Rust verifier: a plain capsule with no
+        # chain file surfaces as a chain error in the result rather than an
+        # exception out of verify_capsule.
+        try:
+            events = reader.events()
+        except ValueError as e:  # MalformedCapsuleError is a ValueError
+            events = []
+            result["chain"] = {"ok": False, "errors": [{"seq": 0, "message": str(e)}]}
+        else:
+            chain_result = verify_chain(events)
+            result["chain"] = chain_result
         if events:
             first_eh, entry_h = first_and_entry_hash(events)
             if first_eh != envelope.get("first_event_hash"):

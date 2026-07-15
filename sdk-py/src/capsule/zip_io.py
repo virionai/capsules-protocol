@@ -53,6 +53,13 @@ def unpack_zip(data: bytes) -> dict[str, bytes]:
         infos = zf.infolist()
         if len(infos) > MAX_ENTRIES:
             raise ValueError(f"zip unpack: too many entries ({len(infos)})")
+        # Duplicate entry names are a parser differential (readers disagree
+        # on which copy wins), so a signed capsule must never contain one.
+        seen: set[str] = set()
+        for zi in infos:
+            if zi.filename in seen:
+                raise ValueError(f"zip unpack: duplicate entry: {zi.filename}")
+            seen.add(zi.filename)
         for zi in sorted(infos, key=lambda x: x.filename):
             if zi.is_dir():
                 continue

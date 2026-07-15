@@ -81,6 +81,12 @@ pub enum ZipError {
     #[error("too many entries: {0} (max {MAX_ENTRIES})")]
     TooManyEntries(usize),
 
+    /// Two entries share the same name. Readers disagree on which copy
+    /// wins (first vs last), so a signed capsule must never contain a
+    /// duplicate — reject instead of silently picking one.
+    #[error("duplicate entry: {0}")]
+    DuplicateEntry(String),
+
     /// Total uncompressed bytes exceeds `MAX_TOTAL_BYTES`.
     #[error("archive too large: {total} bytes (max {MAX_TOTAL_BYTES})")]
     TooLarge { total: u64 },
@@ -135,6 +141,81 @@ fn compression_method_code(method: CompressionMethod) -> u16 {
     method.to_u16()
 }
 
+const EOCD_SIG: u32 = 0x0605_4b50;
+const CDH_SIG: u32 = 0x0201_4b50;
+const EOCD_MIN: usize = 22;
+const MAX_COMMENT: usize = 0xffff;
+
+fn read_u16(bytes: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([bytes[at], bytes[at + 1]])
+}
+
+fn read_u32(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+/// Detect duplicate entry names by walking the RAW central directory.
+///
+/// The `zip` crate indexes entries by name and silently keeps one copy
+/// when an archive contains duplicates, so the duplicate never surfaces
+/// through `ZipArchive` — exactly the parser differential the spec must
+/// reject. This scan runs before the crate parses anything.
+///
+/// Structural errors (no EOCD, truncated directory) return `Ok(())` and
+/// are left for `ZipArchive` to report with its own diagnostics; ZIP64
+/// sentinel values are rejected here because a capsule can never
+/// legitimately need ZIP64 under the entry/size caps.
+fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
+    if bytes.len() < EOCD_MIN {
+        return Ok(());
+    }
+    let lowest = bytes.len().saturating_sub(EOCD_MIN + MAX_COMMENT);
+    let mut eocd = None;
+    let mut p = bytes.len() - EOCD_MIN;
+    loop {
+        if read_u32(bytes, p) == EOCD_SIG {
+            eocd = Some(p);
+            break;
+        }
+        if p == lowest {
+            break;
+        }
+        p -= 1;
+    }
+    let Some(eocd) = eocd else { return Ok(()) };
+
+    let total_entries = read_u16(bytes, eocd + 10) as usize;
+    let cd_size = read_u32(bytes, eocd + 12) as usize;
+    let cd_offset = read_u32(bytes, eocd + 16) as usize;
+    if total_entries == 0xffff || cd_size == 0xffff_ffff as usize || cd_offset == 0xffff_ffff as usize {
+        return Err(ZipError::InvalidContainer(
+            "ZIP64 archives are not supported".to_string(),
+        ));
+    }
+
+    let mut seen: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
+    let mut p = cd_offset;
+    for _ in 0..total_entries {
+        if p + 46 > bytes.len() || read_u32(bytes, p) != CDH_SIG {
+            return Ok(()); // malformed; let ZipArchive report it
+        }
+        let name_len = read_u16(bytes, p + 28) as usize;
+        let extra_len = read_u16(bytes, p + 30) as usize;
+        let comment_len = read_u16(bytes, p + 32) as usize;
+        if p + 46 + name_len > bytes.len() {
+            return Ok(());
+        }
+        let name = &bytes[p + 46..p + 46 + name_len];
+        if !seen.insert(name) {
+            return Err(ZipError::DuplicateEntry(
+                String::from_utf8_lossy(name).into_owned(),
+            ));
+        }
+        p += 46 + name_len + extra_len + comment_len;
+    }
+    Ok(())
+}
+
 /// Read every entry of a STORED-only ZIP archive, sorted by path.
 ///
 /// On success the returned [`BTreeMap`] contains one (path, bytes) pair per
@@ -142,6 +223,7 @@ fn compression_method_code(method: CompressionMethod) -> u16 {
 /// safety violation, compression mismatch, or limit overflow, an error is
 /// returned and no partial state escapes.
 pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
+    scan_duplicate_names(bytes)?;
     let cursor = Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor)
         .map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
@@ -230,7 +312,9 @@ pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
             return Err(ZipError::TooLarge { total: total_bytes });
         }
 
-        out.insert(name, buf);
+        if out.insert(name.clone(), buf).is_some() {
+            return Err(ZipError::DuplicateEntry(name));
+        }
     }
 
     Ok(out)
@@ -379,6 +463,35 @@ mod tests {
         match err {
             ZipError::TooManyEntries(n) => assert_eq!(n, count),
             other => panic!("expected TooManyEntries, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_entry_names() {
+        // The zip crate's writer refuses duplicate names, so forge the
+        // archive: duplicate the single central-directory record so two
+        // CD entries with the same name point at the same local header.
+        let base = make_zip(&[("program.md", b"# first\n", CompressionMethod::Stored)]);
+        let eocd = base.len() - 22; // no archive comment
+        let cd_size =
+            u32::from_le_bytes(base[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
+        let cd_offset =
+            u32::from_le_bytes(base[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+
+        let mut forged = Vec::new();
+        forged.extend_from_slice(&base[..cd_offset]); // local records
+        forged.extend_from_slice(&base[cd_offset..cd_offset + cd_size]);
+        forged.extend_from_slice(&base[cd_offset..cd_offset + cd_size]);
+        let mut eocd_rec = base[eocd..].to_vec();
+        eocd_rec[8..10].copy_from_slice(&2u16.to_le_bytes()); // entries this disk
+        eocd_rec[10..12].copy_from_slice(&2u16.to_le_bytes()); // total entries
+        eocd_rec[12..16].copy_from_slice(&((cd_size * 2) as u32).to_le_bytes());
+        forged.extend_from_slice(&eocd_rec);
+
+        let err = unpack_zip(&forged).expect_err("must reject duplicate names");
+        match err {
+            ZipError::DuplicateEntry(name) => assert_eq!(name, "program.md"),
+            other => panic!("expected DuplicateEntry, got {other:?}"),
         }
     }
 

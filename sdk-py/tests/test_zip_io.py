@@ -1,4 +1,5 @@
 import io
+import warnings
 import zipfile
 
 import pytest
@@ -100,4 +101,16 @@ def test_unpack_rejects_unsafe_path():
         zi.compress_type = zipfile.ZIP_STORED
         zf.writestr(zi, "x")
     with pytest.raises(UnsafeZipPathError):
+        unpack_zip(buf.getvalue())
+
+
+def test_unpack_rejects_duplicate_entry_names():
+    # Two entries with the same name are a parser differential; reject.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # zipfile warns on dup
+            zf.writestr("program.md", "# first\n")
+            zf.writestr("program.md", "# second\n")
+    with pytest.raises(ValueError, match="duplicate entry: program.md"):
         unpack_zip(buf.getvalue())

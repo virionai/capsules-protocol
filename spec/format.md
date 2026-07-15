@@ -82,12 +82,23 @@ them (they are not authoritative under v0.6) but should not error.
 - Internal ZIP timestamps are fixed at `1980-01-01T00:00:00Z` (the ZIP
   epoch) so identical content produces identical bytes.
 - Compression: `STORED` (no compression). This makes archive bytes a
-  function of content only, not of compression-library version.
+  function of content only, not of compression-library version. Readers
+  reject any entry with another compression method.
 - Symlinks, hardlinks, and out-of-tree paths (`..`, absolute paths, NULs)
   are rejected by readers as ZIP-slip protection.
+- Duplicate entry names are rejected by readers. Two entries with the
+  same name are a parser differential (ZIP libraries disagree on which
+  copy wins), so a signed capsule must never contain one.
+- Entry-name and entry-shape checks apply to the names as stored in the
+  archive's central directory. A reader whose ZIP library sanitizes or
+  deduplicates names on load must check the raw central directory
+  itself, or it will silently accept archives that other readers reject.
 - File-count and total-uncompressed-size limits are configurable on the
   reader; defaults are 10,000 entries and 1 GiB. Exceeding either is a
   rejection.
+
+Malformed-container conformance fixtures for these rules live in
+`spec/vectors/malformed-layout/`.
 
 ## Determinism boundary
 
