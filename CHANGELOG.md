@@ -7,6 +7,38 @@ protocol uses semantic-version pinning at the format layer (the
 `0.6` in the file format will not silently mean different things —
 incompatible wire changes ship as `0.7`).
 
+## Unreleased
+
+### Added
+
+- **Malformed-layout vector registry.** `spec/vectors/malformed-layout/`
+  pins open-stage rejection outcomes (missing required files, invalid
+  JSON, duplicate entries, unsafe paths, non-STORED compression, symlink
+  entries, missing chain file) behind a normative `stage`/`reason`
+  vocabulary, generated deterministically from the clean tamper fixture.
+- **Byte-level signing-input vectors.** `spec/vectors/signing-input.json`
+  pins the exact bytes signed, hashed, and identified for the
+  `plain-basic` capsule: capsule_id preimage, per-event hash preimages,
+  manifest/content-index canonical bytes, envelope canonical payload,
+  and per-role Ed25519 signing inputs.
+- **Registry-driven lanes.** Python (`test_spec_registry.py`) and Rust
+  (`spec_registry.rs`) now consume the tamper-detection and
+  malformed-layout outcome registries and the signing-input pins
+  directly, instead of hand-copied per-fixture assertions.
+
+### Changed
+
+- **Container strictness is now uniform and checked against the raw
+  central directory.** All readers reject duplicate entry names (a ZIP
+  parser differential); the JS reference reader now rejects non-STORED
+  compression and symlink entries (Python and Rust already did) and
+  validates entry names before JSZip's load-time sanitization can mask
+  them. `spec/format.md` records the duplicate-entry and
+  raw-central-directory rules as container properties.
+- **Python `verify_capsule` fails closed on a missing/unparseable chain
+  file** (chain error in the result, matching the Rust verifier) instead
+  of raising out of the verify call.
+
 ## v0.6.0-prototype.1 — 2026-05-12 (unreleased)
 
 The v0.6 redesign of the Capsule format around the actual product:
