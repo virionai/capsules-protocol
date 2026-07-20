@@ -44,7 +44,7 @@ export {
 
 // Useful for demos and tooling that needs to read or rewrite the
 // underlying ZIP container directly (e.g. tampering tests).
-export { packZip, unpackZip } from "./zip.js";
+export { packZip, unpackZip, scanCentralDirectory } from "./zip.js";
 
 // Pith — context-style discipline normalizer.
 export {

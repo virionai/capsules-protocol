@@ -1,0 +1,16 @@
+{
+  "name": "@capsule/example-quickstart",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node quickstart.mjs"
+  },
+  "dependencies": {
+    "@capsule/sdk-v0.6-prototype": "file:../../sdk-js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

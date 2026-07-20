@@ -11,6 +11,8 @@ operational guidance.
 
 ## Examples
 
+- `quickstart/` is the sdk-js README quickstart, verbatim and runnable:
+  keypair → build → seal → verify from bytes → read.
 - `generic-report/` builds a signed capsule containing a static report
   work product.
 - `generic-table-graph/` builds a signed capsule containing a

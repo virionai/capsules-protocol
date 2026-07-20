@@ -30,14 +30,19 @@ import {
 } from "./manifest.js";
 import { compressEventPayload } from "./pith.js";
 import { packZip } from "./zip.js";
+import { nowIso, toKeyHex, toRecipient, toSigner } from "./keys.js";
 
 export class CapsuleBuilder {
-  constructor({ originator, participants = [], createdAt, pith = true }) {
-    if (!originator || typeof originator.publicKey !== "string") {
-      throw new Error("originator.publicKey (hex) required");
+  constructor({ originator, participants = [], createdAt, pith = true } = {}) {
+    // `originator` accepts { publicKey, label? } with the key as a hex
+    // string or 32 raw bytes — including the keypair object returned by
+    // generateEd25519() (spread in a label: { ...keys, label: "MyApp" }).
+    const originatorKey = originator?.publicKey ?? originator?.publicKeyHex;
+    if (originatorKey == null) {
+      throw new Error("originator.publicKey required (hex string or 32 bytes)");
     }
     this.originator = {
-      public_key: originator.publicKey,
+      public_key: toKeyHex(originatorKey, "originator.publicKey"),
       label: originator.label ?? "",
     };
     this.participants = participants;
@@ -80,22 +85,24 @@ export class CapsuleBuilder {
   }
 
   /**
-   * Append a chain event. Per-call opt-out: { pith: false } skips
-   * payload normalization for this event.
+   * Append a chain event. `actor` and `action` are required; `kind`
+   * defaults to "observation", `target` to "capsule", and `timestamp`
+   * to now (UTC, second precision). Per-call opt-out: { pith: false }
+   * skips payload normalization for this event.
    */
   appendEvent(event, options = {}) {
-    if (!event.actor || !event.kind || !event.action || !event.target) {
-      throw new Error("event requires actor, kind, action, target");
+    if (!event.actor || !event.action) {
+      throw new Error("event requires actor and action");
     }
     const applyPith = options.pith !== false && this.pith;
     const rawPayload = event.payload ?? {};
     const payload = applyPith ? compressEventPayload(rawPayload) : rawPayload;
     this.bareEvents.push({
       actor: event.actor,
-      kind: event.kind,
+      kind: event.kind ?? "observation",
       action: event.action,
-      target: event.target,
-      timestamp: event.timestamp ?? this.createdAt,
+      target: event.target ?? "capsule",
+      timestamp: event.timestamp ?? nowIso(),
       payload,
       ...(event.untrusted_payload_fields ? { untrusted_payload_fields: event.untrusted_payload_fields } : {}),
     });
@@ -124,13 +131,24 @@ export class CapsuleBuilder {
    * Seal and emit the capsule bytes.
    *
    * options:
-   *   signers:    [{ role, publicKey: 32 bytes, privateKey: 32 bytes }]
-   *   recipients: optional [{ publicKey: 32 bytes }] — enables encryption
-   *   signedAt:   ISO 8601 UTC string
+   *   signers:    one signer or an array. Each signer is
+   *               { role?, publicKey, privateKey } with keys as hex
+   *               strings or 32 raw bytes; the keypair object returned
+   *               by generateEd25519() works as-is (role defaults to
+   *               "originator").
+   *   recipients: optional; enables encryption. One recipient or an
+   *               array; each is an X25519 public key (hex or bytes),
+   *               { publicKey }, or a generateX25519() keypair object.
+   *   signedAt:   optional ISO 8601 UTC string; defaults to now. Pass
+   *               an explicit value for reproducible builds.
    */
-  async seal({ signers, recipients = [], signedAt }) {
-    if (!signers || signers.length === 0) throw new Error("seal requires at least one signer");
-    if (!signedAt) throw new Error("seal requires signedAt");
+  async seal({ signers, recipients = [], signedAt } = {}) {
+    const signerList = (Array.isArray(signers) ? signers : signers ? [signers] : []).map(toSigner);
+    if (signerList.length === 0) throw new Error("seal requires at least one signer");
+    const recipientList = (Array.isArray(recipients) ? recipients : [recipients]).map(toRecipient);
+    signers = signerList;
+    recipients = recipientList;
+    signedAt = signedAt ?? nowIso();
     if (this.programMd == null) this.programMd = "# Program\n";
     if (this.bareEvents.length === 0) {
       // host-emitted backstop event so we never seal an empty chain

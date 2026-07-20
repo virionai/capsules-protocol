@@ -10,6 +10,7 @@ import {
   x25519DH,
 } from "./crypto.js";
 import { unpackZip } from "./zip.js";
+import { toRawKey } from "./keys.js";
 
 const dec = new TextDecoder();
 
@@ -134,17 +135,23 @@ export class CapsuleReader {
 
   /**
    * Decrypt the inner capsule.
-   * options.recipientPrivateKey: 32 bytes
-   * options.recipientPublicKey: 32 bytes (used to select the bundle)
+   *
+   * Accepts { recipientPublicKey, recipientPrivateKey } — or the keypair
+   * object returned by generateX25519() directly ({ publicKey,
+   * privateKey }). Keys may be hex strings or 32 raw bytes. The public
+   * key selects the matching recipient bundle.
    */
-  async decrypt({ recipientPrivateKey, recipientPublicKey }) {
+  async decrypt(options = {}) {
     if (!this.isEncrypted()) throw new Error("capsule is not encrypted");
-    if (!recipientPrivateKey || recipientPrivateKey.length !== 32) {
-      throw new Error("recipientPrivateKey must be 32 bytes");
+    const pub = options.recipientPublicKey ?? options.publicKey ?? options.publicKeyHex;
+    const priv = options.recipientPrivateKey ?? options.privateKey ?? options.privateKeyHex;
+    if (pub == null || priv == null) {
+      throw new Error(
+        "decrypt requires the recipient keypair: { recipientPublicKey, recipientPrivateKey } (hex or 32 bytes)",
+      );
     }
-    if (!recipientPublicKey || recipientPublicKey.length !== 32) {
-      throw new Error("recipientPublicKey must be 32 bytes");
-    }
+    const recipientPublicKey = toRawKey(pub, "recipientPublicKey");
+    const recipientPrivateKey = toRawKey(priv, "recipientPrivateKey");
     const meta = this.decryptionMetadata();
     if (!meta) throw new Error("missing decryption metadata");
     if (meta.cipher !== "ChaCha20-Poly1305") {

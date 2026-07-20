@@ -16,12 +16,20 @@ import {
 } from "./manifest.js";
 import { hexToBytes } from "./crypto.js";
 import { verifyEnvelopeSignatures } from "./envelope.js";
+import { CapsuleReader } from "./reader.js";
+import { toKeyHex } from "./keys.js";
 
 /**
- * verifyCapsule(reader, options)
+ * verifyCapsule(readerOrBytes, options)
+ *
+ * Accepts a CapsuleReader or the raw .capsule bytes. When given bytes,
+ * a container that cannot even be opened (malformed ZIP, missing or
+ * invalid manifest/envelope) returns a fail-closed result — app code
+ * needs no separate try/catch around opening.
  *
  * options:
- *   allowlist:     Array<hex pubkey> — signers must appear here for trusted=true
+ *   allowlist:     signer public keys to trust (hex strings or 32-byte
+ *                  keys) — signers must appear here for trusted=true
  *   outerEnvelope: optional envelope — for L3 verification, pass the outer
  *                  envelope so the inner can be checked against it.
  *
@@ -37,8 +45,29 @@ import { verifyEnvelopeSignatures } from "./envelope.js";
  *     notes: [string]
  *   }
  */
-export async function verifyCapsule(reader, options = {}) {
-  const allowlist = new Set((options.allowlist ?? []).map((k) => k.toLowerCase()));
+export async function verifyCapsule(readerOrBytes, options = {}) {
+  let reader = readerOrBytes;
+  if (reader instanceof Uint8Array || reader instanceof ArrayBuffer) {
+    try {
+      reader = await CapsuleReader.fromBytes(
+        reader instanceof ArrayBuffer ? new Uint8Array(reader) : reader,
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        level: "L2",
+        errors: [`capsule cannot be opened: ${err.message}`],
+        chain: { ok: false, errors: [] },
+        contentIndex: { ok: false, errors: [] },
+        envelope: { ok: false, signers: [] },
+        trustedSignerCount: 0,
+        notes: [],
+      };
+    }
+  }
+  const allowlist = new Set(
+    (options.allowlist ?? []).map((k, i) => toKeyHex(k, `allowlist[${i}]`)),
+  );
   const errors = [];
   const notes = [];
   const result = {

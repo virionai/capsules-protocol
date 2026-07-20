@@ -4,8 +4,12 @@
   "description": "Reference JS SDK for Capsule v0.6 — prototype.",
   "type": "module",
   "main": "src/index.js",
+  "types": "src/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
   },
   "engines": {
     "node": ">=20"

@@ -91,6 +91,20 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    // The sdk-js README quickstart, verbatim. Gates the copy-paste
+    // onboarding path: if this fails, the README's first code block is
+    // broken for new integrators.
+    id: "example-quickstart",
+    name: "quickstart",
+    language: "javascript",
+    kind: "example",
+    cwd: "examples/quickstart",
+    install_cmd: "npm install --prefer-offline --no-audit --no-fund",
+    test_cmd: "npm test",
+    pass_signal: { type: "exit_code", value: 0 },
+    capsule_path: "examples/quickstart/output/quickstart.capsule",
+  },
+  {
     id: "example-generic-report",
     name: "generic-report",
     language: "javascript",

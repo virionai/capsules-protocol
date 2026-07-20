@@ -11,6 +11,19 @@ incompatible wire changes ship as `0.7`).
 
 ### Added
 
+- **sdk-js onboarding surface.** Every key input now accepts hex strings
+  (any case) or 32 raw bytes interchangeably, and the keypair objects
+  from `generateEd25519()`/`generateX25519()` work as-is as
+  `originator`, `signers`, `recipients`, and `decrypt()` arguments
+  (signer role defaults to `"originator"`). `seal()` defaults
+  `signedAt` to now; `appendEvent()` defaults `kind`/`target`/
+  `timestamp`. `verifyCapsule()` accepts raw capsule bytes and returns a
+  fail-closed result for unopenable containers instead of throwing.
+  TypeScript declarations ship as `src/index.d.ts` (wired via
+  `types`/`exports`). The README is rewritten as an app-integration
+  quickstart whose code runs verbatim in CI as `examples/quickstart/`
+  (new `example-quickstart` conformance target). Wire format unchanged.
+
 - **Malformed-layout vector registry.** `spec/vectors/malformed-layout/`
   pins open-stage rejection outcomes (missing required files, invalid
   JSON, duplicate entries, unsafe paths, non-STORED compression, symlink
