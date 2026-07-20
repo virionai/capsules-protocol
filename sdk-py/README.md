@@ -1,99 +1,141 @@
 # Capsule v0.6 — Python SDK
 
-Third independent implementation of the Capsule v0.6 portable
-AI-context format. Sibling to the [JS reference SDK](../sdk-js/) and
-the [Rust verifier](../verifier-rust/).
+Independent Python implementation of the Capsule v0.6 portable,
+signed, verifiable work-artifact format. Sibling to the
+[JS reference SDK](../sdk-js/) and the [Rust verifier](../verifier-rust/);
+same wire format, same verification semantics, same ergonomics.
 
-## Status
+Prototype, not production. See [../spec/](../spec/) for the protocol.
 
-- **v0.1:** plain (L2) capsules — full build + read + verify.
-- **v0.2 (this release):** encrypted (L3) capsules — multi-recipient
-  X25519 + HKDF-SHA256 + ChaCha20-Poly1305. Python builds, reads,
-  decrypts, and verifies (L2 outer + L3 inner) the same encrypted
-  shape the JS SDK produces.
+## Add it to your app
 
-`EncryptedCapsulesNotSupportedError` is retained as an exported type so
-caller code can still pattern-match against future, not-yet-supported
-encrypted formats — but no first-party path raises it as of v0.2.
-
-## Install
+Not yet published to PyPI. Install from a checkout of this repository:
 
 ```sh
-cd sdk-py
-pip install -e ".[dev]"
+pip install /path/to/capsules-protocol/sdk-py
+# or for development:  pip install -e /path/to/capsules-protocol/sdk-py
+```
+
+Requirements: Python >= 3.11. The only runtime dependency is
+[`cryptography`](https://pypi.org/project/cryptography/) (Ed25519,
+X25519, HKDF-SHA256, ChaCha20-Poly1305).
+
+## Quickstart
+
+Create, save, verify, and read a capsule. This flow is pinned by
+`tests/test_dx.py`, so it cannot silently rot:
+
+```python
+from capsule import CapsuleBuilder, CapsuleReader, generate_ed25519, verify_capsule
+
+# 1. One keypair for your app (persist keys.private_key_hex somewhere
+#    safe; in a real app you generate this once, not per capsule).
+keys = generate_ed25519()
+
+# 2. Build and seal a capsule: a portable, signed unit of work.
+builder = CapsuleBuilder(originator=keys)  # or {"public_key": ..., "label": "MyApp"}
+builder.set_program("# Quarterly report\n\nDraft written by Alice, reviewed by AI.\n")
+builder.append_event({"actor": "human:alice", "action": "wrote_draft"})
+builder.append_event({"actor": "ai:assistant", "action": "suggested_edits", "payload": {"count": 3}})
+data = builder.seal(signers=keys)
+
+with open("quickstart.capsule", "wb") as f:
+    f.write(data)
+
+# 3. Anywhere else (another process, another machine): open and verify.
+#    The allowlist is your trust decision — which signer keys you accept.
+with open("quickstart.capsule", "rb") as f:
+    file_bytes = f.read()
+
+result = verify_capsule(file_bytes, allowlist=[keys.public_key_hex])
+print("verified:", result["ok"])                        # True — math checks out
+print("trusted signers:", result["trusted_signer_count"])  # 1 — and you trust the key
+
+# 4. Read the contents.
+reader = CapsuleReader.from_bytes(file_bytes)
+print("capsule id:", reader.manifest()["id"])
+print(reader.program())
+for event in reader.events():
+    print(f"event {event['seq']}: {event['actor']} {event['action']}")
+```
+
+Sensible defaults keep the happy path short: `seal()` timestamps with
+now (pass `signed_at` for reproducible builds), events default to
+`kind="observation"` / `target="capsule"`, a signer's role defaults to
+`"originator"`, and `verify_capsule(bytes)` on unopenable input returns
+a fail-closed result (`ok: False`) instead of raising.
+
+## Keys: hex or bytes, your choice
+
+Every place the API takes a key accepts either a hex string (any case)
+or 32 raw bytes — including the keypair objects from
+`generate_ed25519()` / `generate_x25519()` as-is:
+
+```python
+keys = generate_ed25519()
+# keys = Ed25519KeyPair(public_key=b"...", private_key=b"...",
+#                       public_key_hex="...", private_key_hex="...")
+
+CapsuleBuilder(originator=keys)                      # keypair object
+CapsuleBuilder(originator={"public_key": "b440d9e6..."})  # hex
+builder.seal(signers=keys)                           # role defaults to "originator"
+builder.seal(signers=[{"role": "reviewer", "public_key": pub_hex, "private_key": priv_hex}])
+verify_capsule(data, allowlist=[keys.public_key])     # bytes
+verify_capsule(data, allowlist=[keys.public_key_hex]) # hex
+```
+
+The wire format stays lowercase hex regardless of input form.
+
+Persist the private key (e.g. `keys.private_key_hex`) in your secret
+store; publish the public key to whoever needs to verify your capsules.
+The allowlist is a *trust policy*, not cryptography — `result["ok"]`
+says the math checks out; `result["trusted_signer_count"]` says a
+signer is one you accept (see [../spec/trust.md](../spec/trust.md)).
+Treat a capsule as good when
+`result["ok"] and result["trusted_signer_count"] >= 1` (or your own
+stricter policy).
+
+## Encrypt for specific recipients
+
+Pass `recipients` at seal time to encrypt the capsule body
+(ChaCha20-Poly1305; per-recipient X25519 key wrap). Anyone can still
+verify the outer signatures (L2); only recipients can decrypt and fully
+verify the content (L3):
+
+```python
+from capsule import generate_x25519
+
+recipient = generate_x25519()  # recipient generates; shares public_key_hex
+
+data = builder.seal(signers=keys, recipients=[recipient.public_key_hex])
+
+# Recipient side:
+outer = CapsuleReader.from_bytes(data)
+l2 = verify_capsule(outer, allowlist=[keys.public_key_hex])  # no key needed
+inner = outer.decrypt(recipient)  # keypair object works as-is
+l3 = verify_capsule(inner, allowlist=[keys.public_key_hex],
+                    outer_envelope=outer.envelope())
+print(inner.program())
 ```
 
 ## Develop
 
 ```sh
-pytest                       # 110 tests
-ruff check src tests         # lint
-ruff format src tests        # format (in place)
-ruff format --check src tests  # CI-style formatter check
+cd sdk-py
+pip install -e ".[dev]"
+pytest                         # full suite, incl. registry + parity lanes
+ruff check src tests           # lint
+ruff format --check src tests  # formatter check
 ```
 
-## Use
+## Parity and conformance
 
-```python
-from capsule import (
-    CapsuleBuilder, CapsuleReader,
-    generate_ed25519, generate_x25519,
-    verify_capsule,
-)
-
-# The originator signs and encrypts to a recipient's X25519 public key.
-originator = generate_ed25519()
-recipient = generate_x25519()
-builder = CapsuleBuilder(
-    originator={"public_key": originator.public_key_hex, "label": "Originator"},
-    participants=[{"actor_id": "human:originator", "role": "originator", "label": "Originator"}],
-)
-builder.set_program("# Work packet\n\nInitial verified work surface.\n")
-builder.append_event({
-    "actor": "human:originator", "kind": "observation", "action": "created",
-    "target": "program.md", "timestamp": "2026-05-08T12:00:00Z",
-    "payload": {"summary": "created packet"},
-})
-capsule_bytes = builder.seal(
-    signers=[{"role": "originator",
-              "public_key": originator.public_key,
-              "private_key": originator.private_key}],
-    signed_at="2026-05-08T12:00:00Z",
-    recipients=[recipient.public_key],
-)
-
-# Recipient opens, decrypts, verifies.
-outer = CapsuleReader.from_bytes(capsule_bytes)
-l2 = verify_capsule(outer, allowlist=[originator.public_key_hex])
-assert l2["ok"] and l2["level"] == "L2"
-
-inner = outer.decrypt(
-    recipient_public_key=recipient.public_key,
-    recipient_private_key=recipient.private_key,
-)
-l3 = verify_capsule(inner, allowlist=[originator.public_key_hex],
-                    outer_envelope=outer.envelope())
-assert l3["ok"] and l3["level"] == "L3"
-print(inner.program())
-```
-
-## Parity
-
-`tests/test_parity_jssdk.py` runs both directions:
-
-1. **JS → Python.** Reads shared vector fixtures and asserts the Python
-   verifier reaches the same PASS / FAIL outcome the JS reference does,
-   with the failure attributed to the same check.
-
-2. **Python → JS.** Builds a plain capsule entirely in Python, hands
-   the bytes to the JS SDK's `verifyCapsule()` via a Node subprocess,
-   and asserts `ok: true, trustedSignerCount: 1, level: "L2"`. This
-   pins the build path against the reference verifier on the same
-   bytes Python wrote.
-
-Run both with `pytest tests/test_parity_jssdk.py -v`. Until
-`spec/vectors/` is checked in, fixture-backed parity tests are expected
-to be treated as optional local checks.
+- `tests/test_spec_registry.py` consumes the language-neutral outcome
+  registries (`spec/vectors/tamper-detection/`, `malformed-layout/`)
+  and the byte-level `signing-input.json` pins directly.
+- `tests/test_parity_jssdk.py` runs both directions: Python verifies
+  JS-built fixtures, and JS verifies Python-built capsules via a Node
+  subprocess.
 
 ## Module map (mirrors `sdk-js/src/`)
 
@@ -101,6 +143,7 @@ to be treated as optional local checks.
 |---|---|---|
 | `capsule.canonical` | `sdk-js/src/canonical.js` | JCS RFC 8785, SHA-256, hex |
 | `capsule.crypto` | `sdk-js/src/crypto.js` | Ed25519, X25519, HKDF-SHA256, ChaCha20-Poly1305 |
+| `capsule.keys` | `sdk-js/src/keys.js` | API-boundary key-input normalization |
 | `capsule.zip_io` | `sdk-js/src/zip.js` | Deterministic STORED ZIP + safety |
 | `capsule.pith` | `sdk-js/src/pith.js` | Narrative-field normalizer |
 | `capsule.chain` | `sdk-js/src/chain.js` | Event hashing + chain verify |

@@ -138,7 +138,7 @@ def test_signing_input_pins():
     # events: hash = SHA-256(prev_hash_raw || JCS(event minus hash))
     events = reader.events()
     assert len(events) == len(doc["events"])
-    for pin, event in zip(doc["events"], events):
+    for pin, event in zip(doc["events"], events, strict=True):
         stored_hash = event["hash"]
         stripped = {k: v for k, v in event.items() if k != "hash"}
         canon = jcs(stripped)
@@ -164,7 +164,7 @@ def test_signing_input_pins():
     assert bytes_to_hex(env_canon) == doc["envelope"]["canonical_payload_hex"]
     assert sha256_hex(env_canon) == doc["envelope"]["canonical_payload_sha256"]
     assert len(doc["envelope"]["signers"]) == len(envelope["signers"])
-    for pin, stored in zip(doc["envelope"]["signers"], envelope["signers"]):
+    for pin, stored in zip(doc["envelope"]["signers"], envelope["signers"], strict=True):
         assert pin["role"] == stored["role"]
         assert pin["public_key_hex"] == stored["public_key"]
         assert pin["signature_hex"] == stored["signature"]

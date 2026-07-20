@@ -98,19 +98,25 @@ def test_seal_requires_signers():
         builder.seal(signers=[], signed_at="2026-05-07T12:00:00Z")
 
 
-def test_seal_requires_signed_at():
+def test_seal_defaults_signed_at_to_now():
+    # signed_at is optional (defaults to now, second precision); pass an
+    # explicit value for reproducible builds.
+    import re
+
+    from capsule import CapsuleReader
+
     kp = generate_ed25519()
     builder = CapsuleBuilder(
         originator={"public_key": kp.public_key_hex, "label": ""},
         participants=[],
     )
-    with pytest.raises(ValueError, match="signed_at"):
-        builder.seal(
-            signers=[
-                {"role": "originator", "public_key": kp.public_key, "private_key": kp.private_key}
-            ],
-            signed_at=None,
-        )
+    data = builder.seal(
+        signers=[
+            {"role": "originator", "public_key": kp.public_key, "private_key": kp.private_key}
+        ],
+    )
+    envelope = CapsuleReader.from_bytes(data).envelope()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", envelope["signed_at"])
 
 
 def test_add_skill_rejects_invalid_id():

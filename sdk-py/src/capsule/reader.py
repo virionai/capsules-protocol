@@ -8,6 +8,7 @@ from .canonical import bytes_to_hex, hex_to_bytes, jcs
 from .chain import events_from_jsonl
 from .crypto import chacha20_poly1305_decrypt, hkdf_sha256, x25519_dh
 from .envelope import EncryptedCapsulesNotSupportedError
+from .keys import _field, to_raw_key
 from .zip_io import unpack_zip
 
 
@@ -75,22 +76,35 @@ class CapsuleReader:
 
     def decrypt(
         self,
+        keypair=None,
         *,
-        recipient_public_key: bytes,
-        recipient_private_key: bytes,
+        recipient_public_key=None,
+        recipient_private_key=None,
     ) -> CapsuleReader:
+        """Decrypt the inner capsule.
+
+        Accepts the ``X25519KeyPair`` returned by ``generate_x25519()``
+        as a single positional argument, or explicit
+        ``recipient_public_key`` / ``recipient_private_key`` keywords.
+        Keys may be hex strings or 32 raw bytes. The public key selects
+        the matching recipient bundle.
+        """
         if not self.is_encrypted():
             raise ValueError("capsule is not encrypted")
-        if (
-            not isinstance(recipient_public_key, (bytes, bytearray, memoryview))
-            or len(recipient_public_key) != 32
-        ):
-            raise ValueError("recipient_public_key must be 32 bytes")
-        if (
-            not isinstance(recipient_private_key, (bytes, bytearray, memoryview))
-            or len(recipient_private_key) != 32
-        ):
-            raise ValueError("recipient_private_key must be 32 bytes")
+        if keypair is not None:
+            recipient_public_key = recipient_public_key or _field(
+                keypair, "public_key", "public_key_hex"
+            )
+            recipient_private_key = recipient_private_key or _field(
+                keypair, "private_key", "private_key_hex"
+            )
+        if recipient_public_key is None or recipient_private_key is None:
+            raise ValueError(
+                "decrypt requires the recipient keypair: pass generate_x25519()'s keypair or "
+                "recipient_public_key + recipient_private_key (hex or 32 bytes)"
+            )
+        recipient_public_key = to_raw_key(recipient_public_key, "recipient_public_key")
+        recipient_private_key = to_raw_key(recipient_private_key, "recipient_private_key")
 
         meta = self.decryption_metadata()
         if meta is None:

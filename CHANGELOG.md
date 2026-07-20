@@ -11,6 +11,15 @@ incompatible wire changes ship as `0.7`).
 
 ### Added
 
+- **sdk-py onboarding surface.** The Python SDK mirrors the sdk-js
+  ergonomics: every key input accepts hex strings (any case) or 32 raw
+  bytes, `Ed25519KeyPair`/`X25519KeyPair` objects work as-is as
+  `originator`, `signers`, `recipients`, and `decrypt()` arguments,
+  `seal()` defaults `signed_at`, `append_event()` defaults
+  `kind`/`target`/`timestamp`, and `verify_capsule()` accepts raw bytes
+  with a fail-closed result for unopenable containers
+  (`capsule.keys` module; README rewritten as a quickstart pinned by
+  `tests/test_dx.py`). Wire format unchanged.
 - **sdk-js onboarding surface.** Every key input now accepts hex strings
   (any case) or 32 raw bytes interchangeably, and the keypair objects
   from `generateEd25519()`/`generateX25519()` work as-is as

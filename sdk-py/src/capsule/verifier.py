@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from typing import TypedDict
+from zipfile import BadZipFile
 
 from .canonical import hex_to_bytes, sha256_hex
 from .chain import first_and_entry_hash, verify_chain
 from .envelope import verify_envelope_signatures
+from .keys import to_key_hex
 from .manifest import (
     build_content_index,
     compute_capsule_id,
     content_index_exclusions,
     manifest_hash,
 )
+from .reader import CapsuleReader
 
 
 class _ContentIndexResult(TypedDict):
@@ -39,10 +42,33 @@ class VerifyResult(TypedDict):
 def verify_capsule(
     reader,
     *,
-    allowlist: list[str] | None = None,
+    allowlist: list | None = None,
     outer_envelope: dict | None = None,
 ) -> VerifyResult:
-    allow = {k.lower() for k in (allowlist or [])}
+    """Verify a capsule.
+
+    Accepts a ``CapsuleReader`` or the raw ``.capsule`` bytes. Given
+    bytes, a container that cannot even be opened (malformed ZIP,
+    missing or invalid manifest/envelope) returns a fail-closed result
+    instead of raising, so app code has a single failure path.
+
+    ``allowlist`` entries may be hex strings (any case) or 32 raw bytes.
+    """
+    if isinstance(reader, (bytes, bytearray, memoryview)):
+        try:
+            reader = CapsuleReader.from_bytes(bytes(reader))
+        except (ValueError, BadZipFile) as e:
+            return {
+                "ok": False,
+                "level": "L2",
+                "errors": [f"capsule cannot be opened: {e}"],
+                "chain": {"ok": False, "errors": []},
+                "content_index": {"ok": False, "errors": []},
+                "envelope": {"ok": False, "signers": []},
+                "trusted_signer_count": 0,
+                "notes": [],
+            }
+    allow = {to_key_hex(k, f"allowlist[{i}]") for i, k in enumerate(allowlist or [])}
     errors: list[str] = []
     notes: list[str] = []
     result: VerifyResult = {

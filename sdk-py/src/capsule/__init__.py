@@ -63,9 +63,9 @@ SPEC_VERSION = "0.6"
 
 __all__ = [
     "CONTENT_INDEX_EXCLUDED",
-    "STRUCTURAL_EXCLUDED",
     "PITH_VERSION",
     "SPEC_VERSION",
+    "STRUCTURAL_EXCLUDED",
     "CapsuleBuilder",
     "CapsuleReader",
     "Ed25519KeyPair",
@@ -76,7 +76,6 @@ __all__ = [
     "__version__",
     "build_chain_events",
     "build_content_index",
-    "content_index_exclusions",
     "build_envelope",
     "build_manifest",
     "bytes_to_hex",
@@ -86,6 +85,7 @@ __all__ = [
     "compress_text",
     "compute_capsule_id",
     "concat_bytes",
+    "content_index_exclusions",
     "ed25519_sign",
     "ed25519_verify",
     "envelope_canonical_payload",

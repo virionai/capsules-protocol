@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC
 
 from .canonical import bytes_to_hex, hex_to_bytes, jcs, sha256_hex
 from .chain import build_chain_events, events_to_jsonl, first_and_entry_hash
@@ -18,11 +17,12 @@ from .crypto import (
     x25519_dh,
 )
 from .envelope import build_envelope, sign_envelope
+from .keys import _field, now_iso, to_key_hex, to_recipient, to_signer
 from .manifest import (
+    CONTENT_INDEX_EXCLUDED,
     build_content_index,
     build_manifest,
     compute_capsule_id,
-    CONTENT_INDEX_EXCLUDED,
     manifest_bytes,
     manifest_hash,
 )
@@ -43,19 +43,23 @@ class CapsuleBuilder:
     def __init__(
         self,
         *,
-        originator: dict,
+        originator,
         participants: list[dict] | None = None,
         created_at: str | None = None,
         pith: bool = True,
     ) -> None:
-        if not isinstance(originator, dict) or not isinstance(originator.get("public_key"), str):
-            raise ValueError("originator.public_key (hex) required")
+        # `originator` accepts {"public_key": ..., "label"?} with the key
+        # as a hex string or 32 raw bytes — or the Ed25519KeyPair returned
+        # by generate_ed25519() directly.
+        originator_key = _field(originator, "public_key", "public_key_hex")
+        if originator_key is None:
+            raise ValueError("originator.public_key required (hex string or 32 bytes)")
         self.originator = {
-            "public_key": originator["public_key"],
-            "label": originator.get("label", ""),
+            "public_key": to_key_hex(originator_key, "originator.public_key"),
+            "label": _field(originator, "label") or "",
         }
         self.participants = participants or []
-        self.created_at = created_at or _now_no_fractional()
+        self.created_at = created_at or now_iso()
         self.program_md: str | None = None
         self.agents_md: str | None = None
         self.skills: dict[str, _SkillEntry] = {}
@@ -93,18 +97,24 @@ class CapsuleBuilder:
         return self
 
     def append_event(self, event: dict, *, pith: bool | None = None) -> CapsuleBuilder:
-        for required in ("actor", "kind", "action", "target"):
-            if required not in event:
+        """Append a chain event.
+
+        ``actor`` and ``action`` are required; ``kind`` defaults to
+        "observation", ``target`` to "capsule", and ``timestamp`` to now
+        (UTC, second precision).
+        """
+        for required in ("actor", "action"):
+            if not event.get(required):
                 raise ValueError(f"event requires {required}")
         apply_pith = self.pith if pith is None else (self.pith and pith)
         raw_payload = event.get("payload", {})
         payload = compress_event_payload(raw_payload) if apply_pith else raw_payload
         bare = {
             "actor": event["actor"],
-            "kind": event["kind"],
+            "kind": event.get("kind", "observation"),
             "action": event["action"],
-            "target": event["target"],
-            "timestamp": event.get("timestamp", self.created_at),
+            "target": event.get("target", "capsule"),
+            "timestamp": event.get("timestamp") or now_iso(),
             "payload": payload,
         }
         if "untrusted_payload_fields" in event:
@@ -115,14 +125,43 @@ class CapsuleBuilder:
     def seal(
         self,
         *,
-        signers: list[dict],
-        signed_at: str,
-        recipients: list[bytes] | None = None,
+        signers,
+        signed_at: str | None = None,
+        recipients=None,
     ) -> bytes:
+        """Seal and emit the capsule bytes.
+
+        ``signers``: one signer or a list. Each signer is
+        ``{"role"?, "public_key", "private_key"}`` with keys as hex
+        strings or bytes; the ``Ed25519KeyPair`` returned by
+        ``generate_ed25519()`` works as-is (role defaults to
+        "originator").
+
+        ``recipients``: optional; presence enables encryption. One
+        recipient or a list; each is an X25519 public key (hex or
+        bytes), ``{"public_key": ...}``, or a ``generate_x25519()``
+        keypair.
+
+        ``signed_at``: optional ISO 8601 UTC string; defaults to now.
+        Pass an explicit value for reproducible builds.
+        """
+        if signers is None:
+            signer_items = []
+        elif isinstance(signers, (list, tuple)):
+            signer_items = list(signers)
+        else:
+            signer_items = [signers]
+        signers = [to_signer(s, i) for i, s in enumerate(signer_items)]
         if not signers:
             raise ValueError("seal requires at least one signer")
-        if not signed_at:
-            raise ValueError("seal requires signed_at")
+        if recipients is None:
+            recipient_items = []
+        elif isinstance(recipients, (list, tuple)):
+            recipient_items = list(recipients)
+        else:
+            recipient_items = [recipients]
+        recipients = [to_recipient(r, i) for i, r in enumerate(recipient_items)]
+        signed_at = signed_at or now_iso()
 
         if self.program_md is None:
             self.program_md = "# Program\n"
@@ -264,9 +303,7 @@ class CapsuleBuilder:
 
         # Encrypted profile: content.enc is bound by envelope.encrypted_blob_hash,
         # so it is excluded from the content index here.
-        outer_content_index = build_content_index(
-            outer_sidecars, CONTENT_INDEX_EXCLUDED
-        )
+        outer_content_index = build_content_index(outer_sidecars, CONTENT_INDEX_EXCLUDED)
 
         outer_manifest = build_manifest(
             originator=self.originator,
@@ -341,9 +378,3 @@ def _build_decryption_metadata(
         "key_bundles": key_bundles,
     }
     return bytes_to_hex(content_nonce), decryption_meta
-
-
-def _now_no_fractional() -> str:
-    from datetime import datetime
-
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

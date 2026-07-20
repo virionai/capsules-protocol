@@ -112,5 +112,5 @@ def test_unpack_rejects_duplicate_entry_names():
             warnings.simplefilter("ignore", UserWarning)  # zipfile warns on dup
             zf.writestr("program.md", "# first\n")
             zf.writestr("program.md", "# second\n")
-    with pytest.raises(ValueError, match="duplicate entry: program.md"):
+    with pytest.raises(ValueError, match=r"duplicate entry: program\.md"):
         unpack_zip(buf.getvalue())
