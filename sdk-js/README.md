@@ -36,7 +36,7 @@ runs in CI as [`examples/quickstart/`](../examples/quickstart/), so it
 cannot silently rot:
 
 ```js
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
   CapsuleBuilder,
   CapsuleReader,
@@ -55,6 +55,7 @@ const bytes = await new CapsuleBuilder({ originator: { ...keys, label: "MyApp" }
   .appendEvent({ actor: "ai:assistant", action: "suggested_edits", payload: { count: 3 } })
   .seal({ signers: keys });
 
+await mkdir("output", { recursive: true });
 await writeFile("output/quickstart.capsule", bytes);
 
 // 3. Anywhere else (another process, another machine): open and verify.
@@ -74,9 +75,10 @@ for (const event of reader.events()) {
 }
 ```
 
-Sensible defaults keep the happy path short: `seal()` timestamps with
-now (pass `signedAt` for reproducible builds), events default to
-`kind: "observation"` / `target: "capsule"`, a signer's role defaults to
+Sensible defaults keep the happy path short: `createdAt` and `seal()`'s
+`signedAt` default to now, while event timestamps inherit `createdAt`.
+Pass both values explicitly for reproducible builds. Events default to
+`kind: "observation"` / `target: "capsule"`, and a signer's role defaults to
 `"originator"`, and `verifyCapsule(bytes)` on unopenable input returns a
 fail-closed result (`ok: false`) instead of throwing.
 

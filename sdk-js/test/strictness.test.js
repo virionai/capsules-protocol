@@ -213,6 +213,28 @@ test("unpackZip still accepts its own packZip output", async () => {
   assert.deepEqual([...round.keys()], ["a.txt", "dir/b.txt"]);
 });
 
+test("unpackZip rejects an understated EOCD entry count", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([
+    { name: "a.txt", data: "a" },
+    { name: "b.txt", data: "b" },
+  ]);
+  const eocd = bytes.length - 22;
+  bytes.writeUInt16LE(1, eocd + 8);
+  bytes.writeUInt16LE(1, eocd + 10);
+  await assert.rejects(() => unpackZip(bytes), /entry count mismatch/);
+});
+
+test("unpackZip rejects a later EOCD signature hidden in a comment", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const bytes = writeRawZip([{ name: "a.txt", data: "a" }]);
+  const eocd = bytes.length - 22;
+  const trailingSignature = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+  bytes.writeUInt16LE(trailingSignature.length, eocd + 20);
+  const forged = Buffer.concat([bytes, trailingSignature]);
+  await assert.rejects(() => unpackZip(forged), /multiple end-of-central-directory records/);
+});
+
 test("unpackZip rejects ZIP64 sentinel EOCD", async () => {
   const { writeRawZip } = await import("../tools/rawzip.mjs");
   const bytes = writeRawZip([{ name: "a.txt", data: "a" }]);

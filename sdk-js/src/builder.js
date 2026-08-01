@@ -46,7 +46,7 @@ export class CapsuleBuilder {
       label: originator.label ?? "",
     };
     this.participants = participants;
-    this.createdAt = createdAt ?? new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    this.createdAt = createdAt ?? nowIso();
     this.programMd = null;
     this.agentsMd = null;
     this.skills = new Map(); // id -> { json, markdown, signed }
@@ -87,7 +87,7 @@ export class CapsuleBuilder {
   /**
    * Append a chain event. `actor` and `action` are required; `kind`
    * defaults to "observation", `target` to "capsule", and `timestamp`
-   * to now (UTC, second precision). Per-call opt-out: { pith: false }
+   * to the builder's `createdAt` value. Per-call opt-out: { pith: false }
    * skips payload normalization for this event.
    */
   appendEvent(event, options = {}) {
@@ -102,7 +102,7 @@ export class CapsuleBuilder {
       kind: event.kind ?? "observation",
       action: event.action,
       target: event.target ?? "capsule",
-      timestamp: event.timestamp ?? nowIso(),
+      timestamp: event.timestamp ?? this.createdAt,
       payload,
       ...(event.untrusted_payload_fields ? { untrusted_payload_fields: event.untrusted_payload_fields } : {}),
     });

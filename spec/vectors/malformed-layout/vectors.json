@@ -18,8 +18,7 @@
     "total_size_limit": "RESERVED: archive exceeds the 1 GiB total-uncompressed cap (cannot be checked in; covered by per-lane unit tests)"
   },
   "notes": [
-    "The 'reason' field is normative: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
-    "missing-chain: the failing chain-file case surfaces differently per lane today (JS: content_index only, chain deferred; Python/Rust: chain error plus content_index). The registry therefore pins only the content_index area; chain-area treatment is flagged for the verifier result-vocabulary normalization (TODO P1)."
+    "The 'reason' field is normative: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined."
   ],
   "vectors": [
     {
@@ -40,7 +39,12 @@
     {
       "name": "missing-chain",
       "capsule_file": "output/missing-chain.capsule",
-      "expected": { "ok": false, "failing": ["content_index"] }
+      "expected": { "ok": false, "failing": ["content_index", "chain"] }
+    },
+    {
+      "name": "invalid-chain-json",
+      "capsule_file": "output/invalid-chain-json.capsule",
+      "expected": { "ok": false, "failing": ["content_index", "chain"] }
     },
     {
       "name": "duplicate-entry",

@@ -68,9 +68,16 @@ def verify_capsule(
                 "trusted_signer_count": 0,
                 "notes": [],
             }
-    allow = {to_key_hex(k, f"allowlist[{i}]") for i, k in enumerate(allowlist or [])}
     errors: list[str] = []
     notes: list[str] = []
+    allow: set[str] = set()
+    for i, key in enumerate(allowlist or []):
+        try:
+            allow.add(to_key_hex(key, f"allowlist[{i}]"))
+        except (TypeError, ValueError) as e:
+            # Trust configuration is external to capsule validity. Reject
+            # malformed keys from the trust set without raising from verify.
+            notes.append(f"ignored invalid allowlist[{i}]: {e}")
     result: VerifyResult = {
         "ok": False,
         "level": "L3" if outer_envelope is not None else "L2",
@@ -196,8 +203,13 @@ def verify_capsule(
             events = []
             result["chain"] = {"ok": False, "errors": [{"seq": 0, "message": str(e)}]}
         else:
-            chain_result = verify_chain(events)
-            result["chain"] = chain_result
+            if events:
+                result["chain"] = verify_chain(events)
+            else:
+                result["chain"] = {
+                    "ok": False,
+                    "errors": [{"seq": 0, "message": "chain/events.jsonl missing or empty"}],
+                }
         if events:
             first_eh, entry_h = first_and_entry_hash(events)
             if first_eh != envelope.get("first_event_hash"):

@@ -44,6 +44,24 @@ def test_quickstart_keypair_object_end_to_end_with_defaults():
     assert _TS_RE.match(reader.envelope()["signed_at"])
 
 
+def test_default_event_timestamp_inherits_created_at_for_reproducible_builds():
+    keys = generate_ed25519()
+    created_at = "2026-07-20T12:00:00Z"
+    signed_at = "2026-07-20T12:00:01Z"
+
+    def build() -> bytes:
+        builder = CapsuleBuilder(originator=keys, created_at=created_at)
+        builder.set_program("# Reproducible\n")
+        builder.append_event({"actor": "human:me", "action": "created_note"})
+        return builder.seal(signers=keys, signed_at=signed_at)
+
+    first = build()
+    second = build()
+    assert first == second
+    reader = CapsuleReader.from_bytes(first)
+    assert reader.events()[0]["timestamp"] == created_at
+
+
 def test_hex_keys_accepted_everywhere_bytes_are():
     keys = generate_ed25519()
 
@@ -68,6 +86,19 @@ def test_hex_keys_accepted_everywhere_bytes_are():
     # wire format stays lowercase regardless of input case
     reader = CapsuleReader.from_bytes(data)
     assert reader.manifest()["originator"]["public_key"] == keys.public_key_hex
+
+
+def test_invalid_allowlist_entries_fail_trust_closed_without_raising():
+    keys = generate_ed25519()
+    builder = CapsuleBuilder(originator=keys, created_at="2026-07-20T12:00:00Z")
+    builder.set_program("# Trust config\n")
+    builder.append_event({"actor": "human:me", "action": "created_note"})
+    data = builder.seal(signers=keys, signed_at="2026-07-20T12:00:01Z")
+
+    result = verify_capsule(data, allowlist=["not-a-key"])
+    assert result["ok"] is True, result["errors"]
+    assert result["trusted_signer_count"] == 0
+    assert any("ignored invalid allowlist[0]" in note for note in result["notes"])
 
 
 def test_verify_capsule_on_garbage_bytes_fails_closed():

@@ -65,11 +65,18 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
       };
     }
   }
-  const allowlist = new Set(
-    (options.allowlist ?? []).map((k, i) => toKeyHex(k, `allowlist[${i}]`)),
-  );
   const errors = [];
   const notes = [];
+  const allowlist = new Set();
+  for (const [i, key] of (options.allowlist ?? []).entries()) {
+    try {
+      allowlist.add(toKeyHex(key, `allowlist[${i}]`));
+    } catch (err) {
+      // Trust configuration is external to capsule validity. Reject malformed
+      // keys from the trust set without turning verification into an exception.
+      notes.push(`ignored invalid allowlist[${i}]: ${err.message}`);
+    }
+  }
   const result = {
     ok: false,
     level: options.outerEnvelope ? "L3" : "L2",
@@ -181,10 +188,20 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
 
   // Chain
   if (!reader.isEncrypted()) {
-    const events = reader.events();
-    const chainResult = verifyChain(events);
-    result.chain = chainResult;
-    if (events.length > 0) {
+    let events;
+    try {
+      events = reader.events();
+    } catch (err) {
+      events = [];
+      result.chain = { ok: false, errors: [{ seq: 0, message: err.message }] };
+    }
+    if (events.length === 0) {
+      result.chain ??= {
+        ok: false,
+        errors: [{ seq: 0, message: "chain/events.jsonl missing or empty" }],
+      };
+    } else {
+      result.chain = verifyChain(events);
       const { firstEventHash, entryHash } = firstAndEntryHash(events);
       if (firstEventHash !== envelope.first_event_hash) {
         errors.push(

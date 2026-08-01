@@ -8,6 +8,9 @@
 # out of committed source.
 .capsule-example-denylist
 
+# Local internal documents
+IP-REGISTRY.md
+
 # JavaScript dependencies and builds
 node_modules/
 **/node_modules/

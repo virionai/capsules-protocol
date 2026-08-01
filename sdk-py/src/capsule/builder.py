@@ -100,8 +100,8 @@ class CapsuleBuilder:
         """Append a chain event.
 
         ``actor`` and ``action`` are required; ``kind`` defaults to
-        "observation", ``target`` to "capsule", and ``timestamp`` to now
-        (UTC, second precision).
+        "observation", ``target`` to "capsule", and ``timestamp`` to the
+        builder's ``created_at`` value.
         """
         for required in ("actor", "action"):
             if not event.get(required):
@@ -114,7 +114,9 @@ class CapsuleBuilder:
             "kind": event.get("kind", "observation"),
             "action": event["action"],
             "target": event.get("target", "capsule"),
-            "timestamp": event.get("timestamp") or now_iso(),
+            "timestamp": (
+                event.get("timestamp") if event.get("timestamp") is not None else self.created_at
+            ),
             "payload": payload,
         }
         if "untrusted_payload_fields" in event:

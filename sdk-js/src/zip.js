@@ -37,15 +37,28 @@ export function scanCentralDirectory(bytes) {
   if (buf.length < EOCD_MIN) throw new Error("zip scan: too small to be a zip");
 
   // The EOCD is the LAST record; scan back over a possible trailing comment.
+  // A signature-shaped byte sequence inside the comment is not an EOCD unless
+  // its declared comment length lands exactly at end-of-file.
   let eocd = -1;
   const lowest = Math.max(0, buf.length - EOCD_MIN - MAX_COMMENT);
   for (let p = buf.length - EOCD_MIN; p >= lowest; p--) {
-    if (buf.readUInt32LE(p) === EOCD_SIG) {
+    if (
+      buf.readUInt32LE(p) === EOCD_SIG &&
+      p + EOCD_MIN + buf.readUInt16LE(p + 20) === buf.length
+    ) {
       eocd = p;
       break;
     }
   }
   if (eocd < 0) throw new Error("zip scan: end-of-central-directory not found");
+  // JSZip selects the last raw EOCD signature without validating comment
+  // length. Reject any later signature so both parsers are guaranteed to
+  // analyze the same central directory.
+  for (let q = buf.length - 4; q > eocd; q--) {
+    if (buf.readUInt32LE(q) === EOCD_SIG) {
+      throw new Error("zip scan: multiple end-of-central-directory records");
+    }
+  }
 
   const totalEntries = buf.readUInt16LE(eocd + 10);
   const cdSize = buf.readUInt32LE(eocd + 12);
@@ -56,14 +69,20 @@ export function scanCentralDirectory(bytes) {
   if (totalEntries > MAX_ENTRIES) {
     throw new Error(`zip scan: too many entries (${totalEntries})`);
   }
-  if (cdOffset + cdSize > eocd) {
-    throw new Error("zip scan: central directory extends past EOCD");
+  const cdEnd = cdOffset + cdSize;
+  if (cdEnd !== eocd) {
+    throw new Error("zip scan: central directory does not end at EOCD");
   }
 
+  // Walk the directory by its byte size, not the attacker-controlled EOCD
+  // record count. JSZip also walks by signature, so trusting the count here
+  // would let extra records bypass strictness checks while JSZip still loads
+  // them. Cross-check the declared count only after consuming the directory.
   const entries = [];
   let p = cdOffset;
-  for (let i = 0; i < totalEntries; i++) {
-    if (p + 46 > buf.length || buf.readUInt32LE(p) !== CDH_SIG) {
+  while (p < cdEnd) {
+    const i = entries.length;
+    if (p + 46 > cdEnd || buf.readUInt32LE(p) !== CDH_SIG) {
       throw new Error(`zip scan: truncated or malformed central directory at record ${i}`);
     }
     const method = buf.readUInt16LE(p + 10);
@@ -71,12 +90,21 @@ export function scanCentralDirectory(bytes) {
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
     const externalAttrs = buf.readUInt32LE(p + 38);
-    if (p + 46 + nameLen > buf.length) {
-      throw new Error(`zip scan: truncated entry name at record ${i}`);
+    const next = p + 46 + nameLen + extraLen + commentLen;
+    if (next > cdEnd) {
+      throw new Error(`zip scan: truncated central-directory record ${i}`);
     }
     const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
     entries.push({ name, method, externalAttrs });
-    p += 46 + nameLen + extraLen + commentLen;
+    if (entries.length > MAX_ENTRIES) {
+      throw new Error(`zip scan: too many entries (${entries.length})`);
+    }
+    p = next;
+  }
+  if (entries.length !== totalEntries) {
+    throw new Error(
+      `zip scan: central-directory entry count mismatch (EOCD ${totalEntries}, actual ${entries.length})`,
+    );
   }
   return entries;
 }

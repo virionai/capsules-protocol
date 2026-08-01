@@ -59,9 +59,10 @@ for event in reader.events():
     print(f"event {event['seq']}: {event['actor']} {event['action']}")
 ```
 
-Sensible defaults keep the happy path short: `seal()` timestamps with
-now (pass `signed_at` for reproducible builds), events default to
-`kind="observation"` / `target="capsule"`, a signer's role defaults to
+Sensible defaults keep the happy path short: `created_at` and `seal()`'s
+`signed_at` default to now, while event timestamps inherit `created_at`.
+Pass both values explicitly for reproducible builds. Events default to
+`kind="observation"` / `target="capsule"`, and a signer's role defaults to
 `"originator"`, and `verify_capsule(bytes)` on unopenable input returns
 a fail-closed result (`ok: False`) instead of raising.
 

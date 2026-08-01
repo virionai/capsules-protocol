@@ -16,7 +16,8 @@ incompatible wire changes ship as `0.7`).
   bytes, `Ed25519KeyPair`/`X25519KeyPair` objects work as-is as
   `originator`, `signers`, `recipients`, and `decrypt()` arguments,
   `seal()` defaults `signed_at`, `append_event()` defaults
-  `kind`/`target`/`timestamp`, and `verify_capsule()` accepts raw bytes
+  `kind`/`target` and inherits `timestamp` from the builder's `created_at`,
+  and `verify_capsule()` accepts raw bytes
   with a fail-closed result for unopenable containers
   (`capsule.keys` module; README rewritten as a quickstart pinned by
   `tests/test_dx.py`). Wire format unchanged.
@@ -25,8 +26,8 @@ incompatible wire changes ship as `0.7`).
   from `generateEd25519()`/`generateX25519()` work as-is as
   `originator`, `signers`, `recipients`, and `decrypt()` arguments
   (signer role defaults to `"originator"`). `seal()` defaults
-  `signedAt` to now; `appendEvent()` defaults `kind`/`target`/
-  `timestamp`. `verifyCapsule()` accepts raw capsule bytes and returns a
+  `signedAt` to now; `appendEvent()` defaults `kind`/`target` and inherits
+  `timestamp` from the builder's `createdAt`. `verifyCapsule()` accepts raw capsule bytes and returns a
   fail-closed result for unopenable containers instead of throwing.
   TypeScript declarations ship as `src/index.d.ts` (wired via
   `types`/`exports`). The README is rewritten as an app-integration
@@ -55,11 +56,18 @@ incompatible wire changes ship as `0.7`).
   parser differential); the JS reference reader now rejects non-STORED
   compression and symlink entries (Python and Rust already did) and
   validates entry names before JSZip's load-time sanitization can mask
-  them. `spec/format.md` records the duplicate-entry and
+  them. The JS and Rust raw scans consume the full central-directory byte
+  range and cross-check the EOCD record count, preventing understated-count
+  parser differentials. `spec/format.md` records the duplicate-entry and
   raw-central-directory rules as container properties.
-- **Python `verify_capsule` fails closed on a missing/unparseable chain
-  file** (chain error in the result, matching the Rust verifier) instead
-  of raising out of the verify call.
+- **JS and Python verifiers fail closed on missing, empty, or unparseable
+  chain data** (chain error in the result, matching the Rust verifier), pinned
+  by missing-chain and invalid-chain-JSON registry fixtures.
+- **Malformed allowlist entries fail trust closed without throwing.** JS and
+  Python ignore invalid keys, report them in verifier notes, and never mark
+  a signer trusted from malformed configuration.
+- **Malformed-layout fixtures are drift-checked.** The deterministic generator
+  supports `--check`, which runs as a required JavaScript conformance target.
 
 ## v0.6.0-prototype.1 — 2026-05-12 (unreleased)
 

@@ -5,7 +5,7 @@
 // sdk-js/README.md can never silently rot. If you change this flow,
 // update the README quickstart to match.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
   CapsuleBuilder,
   CapsuleReader,
@@ -24,6 +24,7 @@ const bytes = await new CapsuleBuilder({ originator: { ...keys, label: "MyApp" }
   .appendEvent({ actor: "ai:assistant", action: "suggested_edits", payload: { count: 3 } })
   .seal({ signers: keys });
 
+await mkdir("output", { recursive: true });
 await writeFile("output/quickstart.capsule", bytes);
 
 // 3. Anywhere else (another process, another machine): open and verify.
@@ -37,7 +38,7 @@ console.log("trusted signers:", result.trustedSignerCount); // 1 — and you tru
 // 4. Read the contents.
 const reader = await CapsuleReader.fromBytes(fileBytes);
 console.log("capsule id:", reader.manifest().id);
-console.log("program:", JSON.stringify(reader.program()));
+console.log("program:", reader.program());
 for (const event of reader.events()) {
   console.log(`event ${event.seq}: ${event.actor} ${event.action}`);
 }

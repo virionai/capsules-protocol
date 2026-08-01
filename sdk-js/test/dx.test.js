@@ -41,6 +41,23 @@ test("quickstart: keypair object end-to-end with all defaults", async () => {
   assert.match(reader.envelope().signed_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
 });
 
+test("default event timestamp inherits createdAt for reproducible builds", async () => {
+  const keys = generateEd25519();
+  const createdAt = "2026-07-20T12:00:00Z";
+  const signedAt = "2026-07-20T12:00:01Z";
+  const build = () =>
+    new CapsuleBuilder({ originator: keys, createdAt })
+      .setProgram("# Reproducible\n")
+      .appendEvent({ actor: "human:me", action: "created_note" })
+      .seal({ signers: keys, signedAt });
+
+  const first = await build();
+  const second = await build();
+  assert.deepEqual(Buffer.from(first), Buffer.from(second));
+  const reader = await CapsuleReader.fromBytes(first);
+  assert.equal(reader.events()[0].timestamp, createdAt);
+});
+
 test("hex keys are accepted everywhere raw bytes are", async () => {
   const keys = generateEd25519();
 
@@ -59,6 +76,19 @@ test("hex keys are accepted everywhere raw bytes are", async () => {
   // wire format stays lowercase regardless of input case
   const reader = await CapsuleReader.fromBytes(bytes);
   assert.equal(reader.manifest().originator.public_key, keys.publicKeyHex);
+});
+
+test("invalid allowlist entries fail trust closed without throwing", async () => {
+  const keys = generateEd25519();
+  const bytes = await new CapsuleBuilder({ originator: keys, createdAt: "2026-07-20T12:00:00Z" })
+    .setProgram("# Trust config\n")
+    .appendEvent({ actor: "human:me", action: "created_note" })
+    .seal({ signers: keys, signedAt: "2026-07-20T12:00:01Z" });
+
+  const result = await verifyCapsule(bytes, { allowlist: ["not-a-key"] });
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.equal(result.trustedSignerCount, 0);
+  assert.ok(result.notes.some((note) => note.includes("ignored invalid allowlist[0]")));
 });
 
 test("verifyCapsule on garbage bytes fails closed, no throw", async () => {

@@ -173,7 +173,9 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
     let mut eocd = None;
     let mut p = bytes.len() - EOCD_MIN;
     loop {
-        if read_u32(bytes, p) == EOCD_SIG {
+        if read_u32(bytes, p) == EOCD_SIG
+            && p + EOCD_MIN + read_u16(bytes, p + 20) as usize == bytes.len()
+        {
             eocd = Some(p);
             break;
         }
@@ -183,27 +185,70 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
         p -= 1;
     }
     let Some(eocd) = eocd else { return Ok(()) };
+    // Reject a later raw EOCD signature so this strictness scan cannot select
+    // a different directory from an underlying parser that searches by the
+    // last signature occurrence.
+    let mut q = bytes.len() - 4;
+    while q > eocd {
+        if read_u32(bytes, q) == EOCD_SIG {
+            return Err(ZipError::InvalidContainer(
+                "multiple end-of-central-directory records".to_string(),
+            ));
+        }
+        q -= 1;
+    }
 
     let total_entries = read_u16(bytes, eocd + 10) as usize;
     let cd_size = read_u32(bytes, eocd + 12) as usize;
     let cd_offset = read_u32(bytes, eocd + 16) as usize;
-    if total_entries == 0xffff || cd_size == 0xffff_ffff as usize || cd_offset == 0xffff_ffff as usize {
+    if total_entries == 0xffff
+        || cd_size == 0xffff_ffff as usize
+        || cd_offset == 0xffff_ffff as usize
+    {
         return Err(ZipError::InvalidContainer(
             "ZIP64 archives are not supported".to_string(),
         ));
     }
 
+    if total_entries > MAX_ENTRIES {
+        return Err(ZipError::TooManyEntries(total_entries));
+    }
+    let cd_end = cd_offset
+        .checked_add(cd_size)
+        .ok_or_else(|| ZipError::InvalidContainer("central-directory size overflow".to_string()))?;
+    if cd_end != eocd {
+        return Err(ZipError::InvalidContainer(
+            "central directory does not end at EOCD".to_string(),
+        ));
+    }
+
+    // Consume the complete central-directory byte range, then cross-check the
+    // attacker-controlled EOCD count. This prevents hidden records from being
+    // parsed by another reader while escaping duplicate/strictness checks here.
     let mut seen: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
     let mut p = cd_offset;
-    for _ in 0..total_entries {
-        if p + 46 > bytes.len() || read_u32(bytes, p) != CDH_SIG {
-            return Ok(()); // malformed; let ZipArchive report it
+    let mut actual_entries = 0usize;
+    while p < cd_end {
+        if p + 46 > cd_end || read_u32(bytes, p) != CDH_SIG {
+            return Err(ZipError::InvalidContainer(format!(
+                "truncated or malformed central directory at record {actual_entries}"
+            )));
         }
         let name_len = read_u16(bytes, p + 28) as usize;
         let extra_len = read_u16(bytes, p + 30) as usize;
         let comment_len = read_u16(bytes, p + 32) as usize;
-        if p + 46 + name_len > bytes.len() {
-            return Ok(());
+        let next = p
+            .checked_add(46)
+            .and_then(|n| n.checked_add(name_len))
+            .and_then(|n| n.checked_add(extra_len))
+            .and_then(|n| n.checked_add(comment_len))
+            .ok_or_else(|| {
+                ZipError::InvalidContainer("central-directory record overflow".to_string())
+            })?;
+        if next > cd_end {
+            return Err(ZipError::InvalidContainer(format!(
+                "truncated central-directory record {actual_entries}"
+            )));
         }
         let name = &bytes[p + 46..p + 46 + name_len];
         if !seen.insert(name) {
@@ -211,7 +256,16 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
                 String::from_utf8_lossy(name).into_owned(),
             ));
         }
-        p += 46 + name_len + extra_len + comment_len;
+        actual_entries += 1;
+        if actual_entries > MAX_ENTRIES {
+            return Err(ZipError::TooManyEntries(actual_entries));
+        }
+        p = next;
+    }
+    if actual_entries != total_entries {
+        return Err(ZipError::InvalidContainer(format!(
+            "central-directory entry count mismatch (EOCD {total_entries}, actual {actual_entries})"
+        )));
     }
     Ok(())
 }
@@ -225,8 +279,8 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
 pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
     scan_duplicate_names(bytes)?;
     let cursor = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor)
-        .map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
+    let mut archive =
+        ZipArchive::new(cursor).map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
 
     let total_entries = archive.len();
     if total_entries > MAX_ENTRIES {
@@ -290,9 +344,7 @@ pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
         // global limit on what we actually accepted.
         let declared = entry.size();
         if declared > MAX_TOTAL_BYTES {
-            return Err(ZipError::TooLarge {
-                total: declared,
-            });
+            return Err(ZipError::TooLarge { total: declared });
         }
         const INITIAL_CAP_LIMIT: u64 = 16 * 1024 * 1024;
         let remaining = MAX_TOTAL_BYTES.saturating_sub(total_bytes);
@@ -455,7 +507,8 @@ mod tests {
         let count = MAX_ENTRIES + 1;
         for i in 0..count {
             // Fixed-width name keeps the central directory predictable.
-            zw.start_file(format!("e/{i:08}.bin"), opts).expect("start_file");
+            zw.start_file(format!("e/{i:08}.bin"), opts)
+                .expect("start_file");
         }
         let bytes = zw.finish().expect("finish").into_inner();
 
@@ -473,10 +526,8 @@ mod tests {
         // CD entries with the same name point at the same local header.
         let base = make_zip(&[("program.md", b"# first\n", CompressionMethod::Stored)]);
         let eocd = base.len() - 22; // no archive comment
-        let cd_size =
-            u32::from_le_bytes(base[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
-        let cd_offset =
-            u32::from_le_bytes(base[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+        let cd_size = u32::from_le_bytes(base[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
+        let cd_offset = u32::from_le_bytes(base[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
 
         let mut forged = Vec::new();
         forged.extend_from_slice(&base[..cd_offset]); // local records
@@ -493,6 +544,40 @@ mod tests {
             ZipError::DuplicateEntry(name) => assert_eq!(name, "program.md"),
             other => panic!("expected DuplicateEntry, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_understated_central_directory_count() {
+        let mut bytes = make_zip(&[
+            ("a.txt", b"a", CompressionMethod::Stored),
+            ("b.txt", b"b", CompressionMethod::Stored),
+        ]);
+        let eocd = bytes.len() - 22;
+        bytes[eocd + 8..eocd + 10].copy_from_slice(&1u16.to_le_bytes());
+        bytes[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
+
+        let err = unpack_zip(&bytes).expect_err("must reject understated count");
+        assert!(
+            err.to_string().contains("entry count mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_later_eocd_signature_hidden_in_comment() {
+        let mut bytes = make_zip(&[("a.txt", b"a", CompressionMethod::Stored)]);
+        let eocd = bytes.len() - 22;
+        let trailing_signature = EOCD_SIG.to_le_bytes();
+        bytes[eocd + 20..eocd + 22]
+            .copy_from_slice(&(trailing_signature.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&trailing_signature);
+
+        let err = unpack_zip(&bytes).expect_err("must reject later EOCD signature");
+        assert!(
+            err.to_string()
+                .contains("multiple end-of-central-directory records"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -562,15 +647,9 @@ mod tests {
         // Drive-letter pattern requires *exactly* `[A-Za-z]:[\\/]`. A bare
         // colon is not a drive-letter case and should pass.
         assert!(check_safe_path("not:absolute").is_ok());
-        assert_eq!(
-            check_safe_path("a/../b"),
-            Err(PathReason::ParentTraversal)
-        );
+        assert_eq!(check_safe_path("a/../b"), Err(PathReason::ParentTraversal));
         // Backslash is also a separator on Windows ZIPs in the wild; the
         // predicate must catch parent traversal across either.
-        assert_eq!(
-            check_safe_path(r"a\..\b"),
-            Err(PathReason::ParentTraversal)
-        );
+        assert_eq!(check_safe_path(r"a\..\b"), Err(PathReason::ParentTraversal));
     }
 }
