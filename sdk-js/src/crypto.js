@@ -75,8 +75,60 @@ export function ed25519Sign(privateKeyRaw, message) {
   return nodeSign(null, Buffer.from(message), key);
 }
 
+// Ed25519 group/field constants used for pre-verification validation.
+const ED25519_P = (1n << 255n) - 19n;
+const ED25519_L = (1n << 252n) + 27742317777372353535851937790883648493n;
+
+// The 8 points whose order divides 8, as canonical y encodings with the
+// x-sign bit cleared: the identity (y=1), the two order-4 points (y=0),
+// the order-2 point (y=p-1), and the four order-8 points (two y values,
+// two x signs each). Masking the sign bit means each entry covers both
+// x signs.
+const ED25519_SMALL_ORDER_Y = new Set([
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+]);
+
+function leToBigInt(bytes) {
+  let out = 0n;
+  for (let i = bytes.length - 1; i >= 0; i -= 1) out = (out << 8n) | BigInt(bytes[i]);
+  return out;
+}
+
+/**
+ * True when a 32-byte Ed25519 public key is canonically encoded and is not
+ * one of the 8 small-subgroup points.
+ *
+ * OpenSSL (and therefore node:crypto) accepts both non-canonical encodings
+ * (masked y >= p) and small-order keys. A small-order key is a
+ * no-private-key forgery: take `edff…ff7f`, send a 64-byte all-zero
+ * signature, and vary any signed field until the cofactored verification
+ * equation happens to hold (~1 message in 4).
+ */
+export function ed25519PublicKeyIsAcceptable(publicKeyRaw) {
+  if (!publicKeyRaw || publicKeyRaw.length !== 32) return false;
+  const masked = Buffer.from(publicKeyRaw);
+  masked[31] &= 0x7f;
+  if (leToBigInt(masked) >= ED25519_P) return false;
+  return !ED25519_SMALL_ORDER_Y.has(masked.toString("hex"));
+}
+
+/**
+ * True when a 64-byte signature's S component is canonically reduced
+ * (S < L), as RFC 8032 §5.1.7 requires.
+ */
+export function ed25519SignatureSIsReduced(signature) {
+  if (!signature || signature.length !== 64) return false;
+  return leToBigInt(Buffer.from(signature).subarray(32)) < ED25519_L;
+}
+
 export function ed25519Verify(publicKeyRaw, message, signature) {
   try {
+    if (!ed25519PublicKeyIsAcceptable(publicKeyRaw)) return false;
+    if (!ed25519SignatureSIsReduced(signature)) return false;
     const key = ed25519PublicFromRaw(publicKeyRaw);
     return nodeVerify(null, Buffer.from(message), key, Buffer.from(signature));
   } catch {
