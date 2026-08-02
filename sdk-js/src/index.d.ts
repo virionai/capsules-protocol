@@ -9,6 +9,10 @@
 export type KeyInput = string | Uint8Array;
 
 export interface Ed25519KeyPair {
+  /** Curve tag: lets the SDK reject an Ed25519 keypair passed where an
+   *  X25519 one is required (and vice versa) — the two shapes are
+   *  otherwise identical, and the mix-up seals unrecoverable content. */
+  curve: "ed25519";
   publicKey: Uint8Array;
   privateKey: Uint8Array;
   publicKeyHex: string;
@@ -16,6 +20,8 @@ export interface Ed25519KeyPair {
 }
 
 export interface X25519KeyPair {
+  /** Curve tag — see Ed25519KeyPair.curve. */
+  curve: "x25519";
   publicKey: Uint8Array;
   privateKey: Uint8Array;
   publicKeyHex: string;

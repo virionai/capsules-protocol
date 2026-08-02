@@ -38,6 +38,12 @@ export function generateEd25519() {
   const pubRaw = ed25519PublicToRaw(publicKey);
   const privRaw = ed25519PrivateToRaw(privateKey);
   return {
+    // Curve tag (finding A04). Ed25519 and X25519 keypair objects are
+    // otherwise structurally identical, and X25519 ECDH "succeeds"
+    // against an Ed25519 public key — sealing content no one can ever
+    // decrypt. The tag lets toSigner/toRecipient reject the mix-up at
+    // the API boundary instead.
+    curve: "ed25519",
     publicKey: pubRaw,
     privateKey: privRaw,
     publicKeyHex: bytesToHex(pubRaw),
@@ -154,6 +160,8 @@ export function generateX25519() {
   const pubRaw = x25519PublicToRaw(publicKey);
   const privRaw = x25519PrivateToRaw(privateKey);
   return {
+    // Curve tag — see generateEd25519.
+    curve: "x25519",
     publicKey: pubRaw,
     privateKey: privRaw,
     publicKeyHex: bytesToHex(pubRaw),

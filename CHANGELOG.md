@@ -11,6 +11,36 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **Typed key material: keypair objects now carry a `curve` tag, and
+  the sdk-js/sdk-py API boundary rejects cross-curve key confusion
+  (A04).** `Ed25519KeyPair` and `X25519KeyPair` objects are
+  structurally identical, and this changelog itself advertised the
+  reachable hazard ("keypair objects work as-is as … recipients"):
+  passing an Ed25519 keypair where an X25519 recipient is required was
+  accepted silently — X25519 clamps and accepts any 32-byte
+  u-coordinate, ECDH "succeeds", and the sealed content is
+  unrecoverable by the Ed25519 holder, with nothing erroring until a
+  decryption attempt potentially years later. Seal-time round-trip
+  verification cannot catch it (the sealer holds no recipient private
+  key) and 400/400 sampled X25519 public keys parsed as valid Ed25519
+  points, so the only fix is typing at the boundary:
+  `generateEd25519()`/`generate_ed25519()` now tag `curve: "ed25519"`,
+  `generateX25519()`/`generate_x25519()` tag `curve: "x25519"`,
+  `toSigner`/`to_signer` reject an object tagged with the wrong curve,
+  and `toRecipient`/`to_recipient` additionally reject any
+  keypair-shaped object (private key material present) with NO tag —
+  the branded path is the only object path for keypairs. HONEST
+  LIMITS: raw hex, raw bytes, and public-key-only `{publicKey}` inputs
+  remain untagged and accepted (indistinguishable by construction —
+  the caller extracting bytes asserts the curve), and untagged
+  `{role, publicKey, privateKey}` signer dicts remain accepted because
+  a cross-curve signing mistake fails loudly at first verification
+  rather than silently. sdk-swift is not exposed on the object path
+  (nominal `Curve25519.Signing` vs `.KeyAgreement` key types cannot be
+  interchanged; its `Recipient` takes raw `Data`); sdk-kotlin core has
+  no encryption path. Pinned by `sdk-js/test/key-curve.test.js` and
+  `sdk-py/tests/test_key_curve.py`.
+
 - **The semantic-binding layer: manifest claims are now tied to the
   signed envelope, the chain, and the files in every lane.**
   `capsule_id` is derived from `manifest.first_event_hash`, but no lane
