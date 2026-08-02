@@ -194,10 +194,16 @@ public enum CapsuleVerifier {
             record("capsule_id", false, "missing fields")
         }
 
-        // manifest hash
-        let mh = Manifest.hash(parsed.manifest)
-        if let stored = lookupString(parsed.envelope, ["manifest_hash"]) {
-            record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
+        // manifest hash. Canonicalization can refuse the manifest (e.g. an
+        // integer outside ±(2^53 − 1)) — that is a fail-closed check
+        // failure, never a trap.
+        do {
+            let mh = try Manifest.hash(parsed.manifest)
+            if let stored = lookupString(parsed.envelope, ["manifest_hash"]) {
+                record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
+            }
+        } catch {
+            record("manifest_hash", false, "\(error)")
         }
 
         // content_index
@@ -205,12 +211,16 @@ public enum CapsuleVerifier {
         for (path, data) in parsed.files where !Manifest.CONTENT_INDEX_EXCLUDED.contains(path) {
             indexInputs.append((path, data))
         }
-        let ci = Manifest.buildContentIndex(indexInputs)
-        if let storedMf = lookupString(parsed.manifest, ["content_index", "index_hash"]),
-           let storedEnv = lookupString(parsed.envelope, ["content_index_hash"]) {
-            record("content_index_hash",
-                   ci.indexHash == storedMf && ci.indexHash == storedEnv,
-                   String(ci.indexHash.prefix(12)) + "…")
+        do {
+            let ci = try Manifest.buildContentIndex(indexInputs)
+            if let storedMf = lookupString(parsed.manifest, ["content_index", "index_hash"]),
+               let storedEnv = lookupString(parsed.envelope, ["content_index_hash"]) {
+                record("content_index_hash",
+                       ci.indexHash == storedMf && ci.indexHash == storedEnv,
+                       String(ci.indexHash.prefix(12)) + "…")
+            }
+        } catch {
+            record("content_index_hash", false, "\(error)")
         }
 
         if parsed.isEncrypted {

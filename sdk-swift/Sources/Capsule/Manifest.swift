@@ -28,7 +28,7 @@ public enum Manifest {
 
     /// Builds content_index over a sorted list of (path, bytes), excluding
     /// the three reserved files.
-    public static func buildContentIndex(_ files: [(path: String, data: Data)]) -> ContentIndex {
+    public static func buildContentIndex(_ files: [(path: String, data: Data)]) throws -> ContentIndex {
         var entries: [(path: String, sha256: String)] = []
         for (path, data) in files where !CONTENT_INDEX_EXCLUDED.contains(path) {
             entries.append((path, Hash.sha256Hex(data)))
@@ -37,7 +37,7 @@ public enum Manifest {
         let arr = JCSValue.array(entries.map { (p, h) in
             .object([("path", .string(p)), ("sha256", .string(h))])
         })
-        let indexHash = Hash.sha256Hex(JCS.bytes(arr))
+        let indexHash = Hash.sha256Hex(try JCS.bytes(arr))
         return ContentIndex(files: entries, indexHash: indexHash)
     }
 
@@ -103,11 +103,11 @@ public enum Manifest {
         ])
     }
 
-    public static func hash(_ manifest: JCSValue) -> String {
-        Hash.sha256Hex(JCS.bytes(manifest))
+    public static func hash(_ manifest: JCSValue) throws -> String {
+        Hash.sha256Hex(try JCS.bytes(manifest))
     }
 
-    public static func bytes(_ manifest: JCSValue) -> Data {
-        JCS.bytes(manifest)
+    public static func bytes(_ manifest: JCSValue) throws -> Data {
+        try JCS.bytes(manifest)
     }
 }

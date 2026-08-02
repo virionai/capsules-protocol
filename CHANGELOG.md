@@ -82,6 +82,15 @@ incompatible wire changes ship as `0.7`).
   1 GiB total) are enforced on the read path rather than only in `pack`.
   Malformed bytes now surface as `CapsuleError.malformed` / `ok=false`,
   matching the JS, Python, and Rust lanes.
+- **Swift JCS canonicalization no longer kills the process on
+  out-of-range numbers.** `JCS.canonical` used `precondition` for
+  integers outside ±(2^53 − 1) and non-finite doubles, both reachable
+  from `CapsuleVerifier.verify` on attacker-controlled manifest,
+  envelope, and chain bytes (a manifest of `{"id":9007199254740993}`
+  was a process kill). They now throw `CapsuleError.malformed` and the
+  verifier reports the affected checks as failed — the catchable
+  behaviour Python (`ValueError`) and Kotlin
+  (`IllegalArgumentException`) already had.
 
 ## v0.6.0-prototype.1 — 2026-05-12 (unreleased)
 

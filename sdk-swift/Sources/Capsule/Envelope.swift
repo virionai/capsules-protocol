@@ -45,19 +45,21 @@ public enum Envelope {
     }
 
     /// Returns JCS bytes of the envelope minus the `signers` field.
-    static func canonicalPayload(_ envelope: JCSValue) -> Data {
+    /// Throws when the envelope cannot be canonicalized (attacker bytes
+    /// can contain integers outside ±(2^53 − 1)) or is not an object.
+    static func canonicalPayload(_ envelope: JCSValue) throws -> Data {
         guard case .object(let pairs) = envelope else {
-            preconditionFailure("envelope is not an object")
+            throw CapsuleError.malformed("envelope is not an object")
         }
         let withoutSigners = pairs.filter { $0.0 != "signers" }
-        return JCS.bytes(.object(withoutSigners))
+        return try JCS.bytes(.object(withoutSigners))
     }
 
     /// `domain_sep || canonical(envelope_minus_signers)` — the signing input.
-    static func signingInput(_ envelope: JCSValue, role: String) -> Data {
+    static func signingInput(_ envelope: JCSValue, role: String) throws -> Data {
         precondition(!role.isEmpty)
         let domain = Data("capsule-provenance-v\(VERSION):\(role)\0".utf8)
-        return Bytes.concat(domain, canonicalPayload(envelope))
+        return Bytes.concat(domain, try canonicalPayload(envelope))
     }
 
     public static func sign(_ envelope: inout JCSValue, signers: [Signer]) throws {
@@ -70,7 +72,7 @@ public enum Envelope {
 
         var signed: [JCSValue] = []
         for s in signers {
-            let input = signingInput(envelope, role: s.role)
+            let input = try signingInput(envelope, role: s.role)
             let sig = try s.keyPair.sign(input)
             signed.append(.object([
                 ("role", .string(s.role)),
@@ -122,7 +124,14 @@ public enum Envelope {
                 out.append((role, pkHex, false))
                 continue
             }
-            let input = signingInput(envelope, role: role)
+            // An envelope that cannot be canonicalized has no signing
+            // input — the signature cannot be valid. Fail closed, never
+            // trap: these bytes are attacker-controlled.
+            guard let input = try? signingInput(envelope, role: role) else {
+                allValid = false
+                out.append((role, pkHex, false))
+                continue
+            }
             let valid = Ed25519.verify(
                 publicKey: pkBytes,
                 message: input,

@@ -277,7 +277,7 @@ public enum CapsuleReader {
         guard let mfOrigPub = lookupString(outer.manifest, "originator", "public_key") else {
             throw CapsuleError.malformed("outer manifest missing originator.public_key")
         }
-        let aad = JCS.bytes(.object([
+        let aad = try JCS.bytes(.object([
             ("version", .string("0.6")),
             ("capsule_id", .string(envCapsuleId)),
             ("first_event_hash", .string(envFirstHash)),
@@ -335,7 +335,9 @@ public enum CapsuleReader {
             else { return false }
             if i == 0 && prevHex != Bytes.toHex(Chain.GENESIS_PREV) { return false }
             if i > 0 && prevHex != Bytes.toHex(prev) { return false }
-            let canonical = JCS.bytes(.object(withoutHash))
+            // An event that cannot be canonicalized (integer outside
+            // ±(2^53 − 1)) has no interoperable hash — fail closed.
+            guard let canonical = try? JCS.bytes(.object(withoutHash)) else { return false }
             let h = Hash.sha256(Bytes.concat(prev, canonical))
             if Bytes.toHex(h) != storedHash { return false }
             prev = h
