@@ -57,12 +57,38 @@ class CapsuleBuilder(
     fun setAgents(md: String) = apply { this.agentsMd = md }
     fun setParticipants(ps: List<Participant>) = apply { this.participants = ps }
 
+    /**
+     * Append a chain event. seq, event_id, prev_hash, and hash are
+     * computed at seal time.
+     *
+     * Throws [IllegalArgumentException] (spec/chain.md) when [kind] is
+     * outside the closed enum (always), or when the builder declares a
+     * non-empty participant set and [actor] is neither `"system:host"`
+     * nor a declared actor id. The builder never auto-registers
+     * participants — declaring who may act is the caller's decision. A
+     * builder with NO declared participants accepts any actor: that
+     * capsule makes a visibly weaker claim (verifiers report the actor
+     * set as unbound).
+     */
     fun appendEvent(
         actor: String, kind: String, action: String, target: String,
         timestamp: String? = null,
         payload: JCSValue = JCSValue.Obj(emptyList()),
         untrustedPayloadFields: List<String> = emptyList(),
     ) = apply {
+        require(Chain.isValidEventKind(kind)) {
+            "event kind ${Chain.debugQuoted(kind)} is not one of " +
+                Chain.EVENT_KINDS.joinToString(", ")
+        }
+        require(
+            participants.isEmpty() ||
+                actor == Chain.HOST_ACTOR ||
+                participants.any { it.actorId == actor },
+        ) {
+            "event actor ${Chain.debugQuoted(actor)} is not a declared participant: " +
+                "call setParticipants(...) with actorId ${Chain.debugQuoted(actor)} " +
+                "before appendEvent (only \"system:host\" may appear without one)"
+        }
         bareEvents += BareEvent(
             actor = actor, kind = kind, action = action, target = target,
             timestamp = timestamp ?: createdAt,

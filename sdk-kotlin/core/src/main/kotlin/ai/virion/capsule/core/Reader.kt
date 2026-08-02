@@ -65,6 +65,20 @@ object CapsuleReader {
         return (cur as? JCSValue.Str)?.v
     }
 
+    /** Collect `manifest.participants[].actor_id` into a lookup set. */
+    fun participantActorIds(manifest: JCSValue): Set<String> {
+        val obj = manifest as? JCSValue.Obj ?: return emptySet()
+        val ps = obj.pairs.firstOrNull { it.first == "participants" }?.second
+        val arr = ps as? JCSValue.Arr ?: return emptySet()
+        val out = mutableSetOf<String>()
+        for (item in arr.items) {
+            val fields = (item as? JCSValue.Obj)?.pairs ?: continue
+            val id = (fields.firstOrNull { it.first == "actor_id" }?.second as? JCSValue.Str)?.v
+            if (id != null) out += id
+        }
+        return out
+    }
+
     /**
      * [parseJson] with the offending file named in the error, so a reader
      * rejection can be attributed to a specific document (mirrors the Rust

@@ -11,6 +11,49 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **The chain.md step-6 actor rule and the closed `kind` enum are now
+  enforced in all five lanes — with the actor rule conditioned on the
+  manifest's own claim.** Only verifier-rust implemented step 6
+  ("actor appears in manifest participants or is `system:host`"): the
+  JS `verifyChain` never even received the manifest, and sdk-py,
+  sdk-swift, and sdk-kotlin had no check at all, so a capsule whose
+  audit-trail events were attributed to actors absent from the audited
+  participant set — the audit-spoofing shape the rule exists to catch —
+  verified `ok=true` with a trusted signer in four lanes while Rust
+  rejected it. The settled rule, normative in `spec/chain.md`: a
+  NON-EMPTY `participants[]` binds every event actor to the declared
+  set or `system:host`, fail-closed in every verifier; an EMPTY
+  `participants[]` is the manifest making no claim about who acted —
+  a weaker claim made honestly (template / open-publication tiers) —
+  so verification succeeds and every verifier REPORTS the unbound
+  actor set machine-readably (`actorSet`/`actor_set`/`actorSetBound` =
+  unbound, plus a note), mirroring the signer-set "presence binds,
+  absence reports" contract. Conditioning on the list is safe because
+  `participants[]` is covered by `manifest_hash` inside the signed
+  payload — an attacker cannot empty it without breaking every
+  envelope signature. Rust's previously unconditional check is
+  relaxed accordingly. Separately, `kind` is a CLOSED enum
+  (`decision | observation | mutation | session | checkpoint`) in
+  every tier — no lane validated it — because a custom kind is not a
+  weaker claim, it is unreadable to the foreign LLM reader; all five
+  verifiers now reject unknown kinds per event (new verification step
+  7). Both reference builders (`appendEvent` / `append_event`, plus
+  the Swift and Kotlin builders) reject at append time: unknown kinds
+  always, undeclared actors whenever participants are declared —
+  never by auto-registering the actor (chain.md gains a "Writer
+  obligations" section; Swift's `appendEvent` is now throwing). Every
+  lane emits the Rust verifier's per-event message shape verbatim.
+  New conformance collection `spec/vectors/chain-rules/`
+  (deterministic generator
+  `sdk-js/tools/generate-chain-rule-fixtures.mjs`, `--check` wired
+  into the conformance harness): `actor-not-participant` and
+  `unknown-kind` MUST fail in the chain area, and the
+  `unbound-actors` positive control (empty participants, named actor)
+  MUST verify with the unbound report — pinned machine-readably via
+  the new `actor_set_bound` registry key, consumed by the JS, Python,
+  Rust, Swift, and Kotlin registry lanes. The CLI reports `actor_set`
+  in `--json` and the human checklist. Wire format unchanged.
+
 - **Empty chains are legal — and then the anchors must be null.** A
   plain capsule's only envelope-to-chain binding is the
   `envelope.first_event_hash` / `entry_hash` comparison against the

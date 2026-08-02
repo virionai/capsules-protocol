@@ -8,6 +8,8 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - signer-set/vectors.json         (signer-set binding outcomes)
+//   - chain-rules/vectors.json        (per-event actor + kind field rules)
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //
 // The registry's `reason` categories are normative; the substring table
@@ -64,6 +66,32 @@ class SpecRegistryTest {
         val allowlist = registryAllowlist(doc, base)
         val vectors = doc.getAsJsonArray("vectors")
         assertTrue(vectors.size() > 0, "signer-set registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
+    /**
+     * chain.md per-event field rules (verification steps 6 and 7). The
+     * actor rule is conditional on the manifest's own claim: a non-empty
+     * participants[] binds every event actor to the declared set or
+     * system:host (fail-closed); an empty one verifies with
+     * actorSetBound=false plus a note — absence is a weaker claim made
+     * honestly. The kind enum is closed in every tier. All three
+     * fixtures are cryptographically well-formed, so only these rules
+     * decide them.
+     */
+    @Test
+    fun chainRulesRegistryOutcomes() {
+        val file = File(vectorsDir(), "chain-rules/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "chain-rules registry is empty")
         for (entry in vectors) {
             val v = entry.asJsonObject
             val name = v.get("name").asString
@@ -201,6 +229,25 @@ class SpecRegistryTest {
             assertEquals(
                 expected.get("signer_set_bound").asBoolean, result.signerSetBound,
                 "$name: signerSetBound mismatch",
+            )
+        }
+        // Actor-set binding (chain.md step 6) follows the signer-set
+        // contract: a non-empty manifest.participants[] binds the chain's
+        // actors; an empty one must be REPORTED as unbound, never
+        // rejected.
+        if (expected.has("actor_set_bound")) {
+            assertEquals(
+                expected.get("actor_set_bound").asBoolean, result.actorSetBound,
+                "$name: actorSetBound mismatch",
+            )
+        }
+        // Honest-reporting pin: some rules require the verifier to REPORT
+        // a weaker claim machine-readably, not just to pass/fail.
+        if (expected.has("notes_includes")) {
+            val needle = expected.get("notes_includes").asString
+            assertTrue(
+                result.notes.any { it.contains(needle) },
+                "$name: expected a note containing $needle; got ${result.notes}",
             )
         }
     }

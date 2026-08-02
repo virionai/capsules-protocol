@@ -27,6 +27,16 @@ data class CapsuleVerification(
      * assurance.
      */
     val signerSetBound: Boolean,
+    /**
+     * Actor-set binding (chain.md step 6): the same claim shape as
+     * [signerSetBound]. `true` means `manifest.participants[]` is
+     * non-empty and every chain event actor must be a member or the
+     * literal `system:host` — failures surface in the `chain` check,
+     * fail-closed. `false` means the manifest declares no participants,
+     * i.e. no claim about who acted: verification can still succeed at a
+     * visibly lower assurance, reported in [notes].
+     */
+    val actorSetBound: Boolean = false,
     val notes: List<String>,
 ) {
     data class SignerCheck(
@@ -53,7 +63,7 @@ object CapsuleVerifier {
                 ok = false, level = "L2",
                 checks = listOf(VerifyCheck("parse", false, e.message ?: "$e")),
                 signers = emptyList(), trustedSignerCount = 0,
-                signerSetBound = false, notes = notes,
+                signerSetBound = false, actorSetBound = false, notes = notes,
             )
         }
         rec("zip_parse", true, "${parsed.files.size} files")
@@ -116,7 +126,19 @@ object CapsuleVerifier {
             indexHashesMatch && indexProblems.isEmpty(),
             (listOf(ci.indexHash.take(12) + "…") + indexProblems).joinToString("; "))
 
-        rec("chain", verifyChain(parsed.events), "${parsed.events.size} events")
+        // Chain integrity: hash linkage plus the spec/chain.md per-event
+        // actor (step 6, conditional on declared participants) and kind
+        // rules.
+        val chainErrors = verifyChain(
+            parsed.events,
+            CapsuleReader.participantActorIds(parsed.manifest),
+        )
+        rec(
+            "chain",
+            chainErrors.isEmpty(),
+            if (chainErrors.isEmpty()) "${parsed.events.size} events"
+            else chainErrors.joinToString("; "),
+        )
 
         val firstEvHash = parsed.events.firstOrNull()?.let {
             CapsuleReader.lookupString(it, listOf("hash"))
@@ -164,6 +186,19 @@ object CapsuleVerifier {
             notes += "manifest.signer_commitment absent: the signer set is not bound by the seal"
         }
 
+        // Actor-set binding: PRESENCE BINDS, ABSENCE REPORTS — the same
+        // contract as signer_commitment. A non-empty
+        // manifest.participants[] bound the chain walk above
+        // (fail-closed); an empty one is the manifest declining to name
+        // who acted, which verifies at a visibly lower assurance. Safe to
+        // condition on because participants is covered by manifest_hash
+        // inside the signed payload.
+        val actorSetBound = CapsuleReader.participantActorIds(parsed.manifest).isNotEmpty()
+        if (!actorSetBound) {
+            notes += "manifest.participants empty: chain actors are not bound to " +
+                "a declared participant set"
+        }
+
         // Originator binding (invariant): the manifest names an originator
         // key — that key must actually have sealed the capsule with a valid
         // envelope signature under role "originator".
@@ -188,6 +223,7 @@ object CapsuleVerifier {
             trustedSignerCount = signers.filter { it.trusted }
                 .map { it.publicKey.lowercase() }.toSet().size,
             signerSetBound = signerSetBound,
+            actorSetBound = actorSetBound,
             notes = notes,
         )
     }
@@ -283,26 +319,78 @@ object CapsuleVerifier {
         return errors
     }
 
-    private fun verifyChain(events: List<JCSValue>): Boolean {
+    /**
+     * Walk the chain: hash linkage plus the spec/chain.md per-event field
+     * rules (verification steps 6 and 7). Returns one message per
+     * failure — empty means the chain verifies.
+     *
+     * The step-6 actor rule is CONDITIONAL on the manifest's own claim: a
+     * NON-EMPTY [participants] set binds every event actor to the
+     * declared set (or the literal `system:host`), fail-closed. An EMPTY
+     * set is the manifest making no claim about who acted — the walk
+     * accepts any actor then, and the caller reports the reduced
+     * assurance. The `kind` enum is enforced unconditionally.
+     */
+    internal fun verifyChain(
+        events: List<JCSValue>,
+        participants: Set<String> = emptySet(),
+    ): List<String> {
+        val errors = mutableListOf<String>()
         var prev = Chain.GENESIS_PREV
         events.forEachIndexed { i, e ->
-            val obj = e as? JCSValue.Obj ?: return false
+            val seq = i + 1
+            val obj = e as? JCSValue.Obj
+            if (obj == null) {
+                errors += "seq $seq: event is not a JSON object"
+                return@forEachIndexed
+            }
+            fun field(key: String): String? =
+                (obj.pairs.firstOrNull { it.first == key }?.second as? JCSValue.Str)?.v
+
+            // spec/chain.md step 6 — when the manifest declares
+            // participants, the actor must be one of them or the host.
+            val actor = field("actor")
+            if (participants.isNotEmpty() &&
+                (actor == null || (actor != Chain.HOST_ACTOR && actor !in participants))
+            ) {
+                errors += "seq $seq: actor ${Chain.debugQuoted(actor)} " +
+                    "not in manifest.participants and not system:host"
+            }
+            // spec/chain.md "Field rules" — `kind` is a closed enum.
+            val kind = field("kind")
+            if (!Chain.isValidEventKind(kind)) {
+                errors += "seq $seq: kind ${Chain.debugQuoted(kind)} is not one of " +
+                    Chain.EVENT_KINDS.joinToString(", ")
+            }
+
             var stored: String? = null
             val withoutHash = mutableListOf<Pair<String, JCSValue>>()
             for ((k, v) in obj.pairs) {
                 if (k == "hash" && v is JCSValue.Str) stored = v.v
                 else withoutHash += k to v
             }
-            val storedHash = stored ?: return false
-            val prevHex = (obj.pairs.firstOrNull { it.first == "prev_hash" }?.second
-                as? JCSValue.Str)?.v ?: return false
-            if (i == 0 && prevHex != CapsuleCrypto.bytesToHex(Chain.GENESIS_PREV)) return false
-            if (i > 0 && prevHex != CapsuleCrypto.bytesToHex(prev)) return false
+            val storedHash = stored
+            if (storedHash == null) {
+                errors += "seq $seq: hash missing or wrong length"
+                return@forEachIndexed
+            }
+            val prevHex = field("prev_hash")
+            if (prevHex == null) {
+                errors += "seq $seq: prev_hash missing or wrong length"
+                return@forEachIndexed
+            }
+            val expectedPrev = CapsuleCrypto.bytesToHex(prev)
+            if (prevHex != expectedPrev) {
+                errors += "seq $seq: prev_hash mismatch: got $prevHex, expected $expectedPrev"
+            }
             val canonical = JCS.bytes(JCSValue.Obj(withoutHash))
             val h = CapsuleCrypto.sha256(CapsuleCrypto.concat(prev, canonical))
-            if (CapsuleCrypto.bytesToHex(h) != storedHash) return false
+            val recomputed = CapsuleCrypto.bytesToHex(h)
+            if (recomputed != storedHash) {
+                errors += "seq $seq: hash mismatch: stored $storedHash, recomputed $recomputed"
+            }
             prev = h
         }
-        return true
+        return errors
     }
 }

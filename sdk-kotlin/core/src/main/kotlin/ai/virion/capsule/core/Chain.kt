@@ -30,6 +30,43 @@ data class BuiltEvent(
 object Chain {
     val GENESIS_PREV: ByteArray = ByteArray(32)
 
+    /**
+     * The closed `kind` enum from spec/chain.md "Field rules". Readers
+     * reject unknown kinds and the builder refuses to append them — in
+     * every tier, because a custom kind is not a weaker claim, it is
+     * unreadable to the foreign LLM reader the format serves.
+     */
+    val EVENT_KINDS: List<String> =
+        listOf("decision", "observation", "mutation", "session", "checkpoint")
+
+    /**
+     * The one actor a chain event may always name without a matching
+     * manifest participant — backstop events emitted by the host runtime.
+     */
+    const val HOST_ACTOR: String = "system:host"
+
+    /** True when [kind] is one of the five values spec/chain.md allows. */
+    fun isValidEventKind(kind: String?): Boolean = kind != null && kind in EVENT_KINDS
+
+    /**
+     * Render a string the way Rust's `{:?}` renders a `String` (and JS's
+     * `JSON.stringify` a plain-ASCII one), so all five lanes emit
+     * byte-identical verifier messages. `null` renders as `null` (a
+     * missing field).
+     */
+    fun debugQuoted(s: String?): String {
+        if (s == null) return "null"
+        val sb = StringBuilder("\"")
+        for (ch in s) {
+            when (ch) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                else -> sb.append(ch)
+            }
+        }
+        return sb.append('"').toString()
+    }
+
     fun build(bare: List<BareEvent>): List<BuiltEvent> {
         var prev = GENESIS_PREV
         val out = mutableListOf<BuiltEvent>()
