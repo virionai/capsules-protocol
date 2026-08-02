@@ -14,6 +14,7 @@ import {
   verifyCapsule,
   generateEd25519,
 } from "../src/index.js";
+import { verifyChain } from "../src/chain.js";
 import { packZip, unpackZip } from "../src/zip.js";
 
 const TS = "2026-05-07T12:00:00Z";
@@ -113,5 +114,45 @@ test("CapsuleReader rejects a manifest that is not a JSON object", async () => {
   await assert.rejects(
     () => CapsuleReader.fromBytes(tampered),
     /manifest\.json is not a JSON object/,
+  );
+});
+
+test("verifyChain reports a non-canonical stored hash instead of throwing", () => {
+  const result = verifyChain([
+    { seq: 1, prev_hash: "0".repeat(64), hash: "A".repeat(64) },
+  ]);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((e) => /hash is not canonical lowercase hex/.test(e.message)),
+    `expected a canonical-hex error, got: ${JSON.stringify(result.errors)}`,
+  );
+});
+
+test("verifyChain reports a non-object event instead of throwing", () => {
+  const result = verifyChain([null]);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, [{ seq: 1, message: "event is not a JSON object" }]);
+});
+
+test("verifyCapsule fails closed on an uppercase stored event hash", async () => {
+  const { bytes, ed } = await sealedCapsule();
+  const tampered = await repack(bytes, (files) => {
+    const lines = Buffer.from(files.get("chain/events.jsonl"))
+      .toString("utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
+    const first = JSON.parse(lines[0]);
+    first.hash = first.hash.toUpperCase();
+    files.set(
+      "chain/events.jsonl",
+      Buffer.from([JSON.stringify(first), ...lines.slice(1)].join("\n") + "\n", "utf8"),
+    );
+  });
+  const result = await verifyCapsule(tampered, { allowlist: [ed.publicKeyHex] });
+  assert.equal(result.ok, false);
+  assert.equal(result.chain.ok, false);
+  assert.ok(
+    result.chain.errors.some((e) => /hash is not canonical lowercase hex/.test(e.message)),
+    `expected a canonical-hex chain error, got: ${JSON.stringify(result.chain.errors)}`,
   );
 });

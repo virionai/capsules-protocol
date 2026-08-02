@@ -4,6 +4,11 @@ import { bytesToHex, concatBytes, hexToBytes, jcs, sha256 } from "./canonical.js
 
 const GENESIS_PREV = Buffer.alloc(32, 0);
 
+// Chain-bound hex is lowercase per spec/chain.md. verifyChain feeds a
+// stored hash straight into hexToBytes to seed the next link, so the
+// canonical-form check has to happen before that call, not inside it.
+const HEX64 = /^[0-9a-f]{64}$/;
+
 /**
  * Compute event hash. event must NOT include "hash"; "prev_hash" must be hex.
  * Returns 32-byte Buffer.
@@ -74,12 +79,20 @@ export function verifyChain(events) {
   const errors = [];
   let prev = GENESIS_PREV;
   events.forEach((e, i) => {
+    if (e == null || typeof e !== "object" || Array.isArray(e)) {
+      errors.push({ seq: i + 1, message: "event is not a JSON object" });
+      return;
+    }
     const seq = e.seq ?? i + 1;
     if (e.seq !== i + 1) {
       errors.push({ seq, message: `seq ${e.seq} expected ${i + 1}` });
     }
     if (typeof e.prev_hash !== "string" || e.prev_hash.length !== 64) {
       errors.push({ seq, message: "prev_hash missing or wrong length" });
+      return;
+    }
+    if (!HEX64.test(e.prev_hash)) {
+      errors.push({ seq, message: "prev_hash is not canonical lowercase hex" });
       return;
     }
     const expectedPrev = bytesToHex(prev);
@@ -91,6 +104,10 @@ export function verifyChain(events) {
     }
     if (typeof e.hash !== "string" || e.hash.length !== 64) {
       errors.push({ seq, message: "hash missing or wrong length" });
+      return;
+    }
+    if (!HEX64.test(e.hash)) {
+      errors.push({ seq, message: "hash is not canonical lowercase hex" });
       return;
     }
     const { hash, ...rest } = e;
@@ -115,8 +132,9 @@ export function verifyChain(events) {
 
 export function firstAndEntryHash(events) {
   if (events.length === 0) throw new Error("chain is empty");
+  const hashOf = (e) => (e != null && typeof e === "object" ? e.hash : undefined);
   return {
-    firstEventHash: events[0].hash,
-    entryHash: events[events.length - 1].hash,
+    firstEventHash: hashOf(events[0]),
+    entryHash: hashOf(events[events.length - 1]),
   };
 }
