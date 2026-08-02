@@ -91,6 +91,23 @@ pub enum ZipError {
     #[error("archive too large: {total} bytes (max {MAX_TOTAL_BYTES})")]
     TooLarge { total: u64 },
 
+    /// The entry's shape makes ZIP readers disagree about whether it is a
+    /// directory: the DOS directory attribute is set on a name that does
+    /// not end in `/`, or a `/`-terminated name declares a nonzero size.
+    #[error("directory marker shape for {path:?}: {detail}")]
+    DirectoryMarkerShape { path: String, detail: String },
+
+    /// The entry's LOCAL file-header name differs from its
+    /// central-directory name, so readers that key on the local header see
+    /// a different entry set.
+    #[error("local/central name mismatch: central {central:?}, local {local:?}")]
+    LocalCentralNameMismatch { central: String, local: String },
+
+    /// The set of entries actually extracted does not match the set the
+    /// central-directory scan admitted.
+    #[error("entry set mismatch: {0}")]
+    EntrySetMismatch(String),
+
     /// I/O error from the inner reader.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -143,8 +160,12 @@ fn compression_method_code(method: CompressionMethod) -> u16 {
 
 const EOCD_SIG: u32 = 0x0605_4b50;
 const CDH_SIG: u32 = 0x0201_4b50;
+const LFH_SIG: u32 = 0x0403_4b50;
 const EOCD_MIN: usize = 22;
 const MAX_COMMENT: usize = 0xffff;
+/// DOS "directory" attribute, the low bit ZIP readers such as JSZip use to
+/// decide directory-ness instead of the entry name.
+const DOS_DIR_ATTR: u32 = 0x10;
 
 fn read_u16(bytes: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([bytes[at], bytes[at + 1]])
@@ -154,20 +175,46 @@ fn read_u32(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
-/// Detect duplicate entry names by walking the RAW central directory.
+/// Read the file name out of the LOCAL file header at `offset`.
+///
+/// The central directory is authoritative for the entry set, but some ZIP
+/// readers (JSZip in the JS reference lane) re-key entries by the name in
+/// the local header. Reading it here lets the scan require the two to
+/// agree, so no reader can be shown a different entry set.
+fn read_local_name(bytes: &[u8], offset: usize, index: usize) -> Result<Vec<u8>, ZipError> {
+    if offset.saturating_add(30) > bytes.len() || read_u32(bytes, offset) != LFH_SIG {
+        return Err(ZipError::InvalidContainer(format!(
+            "missing local file header for record {index}"
+        )));
+    }
+    let name_len = read_u16(bytes, offset + 26) as usize;
+    let end = offset + 30 + name_len;
+    if end > bytes.len() {
+        return Err(ZipError::InvalidContainer(format!(
+            "truncated local file header for record {index}"
+        )));
+    }
+    Ok(bytes[offset + 30..end].to_vec())
+}
+
+/// Walk the RAW central directory and return the authoritative set of
+/// non-directory entry names.
 ///
 /// The `zip` crate indexes entries by name and silently keeps one copy
 /// when an archive contains duplicates, so the duplicate never surfaces
 /// through `ZipArchive` — exactly the parser differential the spec must
-/// reject. This scan runs before the crate parses anything.
+/// reject. This scan runs before the crate parses anything, and it is also
+/// where the entry set is decided: `unpack_zip` asserts that what it
+/// extracted matches this set exactly.
 ///
-/// Structural errors (no EOCD, truncated directory) return `Ok(())` and
-/// are left for `ZipArchive` to report with its own diagnostics; ZIP64
+/// Structural errors (no EOCD, truncated directory) return an empty set
+/// and are left for `ZipArchive` to report with its own diagnostics; ZIP64
 /// sentinel values are rejected here because a capsule can never
 /// legitimately need ZIP64 under the entry/size caps.
-fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
+fn scan_central_directory(bytes: &[u8]) -> Result<std::collections::BTreeSet<String>, ZipError> {
+    let mut names = std::collections::BTreeSet::new();
     if bytes.len() < EOCD_MIN {
-        return Ok(());
+        return Ok(names);
     }
     let lowest = bytes.len().saturating_sub(EOCD_MIN + MAX_COMMENT);
     let mut eocd = None;
@@ -184,7 +231,7 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
         }
         p -= 1;
     }
-    let Some(eocd) = eocd else { return Ok(()) };
+    let Some(eocd) = eocd else { return Ok(names) };
     // Reject a later raw EOCD signature so this strictness scan cannot select
     // a different directory from an underlying parser that searches by the
     // last signature occurrence.
@@ -234,9 +281,13 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
                 "truncated or malformed central directory at record {actual_entries}"
             )));
         }
+        let compressed_size = read_u32(bytes, p + 20);
+        let uncompressed_size = read_u32(bytes, p + 24);
         let name_len = read_u16(bytes, p + 28) as usize;
         let extra_len = read_u16(bytes, p + 30) as usize;
         let comment_len = read_u16(bytes, p + 32) as usize;
+        let external_attrs = read_u32(bytes, p + 38);
+        let local_header_offset = read_u32(bytes, p + 42) as usize;
         let next = p
             .checked_add(46)
             .and_then(|n| n.checked_add(name_len))
@@ -256,6 +307,37 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
                 String::from_utf8_lossy(name).into_owned(),
             ));
         }
+        let name_str = String::from_utf8_lossy(name).into_owned();
+
+        // The central directory is authoritative. A reader that keys entries
+        // by the LOCAL header name sees a different set, so require equality.
+        let local_name = read_local_name(bytes, local_header_offset, actual_entries)?;
+        if local_name != name {
+            return Err(ZipError::LocalCentralNameMismatch {
+                central: name_str,
+                local: String::from_utf8_lossy(&local_name).into_owned(),
+            });
+        }
+
+        // Directory-ness must be unambiguous: readers disagree about whether
+        // it comes from the DOS attribute bit or the trailing `/`.
+        let is_dir_name = name_str.ends_with('/');
+        if external_attrs & DOS_DIR_ATTR != 0 && !is_dir_name {
+            return Err(ZipError::DirectoryMarkerShape {
+                path: name_str,
+                detail: "DOS directory attribute on a name that does not end in '/'".to_string(),
+            });
+        }
+        if is_dir_name && (uncompressed_size != 0 || compressed_size != 0) {
+            return Err(ZipError::DirectoryMarkerShape {
+                path: name_str,
+                detail: format!("directory name declares {uncompressed_size} content bytes"),
+            });
+        }
+        if !is_dir_name {
+            names.insert(name_str);
+        }
+
         actual_entries += 1;
         if actual_entries > MAX_ENTRIES {
             return Err(ZipError::TooManyEntries(actual_entries));
@@ -267,7 +349,7 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
             "central-directory entry count mismatch (EOCD {total_entries}, actual {actual_entries})"
         )));
     }
-    Ok(())
+    Ok(names)
 }
 
 /// Read every entry of a STORED-only ZIP archive, sorted by path.
@@ -277,7 +359,7 @@ fn scan_duplicate_names(bytes: &[u8]) -> Result<(), ZipError> {
 /// safety violation, compression mismatch, or limit overflow, an error is
 /// returned and no partial state escapes.
 pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
-    scan_duplicate_names(bytes)?;
+    let expected = scan_central_directory(bytes)?;
     let cursor = Cursor::new(bytes);
     let mut archive =
         ZipArchive::new(cursor).map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
@@ -296,11 +378,13 @@ pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
             .map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
         let name = entry.name().to_string();
 
-        // Skip pure directory markers: name ends with `/` and zero size.
-        // We deliberately do NOT use `entry.is_dir()` alone, since the JS
-        // reference treats directory-ness as a name suffix; pairing it with
-        // size==0 keeps the contract identical to JS.
-        if name.ends_with('/') && entry.size() == 0 {
+        // Skip directory markers by NAME only, matching the JS reference
+        // (sdk-js/src/zip.js assertStrictEntries). The old `&& entry.size()
+        // == 0` guard diverged from JS: a `/`-terminated entry carrying
+        // content was skipped there and read here. That shape is now
+        // rejected outright by `scan_central_directory`, so the name test
+        // alone is both sufficient and identical across the two lanes.
+        if name.ends_with('/') {
             continue;
         }
 
@@ -316,6 +400,14 @@ pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
 
         if let Err(reason) = check_safe_path(&name) {
             return Err(ZipError::UnsafePath { path: name, reason });
+        }
+
+        // The raw scan already decided the entry set; anything else the
+        // crate surfaces here is a parser disagreement.
+        if !expected.contains(&name) {
+            return Err(ZipError::EntrySetMismatch(format!(
+                "entry not in central directory: {name}"
+            )));
         }
 
         let method = entry.compression();
@@ -367,6 +459,21 @@ pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
         if out.insert(name.clone(), buf).is_some() {
             return Err(ZipError::DuplicateEntry(name));
         }
+    }
+
+    // Every central-directory file entry must have been extracted. A name
+    // the scan admitted but the crate dropped is the smuggling direction of
+    // the same parser differential.
+    if out.len() != expected.len() {
+        let missing: Vec<&str> = expected
+            .iter()
+            .filter(|n| !out.contains_key(n.as_str()))
+            .map(|n| n.as_str())
+            .collect();
+        return Err(ZipError::EntrySetMismatch(format!(
+            "central-directory entries not extracted: {}",
+            missing.join(", ")
+        )));
     }
 
     Ok(out)
@@ -629,6 +736,67 @@ mod tests {
             buf.capacity() <= 16 * 1024 * 1024,
             "capacity {} exceeds 16 MiB bound for a 4-byte entry",
             buf.capacity()
+        );
+    }
+
+    /// Locate `(cd_offset, cd_size)` in an archive with no trailing comment.
+    fn central_dir_span(bytes: &[u8]) -> (usize, usize) {
+        let eocd = bytes.len() - 22;
+        let cd_size = u32::from_le_bytes(bytes[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
+        let cd_offset = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+        (cd_offset, cd_size)
+    }
+
+    #[test]
+    fn rejects_dos_directory_attribute_on_file_name() {
+        // The zip crate's writer never sets the DOS directory bit on a plain
+        // file, so forge it: OR 0x10 into the first central record's external
+        // attributes. JSZip reports entry.dir == true for this shape and drops
+        // the entry; unzip(1) and python zipfile extract it as a 5-byte file.
+        let mut bytes = make_zip(&[("smuggled.md", b"hello", CompressionMethod::Stored)]);
+        let (cd_offset, _) = central_dir_span(&bytes);
+        bytes[cd_offset + 38] |= 0x10;
+
+        let err = unpack_zip(&bytes).expect_err("must reject DOS dir bit on a file name");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("directory marker shape") && msg.contains("smuggled.md"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_directory_marker_with_content() {
+        // Write "notesx" (6 bytes) then rename both copies of the name to
+        // "notes/" in place, so the archive keeps every offset valid while
+        // declaring a `/`-terminated entry that carries 5 content bytes.
+        let mut bytes = make_zip(&[("notesx", b"hello", CompressionMethod::Stored)]);
+        let (cd_offset, _) = central_dir_span(&bytes);
+        bytes[30..36].copy_from_slice(b"notes/");
+        bytes[cd_offset + 46..cd_offset + 52].copy_from_slice(b"notes/");
+
+        let err = unpack_zip(&bytes).expect_err("must reject a sized directory marker");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("directory marker shape") && msg.contains("5 content bytes"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_local_central_name_mismatch() {
+        // Same-length rename of the LOCAL header only, so all offsets stay
+        // valid: central says "notes.md", local says "evilx.md".
+        let mut bytes = make_zip(&[("notes.md", b"hello", CompressionMethod::Stored)]);
+        bytes[30..38].copy_from_slice(b"evilx.md");
+
+        let err = unpack_zip(&bytes).expect_err("must reject local/central name mismatch");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("local/central name mismatch")
+                && msg.contains("notes.md")
+                && msg.contains("evilx.md"),
+            "unexpected error: {msg}"
         );
     }
 

@@ -114,3 +114,61 @@ def test_unpack_rejects_duplicate_entry_names():
             zf.writestr("program.md", "# second\n")
     with pytest.raises(ValueError, match=r"duplicate entry: program\.md"):
         unpack_zip(buf.getvalue())
+
+
+def test_unpack_rejects_dos_directory_attribute_on_file_name():
+    # external_attr bit 0x10 is the DOS "directory" flag. Readers that decide
+    # directory-ness from it (JSZip) drop the entry; python zipfile and
+    # unzip(1) extract it as a real file. Reject the disagreement.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zi = zipfile.ZipInfo("smuggled.md")
+        zi.compress_type = zipfile.ZIP_STORED
+        zi.external_attr = 0x10
+        zf.writestr(zi, "# hidden payload\n")
+    with pytest.raises(
+        ValueError, match=r"directory attribute on non-directory name: smuggled\.md"
+    ):
+        unpack_zip(buf.getvalue())
+
+
+def test_unpack_rejects_directory_marker_with_content():
+    # The mirror image: a "/"-terminated name that carries content.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zi = zipfile.ZipInfo("notes/")
+        zi.compress_type = zipfile.ZIP_STORED
+        zi.external_attr = 0x10
+        zf.writestr(zi, "# hidden payload\n")
+    with pytest.raises(ValueError, match=r"directory marker with nonzero size: notes/"):
+        unpack_zip(buf.getvalue())
+
+
+def test_unpack_rejects_local_central_name_mismatch():
+    # Same-length rename of the LOCAL header only, so every offset stays
+    # valid: central says "notes.md", local says "evilx.md". Readers that
+    # key entries by the local header see a different entry set.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("notes.md", "hello")
+    raw = bytearray(buf.getvalue())
+    raw[30:38] = b"evilx.md"
+    with pytest.raises(
+        ValueError, match=r"local/central name mismatch: central 'notes.md', local 'evilx.md'"
+    ):
+        unpack_zip(bytes(raw))
+
+
+def test_unpack_rejects_trailing_bytes_after_eocd():
+    # F15 / C2 dependency: a single byte appended after the EOCD pushes EOF
+    # past the record's declared comment length. A reader that scans for the
+    # last EOCD signature (CPython's zipfile) still opens the archive; the
+    # raw central-directory scan must refuse it, raising a ValueError whose
+    # message contains the phrase "end-of-central-directory" so the
+    # trailing-bytes conformance vector can match on it.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("a.txt", "a")
+    forged = buf.getvalue() + b"\x00"
+    with pytest.raises(ValueError, match=r"end-of-central-directory"):
+        unpack_zip(forged)

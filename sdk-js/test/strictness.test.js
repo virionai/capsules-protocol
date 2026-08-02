@@ -242,3 +242,136 @@ test("unpackZip rejects ZIP64 sentinel EOCD", async () => {
   bytes.writeUInt16LE(0xffff, bytes.length - 22 + 10);
   await assert.rejects(() => unpackZip(bytes), /ZIP64/);
 });
+
+// --- Configurable reader limits (finding F58) ------------------------------
+// spec/format.md: "File-count and total-uncompressed-size limits are
+// configurable on the reader; defaults are 10,000 entries and 1 GiB."
+// The module constants are defaults, not a ceiling baked into the code.
+
+test("unpackZip honors caller-supplied reader limits", async () => {
+  const packed = await packZip(
+    new Map([
+      ["a.txt", Buffer.from("aaa")],
+      ["b.txt", Buffer.from("bbb")],
+    ]),
+  );
+  await assert.rejects(() => unpackZip(packed, { maxEntries: 1 }), /too many entries \(2\)/);
+  await assert.rejects(
+    () => unpackZip(packed, { maxTotalBytes: 4 }),
+    /total-size limit exceeded/,
+  );
+  const ok = await unpackZip(packed, { maxEntries: 2, maxTotalBytes: 6 });
+  assert.deepEqual([...ok.keys()], ["a.txt", "b.txt"]);
+});
+
+test("reader limits must be positive integers", async () => {
+  const packed = await packZip(new Map([["a.txt", Buffer.from("aaa")]]));
+  await assert.rejects(() => unpackZip(packed, { maxEntries: 0 }), /maxEntries must be a positive integer/);
+  await assert.rejects(
+    () => unpackZip(packed, { maxTotalBytes: 1.5 }),
+    /maxTotalBytes must be a positive integer/,
+  );
+});
+
+// --- Authoritative entry set (findings F01 / F11) --------------------------
+// The raw central-directory scan is the single source of truth for which
+// entries a capsule contains. JSZip derives entry.dir from the DOS directory
+// attribute (node_modules/jszip/lib/zipEntry.js processAttributes) and
+// re-keys entries by their LOCAL header name, so both must be pinned to the
+// central directory or a signed capsule can hide a file from the JS reader
+// that unzip(1) and python zipfile happily extract.
+
+function sealedEntries(files) {
+  return [...files.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, data]) => ({ name, data: Buffer.from(data) }));
+}
+
+async function sealedCapsule() {
+  const ed = generateEd25519();
+  const b = new CapsuleBuilder({
+    originator: { publicKey: ed.publicKeyHex, label: "Acme" },
+    participants: [{ actor_id: "human:alice", role: "originator", label: "Alice" }],
+    createdAt: TS,
+  });
+  b.setProgram("# Program\n");
+  b.appendEvent({
+    actor: "human:alice",
+    kind: "decision",
+    action: "submit",
+    target: "program.md",
+    timestamp: TS,
+    payload: {},
+  });
+  const bytes = await b.seal({
+    signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
+    signedAt: TS,
+  });
+  return { bytes, ed };
+}
+
+test("a DOS-dir-bit entry cannot smuggle a file past verifyCapsule", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const { bytes, ed } = await sealedCapsule();
+  const entries = sealedEntries(await unpackZip(bytes));
+  // externalAttrs = 0x10 is the DOS "directory" bit. JSZip reports
+  // entry.dir === true for it regardless of the name; unzip(1) and python
+  // zipfile see a plain 17-byte file called smuggled.md.
+  const forged = writeRawZip([
+    ...entries,
+    { name: "smuggled.md", data: Buffer.from("# hidden payload\n", "utf8"), dosAttrs: 0x10 },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /directory attribute on non-directory name: smuggled\.md/,
+  );
+  await assert.rejects(() => CapsuleReader.fromBytes(forged), /smuggled\.md/);
+  // And the capsule must never verify ok with a trusted signer.
+  let verified = null;
+  try {
+    verified = await verifyCapsule(await CapsuleReader.fromBytes(forged), {
+      allowlist: [ed.publicKeyHex],
+    });
+  } catch {
+    verified = null;
+  }
+  assert.equal(verified, null, "forged capsule must not open, let alone verify");
+});
+
+test("unpackZip rejects a directory marker with nonzero size", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const forged = writeRawZip([
+    { name: "a.txt", data: "a" },
+    { name: "dir/", data: Buffer.from("not really a directory\n", "utf8"), dosAttrs: 0x10 },
+  ]);
+  await assert.rejects(() => unpackZip(forged), /directory marker with nonzero size: dir\//);
+});
+
+test("unpackZip rejects a local/central file-name mismatch", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const { bytes } = await sealedCapsule();
+  const entries = sealedEntries(await unpackZip(bytes));
+  // Central directory says notes.md; the local header says program.md.
+  // JSZip keys zip.files by the LOCAL name, so without this check the real
+  // program.md is silently replaced by the attacker's body.
+  const forged = writeRawZip([
+    ...entries,
+    { name: "notes.md", localName: "program.md", data: Buffer.from("# EVIL\n", "utf8") },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /local\/central name mismatch: central "notes\.md", local "program\.md"/,
+  );
+});
+
+test("unpackZip rejects a local name that resolves to a third path", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const forged = writeRawZip([
+    { name: "a.txt", data: "a" },
+    { name: "notes.md", localName: "../../evil.md", data: "pwned\n" },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /local\/central name mismatch: central "notes\.md", local "\.\.\/\.\.\/evil\.md"/,
+  );
+});

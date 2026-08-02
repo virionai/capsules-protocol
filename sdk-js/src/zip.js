@@ -7,28 +7,56 @@
 // (JSZip alone would silently inflate DEFLATE entries and let the last
 // duplicate name win, so those checks run over the raw central
 // directory before JSZip parses anything).
+//
+// The raw central-directory scan is the AUTHORITATIVE entry set. JSZip
+// decides directory-ness from the DOS attribute bit and re-keys entries
+// by their local-header name, so unpackZip both rejects the shapes that
+// let the two parsers disagree and asserts that what it extracted is
+// exactly what the scan admitted.
 
 import JSZip from "jszip";
 
 const FIXED_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
-const MAX_ENTRIES = 10_000;
-const MAX_TOTAL_BYTES = 1024 * 1024 * 1024; // 1 GiB
+
+/** Default reader limits. spec/format.md: configurable, with these defaults. */
+export const DEFAULT_ZIP_LIMITS = Object.freeze({
+  maxEntries: 10_000,
+  maxTotalBytes: 1024 * 1024 * 1024, // 1 GiB
+});
 
 const EOCD_SIG = 0x06054b50; // end of central directory
 const CDH_SIG = 0x02014b50; // central directory file header
+const LFH_SIG = 0x04034b50; // local file header
 const EOCD_MIN = 22; // EOCD size with empty comment
 const MAX_COMMENT = 0xffff;
+const DOS_DIR_ATTR = 0x10; // DOS "directory" bit in the low external attrs
+
+/** Normalize caller-supplied reader limits against the defaults. */
+function resolveLimits(options) {
+  const { maxEntries = DEFAULT_ZIP_LIMITS.maxEntries, maxTotalBytes = DEFAULT_ZIP_LIMITS.maxTotalBytes } =
+    options ?? {};
+  if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+    throw new Error(`zip limits: maxEntries must be a positive integer, got ${maxEntries}`);
+  }
+  if (!Number.isInteger(maxTotalBytes) || maxTotalBytes < 1) {
+    throw new Error(`zip limits: maxTotalBytes must be a positive integer, got ${maxTotalBytes}`);
+  }
+  return { maxEntries, maxTotalBytes };
+}
 
 /**
  * Minimal raw central-directory scan, independent of JSZip.
  *
- * Returns [{ name, method, externalAttrs }] for every central-directory
- * record (including directory markers). Throws on structural problems:
+ * Returns [{ name, localName, method, compressedSize, size, externalAttrs,
+ * localHeaderOffset }] for every central-directory record (including
+ * directory markers); `localName` is read from the entry's local file
+ * header. Throws on structural problems:
  * missing/truncated EOCD or central directory, and ZIP64 sentinel values
  * (a capsule can never legitimately need ZIP64 under the 10,000-entry /
  * 1 GiB caps, so ZIP64 is rejected fail-closed rather than parsed).
  */
-export function scanCentralDirectory(bytes) {
+export function scanCentralDirectory(bytes, options) {
+  const { maxEntries } = resolveLimits(options);
   const buf = Buffer.isBuffer(bytes)
     ? bytes
     : ArrayBuffer.isView(bytes)
@@ -66,7 +94,7 @@ export function scanCentralDirectory(bytes) {
   if (totalEntries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
     throw new Error("zip scan: ZIP64 archives are not supported");
   }
-  if (totalEntries > MAX_ENTRIES) {
+  if (totalEntries > maxEntries) {
     throw new Error(`zip scan: too many entries (${totalEntries})`);
   }
   const cdEnd = cdOffset + cdSize;
@@ -86,17 +114,21 @@ export function scanCentralDirectory(bytes) {
       throw new Error(`zip scan: truncated or malformed central directory at record ${i}`);
     }
     const method = buf.readUInt16LE(p + 10);
+    const compressedSize = buf.readUInt32LE(p + 20);
+    const size = buf.readUInt32LE(p + 24);
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
     const externalAttrs = buf.readUInt32LE(p + 38);
+    const localHeaderOffset = buf.readUInt32LE(p + 42);
     const next = p + 46 + nameLen + extraLen + commentLen;
     if (next > cdEnd) {
       throw new Error(`zip scan: truncated central-directory record ${i}`);
     }
     const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
-    entries.push({ name, method, externalAttrs });
-    if (entries.length > MAX_ENTRIES) {
+    const localName = readLocalName(buf, localHeaderOffset, i);
+    entries.push({ name, localName, method, compressedSize, size, externalAttrs, localHeaderOffset });
+    if (entries.length > maxEntries) {
       throw new Error(`zip scan: too many entries (${entries.length})`);
     }
     p = next;
@@ -110,6 +142,27 @@ export function scanCentralDirectory(bytes) {
 }
 
 /**
+ * Read the file name out of the LOCAL file header at `offset`.
+ *
+ * JSZip overwrites each entry's name from the local header (see
+ * zipEntry.js readLocalPart) and keys `zip.files` by that name, so the
+ * central directory alone does not tell us what JSZip will extract. We
+ * read the local name here so the strictness pass can require the two to
+ * agree.
+ */
+function readLocalName(buf, offset, index) {
+  if (offset + 30 > buf.length || buf.readUInt32LE(offset) !== LFH_SIG) {
+    throw new Error(`zip scan: missing local file header for record ${index}`);
+  }
+  const nameLen = buf.readUInt16LE(offset + 26);
+  const end = offset + 30 + nameLen;
+  if (end > buf.length) {
+    throw new Error(`zip scan: truncated local file header for record ${index}`);
+  }
+  return buf.toString("utf8", offset + 30, end);
+}
+
+/**
  * Fail-closed strictness pass over the raw central directory. Rejects:
  *   - duplicate entry names (parser-differential: readers disagree on
  *     which copy wins, so a signed capsule must never contain one)
@@ -118,15 +171,44 @@ export function scanCentralDirectory(bytes) {
  *     post-load check)
  *   - non-STORED compression (spec/format.md: STORED only)
  *   - symlink entries (Unix mode bits in external attrs)
+ *   - local/central file-name disagreement
+ *   - ambiguous directory markers (DOS dir bit on a non-"/" name, or a
+ *     "/"-terminated name carrying content)
+ *
+ * Returns the authoritative Set of non-directory entry names.
  */
-function assertStrictEntries(bytes) {
-  const entries = scanCentralDirectory(bytes);
+function assertStrictEntries(bytes, limits) {
+  const entries = scanCentralDirectory(bytes, limits);
   const seen = new Set();
+  const expected = new Set();
   for (const e of entries) {
     if (seen.has(e.name)) throw new Error(`zip unpack: duplicate entry: ${e.name}`);
     seen.add(e.name);
     assertSafePath(e.name);
-    if (e.name.endsWith("/")) continue; // directory marker
+    // The central directory is authoritative. JSZip re-reads the name from
+    // the local header and keys zip.files by it, so any disagreement means
+    // the two parsers see different entry sets.
+    if (e.localName !== e.name) {
+      throw new Error(
+        `zip unpack: local/central name mismatch: central ${JSON.stringify(e.name)}, ` +
+          `local ${JSON.stringify(e.localName)}`,
+      );
+    }
+    const isDirName = e.name.endsWith("/");
+    // JSZip derives entry.dir from the DOS directory attribute, not the
+    // name, so a dir-bit entry with a plain file name is silently dropped
+    // by JSZip while unzip(1) and python zipfile extract it as a file.
+    if ((e.externalAttrs & DOS_DIR_ATTR) !== 0 && !isDirName) {
+      throw new Error(`zip unpack: directory attribute on non-directory name: ${e.name}`);
+    }
+    if (isDirName) {
+      // A "/"-terminated name carrying content is the mirror image of the
+      // same differential: readers that key on the name drop the body.
+      if (e.size !== 0 || e.compressedSize !== 0) {
+        throw new Error(`zip unpack: directory marker with nonzero size: ${e.name}`);
+      }
+      continue; // directory marker
+    }
     if (e.method !== 0) {
       throw new Error(`zip unpack: only STORED supported, got method ${e.method}: ${e.name}`);
     }
@@ -134,12 +216,15 @@ function assertStrictEntries(bytes) {
     if ((mode & 0o170000) === 0o120000) {
       throw new Error(`zip entry is a symlink: ${e.name}`);
     }
+    expected.add(e.name);
   }
+  return expected;
 }
 
 /** files: Map<string, Uint8Array|Buffer>; returns Uint8Array (ZIP bytes). */
-export async function packZip(files) {
-  if (files.size > MAX_ENTRIES) throw new Error(`zip pack: too many entries (${files.size})`);
+export async function packZip(files, options) {
+  const { maxEntries } = resolveLimits(options);
+  if (files.size > maxEntries) throw new Error(`zip pack: too many entries (${files.size})`);
   const zip = new JSZip();
   const sorted = [...files.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [path, bytes] of sorted) {
@@ -161,25 +246,40 @@ export async function packZip(files) {
 }
 
 /** bytes: Uint8Array; returns Map<path, Uint8Array> (sorted by path). */
-export async function unpackZip(bytes) {
-  assertStrictEntries(bytes);
+export async function unpackZip(bytes, options) {
+  const limits = resolveLimits(options);
+  // The raw central-directory scan is the single authoritative source of
+  // the entry set; `expected` is the set of file names it admits.
+  const expected = assertStrictEntries(bytes, limits);
   const zip = await JSZip.loadAsync(bytes, { checkCRC32: true });
   const out = new Map();
   let total = 0;
   let count = 0;
   const entries = Object.entries(zip.files);
-  if (entries.length > MAX_ENTRIES) throw new Error(`zip unpack: too many entries (${entries.length})`);
+  if (entries.length > limits.maxEntries) {
+    throw new Error(`zip unpack: too many entries (${entries.length})`);
+  }
   // Sort for stable iteration order
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [path, entry] of entries) {
     if (entry.dir) continue;
     assertSafePath(path);
+    if (!expected.has(path)) {
+      throw new Error(`zip unpack: entry not in central directory: ${path}`);
+    }
     const data = await entry.async("uint8array");
     total += data.length;
     count += 1;
-    if (count > MAX_ENTRIES) throw new Error("zip unpack: entry-count limit exceeded");
-    if (total > MAX_TOTAL_BYTES) throw new Error("zip unpack: total-size limit exceeded");
+    if (count > limits.maxEntries) throw new Error("zip unpack: entry-count limit exceeded");
+    if (total > limits.maxTotalBytes) throw new Error("zip unpack: total-size limit exceeded");
     out.set(path, data);
+  }
+  // Every central-directory file entry must have been extracted. A name the
+  // scan admitted but JSZip dropped is the smuggling direction of the same
+  // parser differential.
+  if (out.size !== expected.size) {
+    const missing = [...expected].filter((n) => !out.has(n)).sort();
+    throw new Error(`zip unpack: central-directory entry not extracted: ${missing.join(", ")}`);
   }
   return out;
 }

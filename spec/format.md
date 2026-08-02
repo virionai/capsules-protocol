@@ -93,6 +93,20 @@ them (they are not authoritative under v0.6) but should not error.
   archive's central directory. A reader whose ZIP library sanitizes or
   deduplicates names on load must check the raw central directory
   itself, or it will silently accept archives that other readers reject.
+- The central directory is the authoritative entry set. After extraction
+  a reader MUST assert that the set of entries it produced is exactly the
+  set of non-directory names the central-directory scan admitted. A name
+  the scan admitted but the extractor dropped, or a name the extractor
+  produced that the scan never saw, is a rejection.
+- Directory-ness MUST be unambiguous. An entry whose external attributes
+  set the DOS directory bit (`0x10`) on a name that does not end in `/`
+  is rejected, and so is a `/`-terminated name that declares a nonzero
+  uncompressed or compressed size. Readers disagree about which signal
+  wins, so a signed capsule must never contain either shape.
+- An entry's name in the LOCAL file header MUST equal its
+  central-directory name. Some ZIP libraries re-key entries by the local
+  name, so a mismatch lets two conforming readers extract different
+  content under the same path.
 - File-count and total-uncompressed-size limits are configurable on the
   reader; defaults are 10,000 entries and 1 GiB. Exceeding either is a
   rejection.
