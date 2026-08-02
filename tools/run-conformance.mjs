@@ -91,6 +91,16 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "ed25519-key-validation-regen",
+    name: "ed25519-key-validation vector regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-ed25519-key-validation-vector.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "spec-vectors",
     name: "spec/vectors registry",
     language: "javascript",

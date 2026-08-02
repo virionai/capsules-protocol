@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Three vector shapes are recognized under spec/vectors/:
+// Four vector shapes are recognized under spec/vectors/:
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
 //      `expected` map of observed hashes (capsule_id, first_event_hash,
@@ -21,6 +21,12 @@
 //      big-endian IEEE-754 binary64 bit pattern of the input and `expected`
 //      its canonical RFC 8785 serialization. Implementations must parse the
 //      bit pattern (not the expected string) and serialize it.
+//
+//   4. An Ed25519 key/signature validation registry (meta.kind
+//      "ed25519-verify"): a `vectors` array of `{ public_key_hex,
+//      message_hex, signature_hex, expected: { valid }, reason }` entries.
+//      The negative entries are witnesses an unguarded verifier accepts —
+//      small-order and non-canonical public keys, and a non-reduced S.
 //
 // keys.json (the tamper-detection fixture keypair, consumed by the
 // Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
@@ -392,6 +398,48 @@ function isSigningInputVector(doc) {
   return doc && typeof doc === "object" && doc.meta?.kind === "signing-input";
 }
 
+function isKeyValidationVector(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "ed25519-verify";
+}
+
+// Ed25519 key/signature validation registry (meta.kind === "ed25519-verify"):
+// each entry pins a (public_key, message, signature) triple and the verdict a
+// conforming verifier must report. The negative entries are witnesses — an
+// unguarded verifier accepts them — so this set fails closed on any lane that
+// skips small-order / non-canonical key rejection.
+function checkKeyValidationVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (
+      typeof v.public_key_hex !== "string" ||
+      typeof v.message_hex !== "string" ||
+      typeof v.signature_hex !== "string" ||
+      typeof v.expected?.valid !== "boolean"
+    ) {
+      fail(`${label}: vector requires public_key_hex, message_hex, signature_hex, expected.valid`);
+      continue;
+    }
+    let got;
+    try {
+      got = ed25519Verify(
+        hexToBytes(v.public_key_hex),
+        hexToBytes(v.message_hex),
+        hexToBytes(v.signature_hex),
+      );
+    } catch {
+      got = false;
+    }
+    if (got !== v.expected.valid) {
+      fail(`${label}: expected valid=${v.expected.valid}, got valid=${got} (${v.reason})`);
+    }
+  }
+}
+
 async function checkFile(path) {
   if (isFixtureKeyFile(path)) return;
   let doc;
@@ -403,12 +451,14 @@ async function checkFile(path) {
   }
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
   else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
+  else if (isKeyValidationVector(doc)) checkKeyValidationVectors(path, doc);
   else if (isCollection(doc)) await checkCollection(path, doc);
   else if (isEmbeddedVector(doc)) await checkEmbeddedVector(path, doc);
   else {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
-        `an outcome-vector collection, a signing-input doc, or a jcs number set)`
+        `an outcome-vector collection, a signing-input doc, an ed25519-verify doc, ` +
+        `or a jcs number set)`
     );
   }
 }

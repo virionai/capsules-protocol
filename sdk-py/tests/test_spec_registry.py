@@ -29,6 +29,7 @@ VECTORS = pathlib.Path(__file__).resolve().parents[2] / "spec" / "vectors"
 TAMPER = VECTORS / "tamper-detection" / "vectors.json"
 MALFORMED = VECTORS / "malformed-layout" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
+KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 
 # Per-lane mapping of the registry's normative open-stage reason
 # categories onto this SDK's error messages. Every reader error here is a
@@ -179,3 +180,24 @@ def test_signing_input_pins():
             signing_input,
             hex_to_bytes(pin["signature_hex"]),
         )
+
+
+def _key_validation_params():
+    if not KEY_VALIDATION.exists():
+        return []
+    doc = json.loads(KEY_VALIDATION.read_text())
+    return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
+
+
+@pytest.mark.parametrize("vector", _key_validation_params())
+def test_ed25519_key_validation_registry(vector: dict):
+    """Small-order / non-canonical keys and non-reduced S must be refused."""
+    got = ed25519_verify(
+        hex_to_bytes(vector["public_key_hex"]),
+        hex_to_bytes(vector["message_hex"]),
+        hex_to_bytes(vector["signature_hex"]),
+    )
+    assert got is vector["expected"]["valid"], (
+        f"{vector['name']}: expected valid={vector['expected']['valid']} "
+        f"({vector['reason']}), got {got}"
+    )

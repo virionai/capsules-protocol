@@ -1,0 +1,172 @@
+{
+  "meta": {
+    "kind": "ed25519-verify",
+    "name": "ed25519-key-validation",
+    "spec_version": "0.6",
+    "description": "Ed25519 key and signature validation registry. Implementations MUST report valid=false for every small-order public key, every non-canonically encoded public key, and every signature whose S component is not reduced mod L, and valid=true for the positive control.",
+    "generator": "sdk-js/tools/generate-ed25519-key-validation-vector.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "reasons": {
+    "small_order_public_key": "the public key is one of the 8 points whose order divides 8; a signature over it can be forged without the private key",
+    "non_canonical_public_key": "the 32-byte encoding is non-canonical: with the x-sign bit masked off, y >= 2^255 - 19",
+    "non_reduced_signature_s": "the signature's S component is not reduced mod L (RFC 8032 section 5.1.7)",
+    "valid": "positive control: a conforming verifier MUST accept this triple"
+  },
+  "vectors": [
+    {
+      "name": "small-order-y0-x-even",
+      "public_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d35",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-4 point (y = 0, even x); accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-y0-x-odd",
+      "public_key_hex": "0000000000000000000000000000000000000000000000000000000000000080",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-4 point (y = 0, odd x); accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-identity",
+      "public_key_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "identity (y = 1); accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-order8-a",
+      "public_key_hex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d38",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-8 point; accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-order8-b",
+      "public_key_hex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d33",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-8 point (other x sign); accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-order8-c",
+      "public_key_hex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d33",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-8 point; accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-order8-d",
+      "public_key_hex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d3135",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-8 point (other x sign); accepted by an unguarded verifier"
+    },
+    {
+      "name": "small-order-y-minus-1",
+      "public_key_hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "small_order_public_key",
+      "note": "order-2 point (y = p - 1); accepted by an unguarded verifier"
+    },
+    {
+      "name": "non-canonical-y-minus-1-sign-set",
+      "public_key_hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "non_canonical_public_key",
+      "note": "y = p - 1 with the x-sign bit set on x = 0; accepted by an unguarded verifier"
+    },
+    {
+      "name": "non-canonical-y-equals-p",
+      "public_key_hex": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d31",
+      "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "non_canonical_public_key",
+      "note": "y = p decodes to the order-4 point y = 0; accepted by an unguarded verifier"
+    },
+    {
+      "name": "non-canonical-y-equals-p-plus-1",
+      "public_key_hex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "non_canonical_public_key",
+      "note": "y = p + 1 decodes to the identity; accepted by an unguarded verifier"
+    },
+    {
+      "name": "non-canonical-identity-sign-set",
+      "public_key_hex": "0100000000000000000000000000000000000000000000000000000000000080",
+      "message_hex": "63617073756c652d6c6f772d6f726465722d70726f62652d30",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "valid": false
+      },
+      "reason": "non_canonical_public_key",
+      "note": "identity with the x-sign bit set on x = 0; accepted by an unguarded verifier"
+    },
+    {
+      "name": "non-reduced-signature-s",
+      "public_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message_hex": "72",
+      "signature_hex": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69daf52db7415978abc61b2c2eb6aeebfca0387b2eaeb4302aeeb00d291612bb0c10",
+      "expected": {
+        "valid": false
+      },
+      "reason": "non_reduced_signature_s",
+      "note": "RFC 8032 test 2 signature with S replaced by S + L"
+    },
+    {
+      "name": "rfc8032-test2-valid",
+      "public_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message_hex": "72",
+      "signature_hex": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "expected": {
+        "valid": true
+      },
+      "reason": "valid",
+      "note": "positive control: RFC 8032 section 7.1 TEST 2"
+    }
+  ]
+}

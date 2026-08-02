@@ -307,3 +307,27 @@ fn signing_input_pins() {
         );
     }
 }
+
+/// Ed25519 key/signature validation registry: small-order and
+/// non-canonically encoded public keys, and non-reduced S, must be refused;
+/// the positive control must still verify.
+#[test]
+fn ed25519_key_validation_registry() {
+    let path = vectors_dir().join("ed25519-key-validation.json");
+    let doc = load_json(&path);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let pk = hex::decode(v["public_key_hex"].as_str().expect("public_key_hex")).unwrap();
+        let msg = hex::decode(v["message_hex"].as_str().expect("message_hex")).unwrap();
+        let sig = hex::decode(v["signature_hex"].as_str().expect("signature_hex")).unwrap();
+        let expected = v["expected"]["valid"].as_bool().expect("expected.valid");
+        assert_eq!(
+            ed25519_verify(&pk, &msg, &sig),
+            expected,
+            "{name}: expected valid={expected} ({})",
+            v["reason"]
+        );
+    }
+}

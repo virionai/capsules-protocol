@@ -1,6 +1,6 @@
 # Capsule v0.6 Vectors
 
-This directory contains checked-in protocol vectors. Four shapes exist, all
+This directory contains checked-in protocol vectors. Five shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 
@@ -49,6 +49,18 @@ lane):
    RFC 8785 serialization. Implementations must parse the bit pattern (not
    the expected string) and serialize it.
 
+5. **Ed25519 key/signature validation set** (`ed25519-key-validation.json`,
+   detected by `meta.kind: "ed25519-verify"`) — a `vectors` array of
+   `{ name, public_key_hex, message_hex, signature_hex, expected: { valid },
+   reason }` entries. Every negative entry is a *witness*: an unguarded
+   Ed25519 verifier accepts the triple. Implementations MUST report
+   `valid: false` for all 8 small-subgroup public keys, for non-canonical
+   32-byte key encodings (masked y >= p), and for a signature whose S is not
+   reduced mod L — and `valid: true` for the RFC 8032 positive control.
+   The Python (`test_ed25519_key_validation_registry`), Rust
+   (`ed25519_key_validation_registry`), Swift (`Ed25519KeyValidationTests`)
+   and Kotlin (`Ed25519KeyValidationVectorTest`) lanes consume it directly.
+
 Other JSON here (e.g. `tamper-detection/output/keys.json`) is supporting
 material, not a vector, and is ignored by the checker.
 
@@ -60,6 +72,9 @@ should be reviewed with the byte-level diff):
   (derived from the tamper-detection clean fixture)
 - `sdk-js/tools/generate-signing-input-vector.mjs` → `signing-input.json`
   (derived from `plain-basic.json`)
+- `sdk-js/tools/generate-ed25519-key-validation-vector.mjs` →
+  `ed25519-key-validation.json` (searches node:crypto's raw verify for the
+  acceptance witnesses; `--check` detects drift)
 
 No warranty: vectors are conformance fixtures only. They are not production
 templates, compliance artifacts, legal advice, security advice, or

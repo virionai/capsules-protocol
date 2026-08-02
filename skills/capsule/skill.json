@@ -114,7 +114,7 @@
       {
         "path": "spec/envelope.md",
         "title": "Provenance envelope",
-        "sha256": "13877c2e0ada919323ff5e48b63f8f1695d61f3694ab6a721c8e6b0803630997"
+        "sha256": "c2e26e80e4957f00e246aac786a5dbd712014c707efa3220c5ebac863da6a269"
       },
       {
         "path": "spec/trust.md",
