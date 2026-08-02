@@ -38,9 +38,12 @@ function crc32(buf) {
  *   { name: string, data: Buffer|Uint8Array|string,
  *     method?: 0 (STORED, default) | 8 (DEFLATE),
  *     mode?: number,     // Unix mode bits for external attrs, e.g. 0o120777
- *     dosAttrs?: number  // low 16 bits of external attrs (the DOS attribute
+ *     dosAttrs?: number, // low 16 bits of external attrs (the DOS attribute
  *                        // byte); 0x10 is the DOS "directory" flag, which
  *                        // JSZip trusts over the entry name
+ *     localName?: string // name written in the LOCAL file header when it must
+ *                        // differ from the central-directory name; defaults
+ *                        // to `name`
  *   }
  * Returns Buffer of the archive bytes. No path safety, no dedup.
  */
@@ -51,6 +54,7 @@ export function writeRawZip(entries) {
 
   for (const e of entries) {
     const nameBytes = Buffer.from(e.name, "utf8");
+    const localNameBytes = Buffer.from(e.localName ?? e.name, "utf8");
     const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data ?? "");
     const method = e.method ?? 0;
     const crc = crc32(data);
@@ -67,9 +71,9 @@ export function writeRawZip(entries) {
     lfh.writeUInt32LE(crc, 14);
     lfh.writeUInt32LE(body.length, 18);
     lfh.writeUInt32LE(data.length, 22);
-    lfh.writeUInt16LE(nameBytes.length, 26);
+    lfh.writeUInt16LE(localNameBytes.length, 26);
     lfh.writeUInt16LE(0, 28); // extra len
-    locals.push(lfh, nameBytes, body);
+    locals.push(lfh, localNameBytes, body);
 
     const cdh = Buffer.alloc(46);
     cdh.writeUInt32LE(CDH_SIG, 0);
@@ -91,7 +95,7 @@ export function writeRawZip(entries) {
     cdh.writeUInt32LE(offset, 42);
     centrals.push(cdh, nameBytes);
 
-    offset += 30 + nameBytes.length + body.length;
+    offset += 30 + localNameBytes.length + body.length;
   }
 
   const cd = Buffer.concat(centrals);

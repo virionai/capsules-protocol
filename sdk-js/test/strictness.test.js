@@ -346,3 +346,32 @@ test("unpackZip rejects a directory marker with nonzero size", async () => {
   ]);
   await assert.rejects(() => unpackZip(forged), /directory marker with nonzero size: dir\//);
 });
+
+test("unpackZip rejects a local/central file-name mismatch", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const { bytes } = await sealedCapsule();
+  const entries = sealedEntries(await unpackZip(bytes));
+  // Central directory says notes.md; the local header says program.md.
+  // JSZip keys zip.files by the LOCAL name, so without this check the real
+  // program.md is silently replaced by the attacker's body.
+  const forged = writeRawZip([
+    ...entries,
+    { name: "notes.md", localName: "program.md", data: Buffer.from("# EVIL\n", "utf8") },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /local\/central name mismatch: central "notes\.md", local "program\.md"/,
+  );
+});
+
+test("unpackZip rejects a local name that resolves to a third path", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const forged = writeRawZip([
+    { name: "a.txt", data: "a" },
+    { name: "notes.md", localName: "../../evil.md", data: "pwned\n" },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /local\/central name mismatch: central "notes\.md", local "\.\.\/\.\.\/evil\.md"/,
+  );
+});

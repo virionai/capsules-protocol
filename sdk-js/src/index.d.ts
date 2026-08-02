@@ -277,7 +277,15 @@ export function unpackZip(
 export function scanCentralDirectory(
   bytes: Uint8Array,
   options?: ZipLimits,
-): Array<{ name: string; method: number; externalAttrs: number }>;
+): Array<{
+  name: string;
+  localName: string;
+  method: number;
+  compressedSize: number;
+  size: number;
+  externalAttrs: number;
+  localHeaderOffset: number;
+}>;
 
 export function compressText(text: string, options?: Record<string, unknown>): { text: string };
 export function compressEventPayload<T>(payload: T, options?: Record<string, unknown>): T;
