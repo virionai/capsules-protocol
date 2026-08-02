@@ -263,10 +263,20 @@ export function computeCapsuleId(
 export function manifestHash(manifest: Manifest): string;
 export function manifestBytes(manifest: Manifest): Uint8Array;
 
-export function packZip(files: Map<string, Uint8Array>): Promise<Uint8Array>;
-export function unpackZip(bytes: Uint8Array): Promise<Map<string, Uint8Array>>;
+/** Reader limits; see spec/format.md "Container properties". */
+export interface ZipLimits {
+  maxEntries?: number;
+  maxTotalBytes?: number;
+}
+export const DEFAULT_ZIP_LIMITS: Readonly<{ maxEntries: number; maxTotalBytes: number }>;
+export function packZip(files: Map<string, Uint8Array>, options?: ZipLimits): Promise<Uint8Array>;
+export function unpackZip(
+  bytes: Uint8Array,
+  options?: ZipLimits,
+): Promise<Map<string, Uint8Array>>;
 export function scanCentralDirectory(
   bytes: Uint8Array,
+  options?: ZipLimits,
 ): Array<{ name: string; method: number; externalAttrs: number }>;
 
 export function compressText(text: string, options?: Record<string, unknown>): { text: string };

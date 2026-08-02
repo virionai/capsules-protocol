@@ -242,3 +242,33 @@ test("unpackZip rejects ZIP64 sentinel EOCD", async () => {
   bytes.writeUInt16LE(0xffff, bytes.length - 22 + 10);
   await assert.rejects(() => unpackZip(bytes), /ZIP64/);
 });
+
+// --- Configurable reader limits (finding F58) ------------------------------
+// spec/format.md: "File-count and total-uncompressed-size limits are
+// configurable on the reader; defaults are 10,000 entries and 1 GiB."
+// The module constants are defaults, not a ceiling baked into the code.
+
+test("unpackZip honors caller-supplied reader limits", async () => {
+  const packed = await packZip(
+    new Map([
+      ["a.txt", Buffer.from("aaa")],
+      ["b.txt", Buffer.from("bbb")],
+    ]),
+  );
+  await assert.rejects(() => unpackZip(packed, { maxEntries: 1 }), /too many entries \(2\)/);
+  await assert.rejects(
+    () => unpackZip(packed, { maxTotalBytes: 4 }),
+    /total-size limit exceeded/,
+  );
+  const ok = await unpackZip(packed, { maxEntries: 2, maxTotalBytes: 6 });
+  assert.deepEqual([...ok.keys()], ["a.txt", "b.txt"]);
+});
+
+test("reader limits must be positive integers", async () => {
+  const packed = await packZip(new Map([["a.txt", Buffer.from("aaa")]]));
+  await assert.rejects(() => unpackZip(packed, { maxEntries: 0 }), /maxEntries must be a positive integer/);
+  await assert.rejects(
+    () => unpackZip(packed, { maxTotalBytes: 1.5 }),
+    /maxTotalBytes must be a positive integer/,
+  );
+});

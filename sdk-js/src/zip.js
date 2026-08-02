@@ -11,13 +11,30 @@
 import JSZip from "jszip";
 
 const FIXED_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
-const MAX_ENTRIES = 10_000;
-const MAX_TOTAL_BYTES = 1024 * 1024 * 1024; // 1 GiB
+
+/** Default reader limits. spec/format.md: configurable, with these defaults. */
+export const DEFAULT_ZIP_LIMITS = Object.freeze({
+  maxEntries: 10_000,
+  maxTotalBytes: 1024 * 1024 * 1024, // 1 GiB
+});
 
 const EOCD_SIG = 0x06054b50; // end of central directory
 const CDH_SIG = 0x02014b50; // central directory file header
 const EOCD_MIN = 22; // EOCD size with empty comment
 const MAX_COMMENT = 0xffff;
+
+/** Normalize caller-supplied reader limits against the defaults. */
+function resolveLimits(options) {
+  const { maxEntries = DEFAULT_ZIP_LIMITS.maxEntries, maxTotalBytes = DEFAULT_ZIP_LIMITS.maxTotalBytes } =
+    options ?? {};
+  if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+    throw new Error(`zip limits: maxEntries must be a positive integer, got ${maxEntries}`);
+  }
+  if (!Number.isInteger(maxTotalBytes) || maxTotalBytes < 1) {
+    throw new Error(`zip limits: maxTotalBytes must be a positive integer, got ${maxTotalBytes}`);
+  }
+  return { maxEntries, maxTotalBytes };
+}
 
 /**
  * Minimal raw central-directory scan, independent of JSZip.
@@ -28,7 +45,8 @@ const MAX_COMMENT = 0xffff;
  * (a capsule can never legitimately need ZIP64 under the 10,000-entry /
  * 1 GiB caps, so ZIP64 is rejected fail-closed rather than parsed).
  */
-export function scanCentralDirectory(bytes) {
+export function scanCentralDirectory(bytes, options) {
+  const { maxEntries } = resolveLimits(options);
   const buf = Buffer.isBuffer(bytes)
     ? bytes
     : ArrayBuffer.isView(bytes)
@@ -66,7 +84,7 @@ export function scanCentralDirectory(bytes) {
   if (totalEntries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
     throw new Error("zip scan: ZIP64 archives are not supported");
   }
-  if (totalEntries > MAX_ENTRIES) {
+  if (totalEntries > maxEntries) {
     throw new Error(`zip scan: too many entries (${totalEntries})`);
   }
   const cdEnd = cdOffset + cdSize;
@@ -96,7 +114,7 @@ export function scanCentralDirectory(bytes) {
     }
     const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
     entries.push({ name, method, externalAttrs });
-    if (entries.length > MAX_ENTRIES) {
+    if (entries.length > maxEntries) {
       throw new Error(`zip scan: too many entries (${entries.length})`);
     }
     p = next;
@@ -119,8 +137,8 @@ export function scanCentralDirectory(bytes) {
  *   - non-STORED compression (spec/format.md: STORED only)
  *   - symlink entries (Unix mode bits in external attrs)
  */
-function assertStrictEntries(bytes) {
-  const entries = scanCentralDirectory(bytes);
+function assertStrictEntries(bytes, limits) {
+  const entries = scanCentralDirectory(bytes, limits);
   const seen = new Set();
   for (const e of entries) {
     if (seen.has(e.name)) throw new Error(`zip unpack: duplicate entry: ${e.name}`);
@@ -138,8 +156,9 @@ function assertStrictEntries(bytes) {
 }
 
 /** files: Map<string, Uint8Array|Buffer>; returns Uint8Array (ZIP bytes). */
-export async function packZip(files) {
-  if (files.size > MAX_ENTRIES) throw new Error(`zip pack: too many entries (${files.size})`);
+export async function packZip(files, options) {
+  const { maxEntries } = resolveLimits(options);
+  if (files.size > maxEntries) throw new Error(`zip pack: too many entries (${files.size})`);
   const zip = new JSZip();
   const sorted = [...files.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [path, bytes] of sorted) {
@@ -161,14 +180,17 @@ export async function packZip(files) {
 }
 
 /** bytes: Uint8Array; returns Map<path, Uint8Array> (sorted by path). */
-export async function unpackZip(bytes) {
-  assertStrictEntries(bytes);
+export async function unpackZip(bytes, options) {
+  const limits = resolveLimits(options);
+  assertStrictEntries(bytes, limits);
   const zip = await JSZip.loadAsync(bytes, { checkCRC32: true });
   const out = new Map();
   let total = 0;
   let count = 0;
   const entries = Object.entries(zip.files);
-  if (entries.length > MAX_ENTRIES) throw new Error(`zip unpack: too many entries (${entries.length})`);
+  if (entries.length > limits.maxEntries) {
+    throw new Error(`zip unpack: too many entries (${entries.length})`);
+  }
   // Sort for stable iteration order
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [path, entry] of entries) {
@@ -177,8 +199,8 @@ export async function unpackZip(bytes) {
     const data = await entry.async("uint8array");
     total += data.length;
     count += 1;
-    if (count > MAX_ENTRIES) throw new Error("zip unpack: entry-count limit exceeded");
-    if (total > MAX_TOTAL_BYTES) throw new Error("zip unpack: total-size limit exceeded");
+    if (count > limits.maxEntries) throw new Error("zip unpack: entry-count limit exceeded");
+    if (total > limits.maxTotalBytes) throw new Error("zip unpack: total-size limit exceeded");
     out.set(path, data);
   }
   return out;
