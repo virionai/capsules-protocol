@@ -47,6 +47,18 @@ function flipByte(buf, index) {
 }
 
 /**
+ * Rebuild a capsule ZIP with one extra entry added. Preserves all other
+ * entries verbatim. Used for the stray-blob fixture, where the attacker
+ * appends a file but cannot re-sign the envelope.
+ */
+async function addInnerFile(capsuleBytes, path, data) {
+  const files = await unpackZip(capsuleBytes);
+  if (files.has(path)) throw new Error(`entry already present in capsule: ${path}`);
+  files.set(path, Buffer.from(data));
+  return Buffer.from(await packZip(files));
+}
+
+/**
  * Rebuild a capsule ZIP with one inner file replaced by `mutate(bytes)`.
  * Preserves all other entries verbatim.
  */
@@ -150,6 +162,18 @@ async function main() {
     flipByte(b, Math.floor(b.length / 2)),
   );
 
+  // plain-stray-content-enc: a signed PLAIN capsule (cipher="none") with an
+  // unaccounted-for content.enc appended. spec/manifest.md keys the
+  // content-index exclusion of content.enc off the SIGNED envelope.cipher, so
+  // the stray blob must be indexed and content_index verification must fail.
+  // The envelope signature stays valid: the attacker cannot re-sign, and
+  // cannot flip cipher to force the exclusion.
+  const plainStrayContentEnc = await addInnerFile(
+    cleanPlain,
+    "content.enc",
+    Buffer.from("stray unaccounted-for blob\n", "utf8"),
+  );
+
   // (d) keys.json — fresh throwaway TEST keys (intentional re-baseline).
   const keys = {
     originator: {
@@ -170,6 +194,7 @@ async function main() {
     ["tampered-envelope.capsule", tamperedEnvelope],
     ["clean-encrypted.capsule", cleanEncrypted],
     ["tampered-blob.capsule", tamperedBlob],
+    ["plain-stray-content-enc.capsule", plainStrayContentEnc],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 
