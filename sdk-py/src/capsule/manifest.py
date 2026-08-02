@@ -12,6 +12,7 @@ from .canonical import (
     jcs,
     sha256,
     sha256_hex,
+    utf16_sort_key,
 )
 
 _ID_DOMAIN = b"capsule-id-v0.6\x00"
@@ -57,7 +58,11 @@ def build_content_index(
         for path, data in files.items()
         if path not in excluded
     ]
-    entries.sort(key=lambda e: e["path"])
+    # content_index.files is a JSON *array*: JCS preserves array order, so
+    # this sort is part of the hashed bytes. Use the same UTF-16 code-unit
+    # comparator JCS uses for object members, and that the JS reference lane
+    # gets for free from `a < b` on JS strings.
+    entries.sort(key=lambda e: utf16_sort_key(e["path"]))
     return {"files": entries, "index_hash": sha256_hex(jcs(entries))}
 
 

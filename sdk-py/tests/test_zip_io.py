@@ -172,3 +172,22 @@ def test_unpack_rejects_trailing_bytes_after_eocd():
     forged = buf.getvalue() + b"\x00"
     with pytest.raises(ValueError, match=r"end-of-central-directory"):
         unpack_zip(forged)
+
+
+def test_pack_emits_utf16_code_unit_ordered_entries():
+    # ZIP entry order is the container's determinism guarantee and must
+    # agree with the JS reference lane, which sorts entry names with
+    # `a < b` (UTF-16 code units). Python's default str ordering is
+    # code-point order and would emit the U+1F600 entry last.
+    emoji, pua, nonchar = chr(0x1F600), chr(0xE000), chr(0xFFFF)
+    files = {
+        nonchar + ".txt": b"a",
+        emoji + ".txt": b"b",
+        pua + ".txt": b"c",
+        "z.txt": b"d",
+    }
+    expected = ["z.txt", emoji + ".txt", pua + ".txt", nonchar + ".txt"]
+    zip_bytes = pack_zip(files)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        assert zf.namelist() == expected
+    assert list(unpack_zip(zip_bytes).keys()) == expected
