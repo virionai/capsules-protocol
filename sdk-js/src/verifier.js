@@ -268,8 +268,18 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   if (!envelopeResult.ok && envelopeResult.note) errors.push(envelopeResult.note);
   result.envelope.signers = envelopeResult.signers.map((s) => ({
     ...s,
-    trusted: s.valid && allowlist.has(s.public_key.toLowerCase()),
+    trusted: s.valid && allowlist.has(String(s.public_key ?? "").toLowerCase()),
   }));
+  // A bad signature is otherwise only visible as valid:false nested in
+  // envelope.signers[i]; every other failure class produces a displayable
+  // message, so give this one an error too.
+  result.envelope.signers.forEach((s, i) => {
+    if (!s.valid) {
+      errors.push(
+        `envelope.signers[${i}] signature invalid (role '${s.role}', public_key ${s.public_key})`,
+      );
+    }
+  });
   // DISTINCT trusted keys, never rows: the same key signing under two roles
   // is one trusted key, and duplicate rows must never inflate a quorum.
   result.trustedSignerCount = new Set(

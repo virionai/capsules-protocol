@@ -255,3 +255,24 @@ test("verifyCapsule is total over a corpus of malformed inputs", async () => {
     assert.ok(Array.isArray(result.errors), `corpus[${i}] must report errors`);
   }
 });
+
+test("an invalid envelope signature produces a displayable error", async () => {
+  const { bytes, ed } = await sealedCapsule();
+  const tampered = await repack(bytes, (files) => {
+    const env = JSON.parse(Buffer.from(files.get("provenance/envelope.json")).toString("utf8"));
+    const sig = env.signers[0].signature;
+    env.signers[0].signature = (sig[0] === "0" ? "1" : "0") + sig.slice(1);
+    files.set(
+      "provenance/envelope.json",
+      Buffer.from(JSON.stringify(env, null, 2) + "\n", "utf8"),
+    );
+  });
+  const result = await verifyCapsule(tampered, { allowlist: [ed.publicKeyHex] });
+  assert.equal(result.ok, false);
+  assert.equal(result.envelope.ok, false);
+  assert.equal(result.envelope.signers[0].valid, false);
+  assert.ok(
+    result.errors.some((e) => /envelope\.signers\[0\] signature invalid/.test(e)),
+    `expected a signer error in result.errors, got: ${JSON.stringify(result.errors)}`,
+  );
+});
