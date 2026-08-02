@@ -37,7 +37,10 @@ function crc32(buf) {
  * Write a ZIP from entry descriptors, verbatim and in order:
  *   { name: string, data: Buffer|Uint8Array|string,
  *     method?: 0 (STORED, default) | 8 (DEFLATE),
- *     mode?: number  // Unix mode bits for external attrs, e.g. 0o120777
+ *     mode?: number,     // Unix mode bits for external attrs, e.g. 0o120777
+ *     dosAttrs?: number  // low 16 bits of external attrs (the DOS attribute
+ *                        // byte); 0x10 is the DOS "directory" flag, which
+ *                        // JSZip trusts over the entry name
  *   }
  * Returns Buffer of the archive bytes. No path safety, no dedup.
  */
@@ -52,7 +55,7 @@ export function writeRawZip(entries) {
     const method = e.method ?? 0;
     const crc = crc32(data);
     const body = method === 8 ? deflateRawSync(data) : data;
-    const extAttrs = e.mode !== undefined ? (e.mode << 16) >>> 0 : 0;
+    const extAttrs = ((((e.mode ?? 0) << 16) | (e.dosAttrs ?? 0)) & 0xffffffff) >>> 0;
 
     const lfh = Buffer.alloc(30);
     lfh.writeUInt32LE(LFH_SIG, 0);

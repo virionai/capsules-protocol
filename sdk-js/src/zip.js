@@ -22,6 +22,7 @@ const EOCD_SIG = 0x06054b50; // end of central directory
 const CDH_SIG = 0x02014b50; // central directory file header
 const EOCD_MIN = 22; // EOCD size with empty comment
 const MAX_COMMENT = 0xffff;
+const DOS_DIR_ATTR = 0x10; // DOS "directory" bit in the low external attrs
 
 /** Normalize caller-supplied reader limits against the defaults. */
 function resolveLimits(options) {
@@ -39,8 +40,9 @@ function resolveLimits(options) {
 /**
  * Minimal raw central-directory scan, independent of JSZip.
  *
- * Returns [{ name, method, externalAttrs }] for every central-directory
- * record (including directory markers). Throws on structural problems:
+ * Returns [{ name, method, compressedSize, size, externalAttrs }] for every
+ * central-directory record (including directory markers). Throws on
+ * structural problems:
  * missing/truncated EOCD or central directory, and ZIP64 sentinel values
  * (a capsule can never legitimately need ZIP64 under the 10,000-entry /
  * 1 GiB caps, so ZIP64 is rejected fail-closed rather than parsed).
@@ -104,6 +106,8 @@ export function scanCentralDirectory(bytes, options) {
       throw new Error(`zip scan: truncated or malformed central directory at record ${i}`);
     }
     const method = buf.readUInt16LE(p + 10);
+    const compressedSize = buf.readUInt32LE(p + 20);
+    const size = buf.readUInt32LE(p + 24);
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
@@ -113,7 +117,7 @@ export function scanCentralDirectory(bytes, options) {
       throw new Error(`zip scan: truncated central-directory record ${i}`);
     }
     const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
-    entries.push({ name, method, externalAttrs });
+    entries.push({ name, method, compressedSize, size, externalAttrs });
     if (entries.length > maxEntries) {
       throw new Error(`zip scan: too many entries (${entries.length})`);
     }
@@ -136,6 +140,8 @@ export function scanCentralDirectory(bytes, options) {
  *     post-load check)
  *   - non-STORED compression (spec/format.md: STORED only)
  *   - symlink entries (Unix mode bits in external attrs)
+ *   - ambiguous directory markers (DOS dir bit on a non-"/" name, or a
+ *     "/"-terminated name carrying content)
  */
 function assertStrictEntries(bytes, limits) {
   const entries = scanCentralDirectory(bytes, limits);
@@ -144,7 +150,21 @@ function assertStrictEntries(bytes, limits) {
     if (seen.has(e.name)) throw new Error(`zip unpack: duplicate entry: ${e.name}`);
     seen.add(e.name);
     assertSafePath(e.name);
-    if (e.name.endsWith("/")) continue; // directory marker
+    const isDirName = e.name.endsWith("/");
+    // JSZip derives entry.dir from the DOS directory attribute, not the
+    // name, so a dir-bit entry with a plain file name is silently dropped
+    // by JSZip while unzip(1) and python zipfile extract it as a file.
+    if ((e.externalAttrs & DOS_DIR_ATTR) !== 0 && !isDirName) {
+      throw new Error(`zip unpack: directory attribute on non-directory name: ${e.name}`);
+    }
+    if (isDirName) {
+      // A "/"-terminated name carrying content is the mirror image of the
+      // same differential: readers that key on the name drop the body.
+      if (e.size !== 0 || e.compressedSize !== 0) {
+        throw new Error(`zip unpack: directory marker with nonzero size: ${e.name}`);
+      }
+      continue; // directory marker
+    }
     if (e.method !== 0) {
       throw new Error(`zip unpack: only STORED supported, got method ${e.method}: ${e.name}`);
     }

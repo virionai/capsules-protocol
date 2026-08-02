@@ -272,3 +272,77 @@ test("reader limits must be positive integers", async () => {
     /maxTotalBytes must be a positive integer/,
   );
 });
+
+// --- Authoritative entry set (findings F01 / F11) --------------------------
+// The raw central-directory scan is the single source of truth for which
+// entries a capsule contains. JSZip derives entry.dir from the DOS directory
+// attribute (node_modules/jszip/lib/zipEntry.js processAttributes) and
+// re-keys entries by their LOCAL header name, so both must be pinned to the
+// central directory or a signed capsule can hide a file from the JS reader
+// that unzip(1) and python zipfile happily extract.
+
+function sealedEntries(files) {
+  return [...files.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, data]) => ({ name, data: Buffer.from(data) }));
+}
+
+async function sealedCapsule() {
+  const ed = generateEd25519();
+  const b = new CapsuleBuilder({
+    originator: { publicKey: ed.publicKeyHex, label: "Acme" },
+    participants: [{ actor_id: "human:alice", role: "originator", label: "Alice" }],
+    createdAt: TS,
+  });
+  b.setProgram("# Program\n");
+  b.appendEvent({
+    actor: "human:alice",
+    kind: "decision",
+    action: "submit",
+    target: "program.md",
+    timestamp: TS,
+    payload: {},
+  });
+  const bytes = await b.seal({
+    signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
+    signedAt: TS,
+  });
+  return { bytes, ed };
+}
+
+test("a DOS-dir-bit entry cannot smuggle a file past verifyCapsule", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const { bytes, ed } = await sealedCapsule();
+  const entries = sealedEntries(await unpackZip(bytes));
+  // externalAttrs = 0x10 is the DOS "directory" bit. JSZip reports
+  // entry.dir === true for it regardless of the name; unzip(1) and python
+  // zipfile see a plain 17-byte file called smuggled.md.
+  const forged = writeRawZip([
+    ...entries,
+    { name: "smuggled.md", data: Buffer.from("# hidden payload\n", "utf8"), dosAttrs: 0x10 },
+  ]);
+  await assert.rejects(
+    () => unpackZip(forged),
+    /directory attribute on non-directory name: smuggled\.md/,
+  );
+  await assert.rejects(() => CapsuleReader.fromBytes(forged), /smuggled\.md/);
+  // And the capsule must never verify ok with a trusted signer.
+  let verified = null;
+  try {
+    verified = await verifyCapsule(await CapsuleReader.fromBytes(forged), {
+      allowlist: [ed.publicKeyHex],
+    });
+  } catch {
+    verified = null;
+  }
+  assert.equal(verified, null, "forged capsule must not open, let alone verify");
+});
+
+test("unpackZip rejects a directory marker with nonzero size", async () => {
+  const { writeRawZip } = await import("../tools/rawzip.mjs");
+  const forged = writeRawZip([
+    { name: "a.txt", data: "a" },
+    { name: "dir/", data: Buffer.from("not really a directory\n", "utf8"), dosAttrs: 0x10 },
+  ]);
+  await assert.rejects(() => unpackZip(forged), /directory marker with nonzero size: dir\//);
+});
