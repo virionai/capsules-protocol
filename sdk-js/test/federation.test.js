@@ -86,8 +86,8 @@ test("ed25519-jcs attestation signs and verifies offline with binding", () => {
     expectedIssuer: issuer,
   });
   assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.equal(res.subject.clerk_user_id, "user_1");
-  assert.equal(res.subject.org_role, "admin");
+  assert.equal(res.identity.subject.clerk_user_id, "user_1");
+  assert.equal(res.identity.subject.org_role, "admin");
 });
 
 test("ed25519-jcs attestation fails when a claim is tampered", () => {
@@ -232,8 +232,8 @@ test("verifyIdentityAttestation accepts a Clerk JWT attestation with binding", (
     expectedIssuer: "https://clerk.acme.example", audience: AUD,
   });
   assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.equal(res.subject.clerk_user_id, "user_42");
-  assert.equal(res.subject.org_role, "admin");
+  assert.equal(res.identity.subject.clerk_user_id, "user_42");
+  assert.equal(res.identity.subject.org_role, "admin");
 });
 
 // --------------------------------------------------------------------------
@@ -712,7 +712,7 @@ test("a native trust root published as a standard Ed25519 OKP JWK is consumable"
     expectedIssuer: issuer,
   });
   assert.equal(res.ok, true, JSON.stringify(res.errors));
-  assert.equal(res.subject.clerk_user_id, "user_1");
+  assert.equal(res.identity.subject.clerk_user_id, "user_1");
 });
 
 test("an X25519 OKP JWK is never usable as an attestation key", () => {
@@ -740,4 +740,91 @@ test("an X25519 OKP JWK is never usable as an attestation key", () => {
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("no trust-root key")));
+});
+
+// --------------------------------------------------------------------------
+// Machine-readable outcomes (spec/federation.md "Failure reporting") and the
+// nesting rule: identity never travels without its verification basis
+// --------------------------------------------------------------------------
+
+test("status distinguishes unverified (unknown) from rejected (negative)", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const base = {
+    now: new Date(TS), capsuleId: "a".repeat(64),
+    signerPublicKeyHex: signer.publicKeyHex, expectedIssuer: issuer,
+  };
+
+  // Trust roots present and everything checks out.
+  const good = verifyIdentityAttestation(att, { ...base, trustRoots });
+  assert.equal(good.ok, true, JSON.stringify(good.errors));
+  assert.equal(good.status, "attestation_verified");
+
+  // No trust roots cached: UNKNOWN, not negative (federation.md).
+  const unknown = verifyIdentityAttestation(att, { ...base, trustRoots: { keys: [] } });
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.status, "attestation_unverified");
+
+  // Trust roots present, binding does not match: STRONG NEGATIVE.
+  const rejected = verifyIdentityAttestation(att, {
+    ...base, trustRoots, capsuleId: "b".repeat(64),
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.status, "attestation_rejected");
+});
+
+test("a malformed attestation reports attestation_rejected", () => {
+  const res = verifyIdentityAttestation(
+    { typ: "something-else" },
+    {
+      capsuleId: "a".repeat(64), signerPublicKeyHex: "0".repeat(64),
+      expectedIssuer: "capsules.acme.example",
+    },
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.status, "attestation_rejected");
+});
+
+test("subject identity is nested under its basis and absent unless verified", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: { clerk_user_id: "user_1", org_role: "admin" },
+      issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const base = {
+    now: new Date(TS), capsuleId: "a".repeat(64),
+    signerPublicKeyHex: signer.publicKeyHex, expectedIssuer: issuer,
+  };
+
+  // Verified: the subject is reachable ONLY through `identity`, which
+  // carries its own basis, so the claim can never travel without it.
+  const good = verifyIdentityAttestation(att, { ...base, trustRoots });
+  assert.equal(good.identity.status, "attestation_verified");
+  assert.equal(good.identity.subject.clerk_user_id, "user_1");
+  assert.equal(good.identity.claims.signer_role, "originator");
+  assert.ok(!("subject" in good), "subject must not be a skippable sibling of ok");
+  assert.ok(!("claims" in good), "claims must not be a skippable sibling of ok");
+
+  // Unverified (no trust roots): there is no verified identity to read.
+  const unknown = verifyIdentityAttestation(att, { ...base, trustRoots: { keys: [] } });
+  assert.equal(unknown.identity, null);
+
+  // Rejected (signature tampered): there is no verified identity to read.
+  const forged = structuredClone(att);
+  forged.claims.subject.org_role = "superadmin";
+  const rejected = verifyIdentityAttestation(forged, { ...base, trustRoots });
+  assert.equal(rejected.status, "attestation_rejected");
+  assert.equal(rejected.identity, null);
 });

@@ -23,6 +23,13 @@ import { createPublicKey, verify as nodeVerify } from "node:crypto";
 import { normalizeIssuer } from "./issuer.js";
 
 export const ATTESTATION_TYP = "capsule-identity-attestation";
+
+// Attestation-layer outcome vocabulary (spec/federation.md "Failure
+// reporting"). These are the machine-readable statuses a host policy keys
+// off; `attestation_unverified` is "unknown", not "negative".
+export const ATTESTATION_VERIFIED = "attestation_verified";
+export const ATTESTATION_UNVERIFIED = "attestation_unverified";
+export const ATTESTATION_REJECTED = "attestation_rejected";
 export const ATTESTATION_DOMAIN = Buffer.from(
   "capsule-identity-attestation-v0.6\x00",
   "utf8",
@@ -200,7 +207,13 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
   const roots = normalizeTrustRoots(trustRoots);
   const match = selectKey(roots, header.kid, header.alg);
   if (!match || !match.jwk) {
-    return { ok: false, claims, errors: [`jwt: no trust-root key for kid=${header.kid}`] };
+    // Not a negative signal: the host simply holds no key for this kid.
+    return {
+      ok: false,
+      claims,
+      errors: [`jwt: no trust-root key for kid=${header.kid}`],
+      trustRootMissing: true,
+    };
   }
   let signatureValid = false;
   try {
@@ -229,7 +242,14 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
 
 /**
  * Verify an identity attestation offline and confirm it binds THIS capsule's
- * signer. Returns { ok, subject, claims, errors }.
+ * signer. Returns { ok, status, identity, errors }, where status is one of
+ * ATTESTATION_VERIFIED / ATTESTATION_UNVERIFIED / ATTESTATION_REJECTED
+ * (spec/federation.md "Failure reporting").
+ *
+ * `identity` is `{ status, subject, claims }` when — and ONLY when — the
+ * attestation verified. An unverified or rejected attestation yields
+ * `identity: null`: a claim never leaves this function without its basis,
+ * and a caller cannot read a subject while skipping the verdict.
  *
  * options (capsuleId and signerPublicKeyHex are REQUIRED — an attestation
  * that is not checked against a specific capsule and signer binds nothing;
@@ -260,9 +280,15 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     );
   }
   const errors = [];
+  let trustRootMissing = false;
   const now = options.now instanceof Date ? options.now.getTime() : options.now ?? Date.now();
   if (!attestation || attestation.typ !== ATTESTATION_TYP) {
-    return { ok: false, subject: null, claims: null, errors: ["not a capsule identity attestation"] };
+    return {
+      ok: false,
+      status: ATTESTATION_REJECTED,
+      identity: null,
+      errors: ["not a capsule identity attestation"],
+    };
   }
   if (normalizeIssuer(attestation.issuer) !== normalizeIssuer(options.expectedIssuer)) {
     errors.push(`attestation issuer mismatch: ${attestation.issuer} vs ${options.expectedIssuer}`);
@@ -274,6 +300,7 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     const key = selectKey(roots, attestation.kid, "ed25519-jcs");
     if (!key || !key.public_key_hex) {
       errors.push(`no trust-root key for kid=${attestation.kid}`);
+      trustRootMissing = true;
     } else if (typeof attestation.signature !== "string") {
       errors.push("attestation missing signature");
     } else {
@@ -302,6 +329,7 @@ export function verifyIdentityAttestation(attestation, options = {}) {
       audience: options.audience,
     });
     errors.push(...res.errors);
+    if (res.trustRootMissing) trustRootMissing = true;
     const bindingKey = options.jwtBindingClaim ?? "cap";
     const binding = res.claims?.[bindingKey] ?? {};
     claims = {
@@ -318,7 +346,12 @@ export function verifyIdentityAttestation(attestation, options = {}) {
       },
     };
   } else {
-    return { ok: false, subject: null, claims: null, errors: [`unsupported attestation alg ${attestation.alg}`] };
+    return {
+      ok: false,
+      status: ATTESTATION_REJECTED,
+      identity: null,
+      errors: [`unsupported attestation alg ${attestation.alg}`],
+    };
   }
 
   // Expiry (ed25519-jcs carries ISO instants in claims; the JWT profile
@@ -366,7 +399,24 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     }
   }
 
-  return { ok: errors.length === 0, subject: claims.subject ?? null, claims, errors };
+  // spec/federation.md "Failure reporting" distinguishes two oppositely
+  // signed outcomes: `attestation_unverified` (no trust roots cached — the
+  // signer is valid but identity-unverified, NOT a negative signal) from
+  // `attestation_rejected` (a strong negative: bad signature, expiry, or
+  // binding mismatch). Collapsing both into ok:false loses that sign.
+  const ok = errors.length === 0;
+  const status = ok
+    ? ATTESTATION_VERIFIED
+    : trustRootMissing && errors.length === 1
+      ? ATTESTATION_UNVERIFIED
+      : ATTESTATION_REJECTED;
+  return {
+    ok,
+    status,
+    // The verified identity travels WITH its basis, or not at all.
+    identity: ok ? { status, subject: claims.subject ?? null, claims } : null,
+    errors,
+  };
 }
 
 // Exposed for issuers/tests that need to construct a compact JWT.

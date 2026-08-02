@@ -15,6 +15,9 @@
 export {
   ATTESTATION_TYP,
   ATTESTATION_DOMAIN,
+  ATTESTATION_VERIFIED,
+  ATTESTATION_UNVERIFIED,
+  ATTESTATION_REJECTED,
   signIdentityAttestation,
   verifyIdentityAttestation,
   verifyJwt,
