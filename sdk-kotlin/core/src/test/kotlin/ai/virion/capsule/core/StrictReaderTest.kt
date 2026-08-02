@@ -69,6 +69,91 @@ class StrictReaderTest {
         )
     }
 
+    /**
+     * spec/format.md: the DOS directory attribute (0x10) on a name that does
+     * not end in "/" is a parser differential — JSZip drops the entry as a
+     * directory while unzip(1)/zipfile extract it as a file — so the reader
+     * must refuse the container instead of picking a side.
+     */
+    @Test
+    fun directoryAttributeOnNonDirectoryNameIsRejected() {
+        val bytes = File(vectorsDir(), "malformed-layout/output/dir-bit-smuggle.capsule").readBytes()
+        val e = assertFailsWith<IllegalArgumentException> { CapsuleZip.unpack(bytes) }
+        assertTrue(
+            e.message!!.contains("directory attribute on non-directory name"),
+            "expected a directory-attribute rejection; got ${e.message}",
+        )
+        assertFalse(
+            CapsuleVerifier.verify(bytes).ok,
+            "dir-bit-smuggle.capsule must not verify",
+        )
+    }
+
+    /**
+     * spec/format.md: a "/"-terminated name declaring content is the mirror
+     * image of the same differential — readers that key directory-ness on
+     * the name silently drop the body.
+     */
+    @Test
+    fun directoryMarkerWithContentIsRejected() {
+        val bytes = File(
+            vectorsDir(),
+            "malformed-layout/output/dir-marker-with-content.capsule",
+        ).readBytes()
+        val e = assertFailsWith<IllegalArgumentException> { CapsuleZip.unpack(bytes) }
+        assertTrue(
+            e.message!!.contains("directory marker with nonzero size"),
+            "expected a directory-marker rejection; got ${e.message}",
+        )
+        assertFalse(
+            CapsuleVerifier.verify(bytes).ok,
+            "dir-marker-with-content.capsule must not verify",
+        )
+    }
+
+    /**
+     * spec/format.md: the LOCAL file-header name must equal the
+     * central-directory name. Readers that re-key by the local header (JSZip)
+     * otherwise extract a different entry set than the one the strictness
+     * scan validated.
+     */
+    @Test
+    fun localCentralNameMismatchIsRejected() {
+        val bytes = File(
+            vectorsDir(),
+            "malformed-layout/output/local-name-mismatch.capsule",
+        ).readBytes()
+        val e = assertFailsWith<IllegalArgumentException> { CapsuleZip.unpack(bytes) }
+        assertTrue(
+            e.message!!.contains("local/central name mismatch"),
+            "expected a name-mismatch rejection; got ${e.message}",
+        )
+        assertFalse(
+            CapsuleVerifier.verify(bytes).ok,
+            "local-name-mismatch.capsule must not verify",
+        )
+    }
+
+    /**
+     * A well-formed zero-size "/" directory marker is unambiguous: it is
+     * skipped from the entry set (matching the JS/Python/Rust lanes) rather
+     * than rejected.
+     */
+    @Test
+    fun zeroSizeDirectoryMarkerIsSkippedNotRejected() {
+        val archive = CapsuleZip.pack(
+            listOf(
+                "a.txt" to "hello\n".toByteArray(Charsets.UTF_8),
+                "notes/" to ByteArray(0),
+            ),
+        )
+        val entries = CapsuleZip.unpack(archive)
+        assertEquals(
+            listOf("a.txt"), entries.map { it.first },
+            "the directory marker must be skipped, not returned or rejected",
+        )
+    }
+
     companion object {
 
         /** Walk up from the gradle module dir until we find spec/vectors. */

@@ -16,6 +16,10 @@ public enum CapsuleZip {
     private static let EOCD_SIG: UInt32 = 0x0605_4b50
     private static let CDH_SIG: UInt32 = 0x0201_4b50
     private static let LFH_SIG: UInt32 = 0x0403_4b50
+    /// DOS "directory" attribute, the low bit some ZIP readers (JSZip in
+    /// the JS reference lane) use to decide directory-ness instead of the
+    /// entry name.
+    private static let DOS_DIR_ATTR: UInt32 = 0x10
 
     public static func pack(_ files: [(path: String, data: Data)]) -> Data {
         precondition(files.count <= MAX_ENTRIES, "zip: too many entries")
@@ -89,12 +93,16 @@ public enum CapsuleZip {
     /// contain, and would take the host process down with it. All
     /// structural violations throw `CapsuleError.malformed`.
     ///
-    /// Mirrors `scanCentralDirectory` in `sdk-js/src/zip.js`: the central
-    /// directory is walked by its declared byte size (not by the
-    /// attacker-controlled EOCD record count, which is cross-checked
-    /// afterwards), ZIP64 sentinels are refused outright, and the
-    /// spec/format.md reader limits (10,000 entries, 1 GiB total) are
-    /// enforced here on the read path, not only in `pack`.
+    /// Mirrors `scanCentralDirectory` + `assertStrictEntries` in
+    /// `sdk-js/src/zip.js`: the central directory is walked by its declared
+    /// byte size (not by the attacker-controlled EOCD record count, which is
+    /// cross-checked afterwards), ZIP64 sentinels are refused outright, and
+    /// the spec/format.md reader limits (10,000 entries, 1 GiB total) are
+    /// enforced here on the read path, not only in `pack`. Parser-differential
+    /// shapes are rejected on the RAW central directory: duplicate names,
+    /// local/central file-name disagreement, the DOS directory attribute on a
+    /// non-"/" name, and "/"-terminated names carrying content. Well-formed
+    /// zero-size directory markers are skipped, matching the reference lanes.
     public static func unpack(_ bytes: Data) throws -> [(path: String, data: Data)] {
         let b = [UInt8](bytes)
         guard b.count >= EOCD_MIN else { throw CapsuleError.malformed("zip too small") }
@@ -148,6 +156,10 @@ public enum CapsuleZip {
         let cdEnd = eocd
         var out: [(String, Data)] = []
         var totalBytes = 0
+        // Number of central-directory records walked (including directory
+        // markers, which carry no data and are not returned). Cross-checked
+        // against the EOCD's declared count after the walk.
+        var recordCount = 0
         // Entry-name and entry-shape checks run on the name as stored in the
         // central directory, before any map/dictionary collapse — a reader
         // that dedupes on load silently accepts archives other readers reject
@@ -157,11 +169,11 @@ public enum CapsuleZip {
         while p < cdEnd {
             guard p + 46 <= cdEnd else {
                 throw CapsuleError.malformed(
-                    "zip: truncated central-directory record \(out.count)")
+                    "zip: truncated central-directory record \(recordCount)")
             }
             let sig = try read32(b, p)
             guard sig == CDH_SIG else {
-                throw CapsuleError.malformed("zip: bad CD signature at record \(out.count)")
+                throw CapsuleError.malformed("zip: bad CD signature at record \(recordCount)")
             }
             let compression = try read16(b, p + 10)
             let compSize = Int(try read32(b, p + 20))
@@ -183,7 +195,7 @@ public enum CapsuleZip {
             let next = p + 46 + nameLen + extraLen + commentLen
             guard next <= cdEnd else {
                 throw CapsuleError.malformed(
-                    "zip: truncated central-directory record \(out.count)")
+                    "zip: truncated central-directory record \(recordCount)")
             }
             let name = String(decoding: b[(p + 46)..<(p + 46 + nameLen)], as: UTF8.self)
             try assertSafePath(name)
@@ -194,15 +206,13 @@ public enum CapsuleZip {
                 throw CapsuleError.malformed("zip: duplicate entry: \(name)")
             }
             seen.insert(name)
-            // Unix mode bits live in the high 16 bits of the external attrs.
-            let mode = (externalAttrs >> 16) & 0xFFFF
-            if (mode & 0o170000) == 0o120000 {
-                throw CapsuleError.malformed("zip entry is a symlink: \(name)")
+            recordCount += 1
+            guard recordCount <= MAX_ENTRIES else {
+                throw CapsuleError.malformed("zip: too many entries (\(recordCount))")
             }
             p = next
 
-            // Local header + entry data must live entirely before the
-            // central directory.
+            // Local header must live entirely before the central directory.
             guard localOff + 30 <= cdOffset else {
                 throw CapsuleError.malformed("zip: local header out of range for \(name)")
             }
@@ -212,6 +222,47 @@ public enum CapsuleZip {
             }
             let lfhNameLen = Int(try read16(b, localOff + 26))
             let lfhExtraLen = Int(try read16(b, localOff + 28))
+            guard localOff + 30 + lfhNameLen <= cdOffset else {
+                throw CapsuleError.malformed("zip: truncated local file header for \(name)")
+            }
+            // The central directory is authoritative. Some readers (JSZip in
+            // the JS reference lane) re-key entries by the LOCAL header name,
+            // so any disagreement means two parsers see different entry sets.
+            let localName = String(
+                decoding: b[(localOff + 30)..<(localOff + 30 + lfhNameLen)], as: UTF8.self)
+            guard localName == name else {
+                throw CapsuleError.malformed(
+                    "zip: local/central name mismatch: central \"\(name)\", local \"\(localName)\"")
+            }
+
+            // Directory-ness must be unambiguous: readers disagree about
+            // whether it comes from the DOS attribute bit or the trailing "/".
+            // JSZip derives entry.dir from the attribute bit, so a dir-bit
+            // entry with a plain file name is silently dropped there while
+            // unzip(1) and python zipfile extract it as a file.
+            let isDirName = name.hasSuffix("/")
+            if (externalAttrs & DOS_DIR_ATTR) != 0 && !isDirName {
+                throw CapsuleError.malformed(
+                    "zip: directory attribute on non-directory name: \(name)")
+            }
+            if isDirName {
+                // A "/"-terminated name carrying content is the mirror image
+                // of the same differential: readers that key on the name drop
+                // the body.
+                guard uncompSize == 0, compSize == 0 else {
+                    throw CapsuleError.malformed(
+                        "zip: directory marker with nonzero size: \(name)")
+                }
+                continue // directory marker; carries no data
+            }
+
+            // Unix mode bits live in the high 16 bits of the external attrs.
+            let mode = (externalAttrs >> 16) & 0xFFFF
+            if (mode & 0o170000) == 0o120000 {
+                throw CapsuleError.malformed("zip entry is a symlink: \(name)")
+            }
+
+            // Entry data must live entirely before the central directory.
             let dataOff = localOff + 30 + lfhNameLen + lfhExtraLen
             guard dataOff <= cdOffset, compSize <= cdOffset - dataOff else {
                 throw CapsuleError.malformed("zip: entry data out of range for \(name)")
@@ -221,13 +272,10 @@ public enum CapsuleZip {
                 throw CapsuleError.malformed("zip: total-size limit exceeded")
             }
             out.append((name, Data(b[dataOff..<(dataOff + compSize)])))
-            guard out.count <= MAX_ENTRIES else {
-                throw CapsuleError.malformed("zip: too many entries (\(out.count))")
-            }
         }
-        guard out.count == cdCount else {
+        guard recordCount == cdCount else {
             throw CapsuleError.malformed(
-                "zip: central-directory entry count mismatch (EOCD \(cdCount), actual \(out.count))")
+                "zip: central-directory entry count mismatch (EOCD \(cdCount), actual \(recordCount))")
         }
         return out
     }

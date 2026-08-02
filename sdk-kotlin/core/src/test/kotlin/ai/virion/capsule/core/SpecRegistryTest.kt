@@ -144,6 +144,11 @@ class SpecRegistryTest {
         "unsafe_path" -> listOf("zip path traversal", "zip path: absolute")
         "unsupported_compression" -> listOf("only STORED supported")
         "symlink_entry" -> listOf("symlink")
+        "directory_marker_shape" -> listOf(
+            "directory attribute on non-directory name",
+            "directory marker with nonzero size",
+        )
+        "local_central_name_mismatch" -> listOf("local/central name mismatch")
         else -> error("unknown open-stage reason $reason")
     }
 

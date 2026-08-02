@@ -68,6 +68,11 @@ final class SpecRegistryTests: XCTestCase {
             return ["only STORED supported"]
         case "symlink_entry":
             return ["symlink"]
+        case "directory_marker_shape":
+            return ["directory attribute on non-directory name",
+                    "directory marker with nonzero size"]
+        case "local_central_name_mismatch":
+            return ["local/central name mismatch"]
         default:
             XCTFail("unknown open-stage reason \(reason)")
             return []

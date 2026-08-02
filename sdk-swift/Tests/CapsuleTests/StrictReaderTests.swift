@@ -73,4 +73,58 @@ final class StrictReaderTests: XCTestCase {
         XCTAssertFalse(CapsuleVerifier.verify(bytes).ok,
                        "symlink-entry.capsule must not verify")
     }
+
+    /// spec/format.md: the DOS directory attribute (0x10) on a name that does
+    /// not end in "/" is a parser differential — JSZip drops the entry as a
+    /// directory while unzip(1)/zipfile extract it as a file — so the reader
+    /// must refuse the container instead of picking a side.
+    func testDirectoryAttributeOnNonDirectoryNameIsRejected() throws {
+        let bytes = try fixture("malformed-layout/output/dir-bit-smuggle.capsule")
+        XCTAssertThrowsError(try CapsuleZip.unpack(bytes)) { error in
+            XCTAssertTrue("\(error)".contains("directory attribute on non-directory name"),
+                          "expected a directory-attribute rejection; got \(error)")
+        }
+        XCTAssertFalse(CapsuleVerifier.verify(bytes).ok,
+                       "dir-bit-smuggle.capsule must not verify")
+    }
+
+    /// spec/format.md: a "/"-terminated name declaring content is the mirror
+    /// image of the same differential — readers that key directory-ness on
+    /// the name silently drop the body.
+    func testDirectoryMarkerWithContentIsRejected() throws {
+        let bytes = try fixture("malformed-layout/output/dir-marker-with-content.capsule")
+        XCTAssertThrowsError(try CapsuleZip.unpack(bytes)) { error in
+            XCTAssertTrue("\(error)".contains("directory marker with nonzero size"),
+                          "expected a directory-marker rejection; got \(error)")
+        }
+        XCTAssertFalse(CapsuleVerifier.verify(bytes).ok,
+                       "dir-marker-with-content.capsule must not verify")
+    }
+
+    /// spec/format.md: the LOCAL file-header name must equal the
+    /// central-directory name. Readers that re-key by the local header (JSZip)
+    /// otherwise extract a different entry set than the one the strictness
+    /// scan validated.
+    func testLocalCentralNameMismatchIsRejected() throws {
+        let bytes = try fixture("malformed-layout/output/local-name-mismatch.capsule")
+        XCTAssertThrowsError(try CapsuleZip.unpack(bytes)) { error in
+            XCTAssertTrue("\(error)".contains("local/central name mismatch"),
+                          "expected a name-mismatch rejection; got \(error)")
+        }
+        XCTAssertFalse(CapsuleVerifier.verify(bytes).ok,
+                       "local-name-mismatch.capsule must not verify")
+    }
+
+    /// A well-formed zero-size "/" directory marker is unambiguous: it is
+    /// skipped from the entry set (matching the JS/Python/Rust lanes) rather
+    /// than rejected, and the EOCD record count still cross-checks.
+    func testZeroSizeDirectoryMarkerIsSkippedNotRejected() throws {
+        let archive = CapsuleZip.pack([
+            (path: "a.txt", data: Data("hello\n".utf8)),
+            (path: "notes/", data: Data()),
+        ])
+        let entries = try CapsuleZip.unpack(archive)
+        XCTAssertEqual(entries.map { $0.path }, ["a.txt"],
+                       "the directory marker must be skipped, not returned or rejected")
+    }
 }
