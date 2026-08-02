@@ -7,26 +7,37 @@
 // authorization policy satisfied? A host with no policy simply skips this.
 
 /**
- * evaluateSignerPolicy(verifyResult, attestedSigners, policy)
+ * evaluateSignerPolicy(verifyResult, attestedSigners, policy, options)
  *
  * verifyResult    the object returned by verifyCapsule()
- * attestedSigners [{ signer_public_key, signer_role, subject }] — the claims
- *                 of attestations already verified with
- *                 verifyIdentityAttestation() (ok === true only)
+ * attestedSigners [{ capsule_id, signer_public_key, signer_role, subject }] —
+ *                 the verified identity claims of attestations already
+ *                 checked with verifyIdentityAttestation(); pass each
+ *                 result's `identity.claims` (non-null only when the
+ *                 attestation verified)
  * policy          {
  *                   issuer,                       // informational
  *                   required: [
  *                     { role, org_role?, quorum = 1 }
  *                   ]
  *                 }
+ * options         { capsuleId }  REQUIRED — the capsule these attestations
+ *                 must be bound to. Matching a signer by public key alone
+ *                 makes a cross-capsule replay invisible at this layer.
  *
  * Returns { satisfied, matched: [...], unmet: [...], errors: [...] }.
  *
- * A signer counts toward a requirement only if its key is both a trusted
- * signer in verifyResult (valid signature + on the allowlist) AND covered by
- * an attestation matching the required role (and org_role, when specified).
+ * A signer counts toward a requirement only if its key is a trusted signer in
+ * verifyResult (valid signature + on the allowlist) AND covered by an
+ * attestation bound to THIS capsule_id matching the required role (and
+ * org_role, when specified).
  */
-export function evaluateSignerPolicy(verifyResult, attestedSigners, policy) {
+export function evaluateSignerPolicy(verifyResult, attestedSigners, policy, options = {}) {
+  if (typeof options.capsuleId !== "string" || options.capsuleId.length === 0) {
+    throw new TypeError(
+      "evaluateSignerPolicy requires options.capsuleId: an attestation counts only for the capsule it was bound to (spec/federation.md)",
+    );
+  }
   const errors = [];
   const required = policy?.required ?? [];
 
@@ -38,7 +49,18 @@ export function evaluateSignerPolicy(verifyResult, attestedSigners, policy) {
 
   const attestByKey = new Map();
   for (const a of attestedSigners ?? []) {
-    if (a?.signer_public_key) attestByKey.set(a.signer_public_key.toLowerCase(), a);
+    if (!a?.signer_public_key) continue;
+    const key = a.signer_public_key.toLowerCase();
+    // Cross-capsule replay: an attestation whose binding names a different
+    // capsule proves nothing here, however valid its signature.
+    if (a.capsule_id !== options.capsuleId) {
+      errors.push(
+        `policy: attestation for signer ${key} is bound to capsule_id ` +
+          `${a.capsule_id ?? "(none)"}, not ${options.capsuleId}`,
+      );
+      continue;
+    }
+    attestByKey.set(key, a);
   }
 
   const matched = [];
@@ -70,5 +92,9 @@ export function evaluateSignerPolicy(verifyResult, attestedSigners, policy) {
     }
   }
 
-  return { satisfied: unmet.length === 0, matched, unmet, errors };
+  // An attestation bound to another capsule is a strong negative signal
+  // (spec/federation.md "Failure reporting": attestation_rejected), so it
+  // fails the policy even when the remaining signers satisfy every
+  // requirement.
+  return { satisfied: unmet.length === 0 && errors.length === 0, matched, unmet, errors };
 }

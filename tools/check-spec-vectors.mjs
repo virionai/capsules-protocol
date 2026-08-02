@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Four vector shapes are recognized under spec/vectors/:
+// Five vector shapes are recognized under spec/vectors/ (plus the
+// signing-input doc, documented at checkSigningInput below):
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
 //      `expected` map of observed hashes (capsule_id, first_event_hash,
@@ -28,6 +29,12 @@
 //      The negative entries are witnesses an unguarded verifier accepts —
 //      small-order and non-canonical public keys, and a non-reduced S.
 //
+//   5. An identity-attestation outcome set (meta.kind ===
+//      "identity-attestation"): inline attestation documents plus the
+//      verification context they must be checked against, with an expected
+//      `{ ok, status, error_includes? }`. `status` is the attestation-layer
+//      vocabulary of spec/federation.md "Failure reporting".
+//
 // keys.json (the tamper-detection fixture keypair, consumed by the
 // Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
 // unrecognized JSON under spec/vectors/ is a hard failure: this checker
@@ -38,6 +45,7 @@ import { existsSync } from "node:fs";
 import { join, resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CapsuleReader, verifyCapsule } from "../sdk-js/src/index.js";
+import { verifyIdentityAttestation } from "../sdk-js/src/federation/attestation.js";
 import {
   bytesToHex,
   concatBytes,
@@ -414,6 +422,54 @@ function isKeyValidationVector(doc) {
   return doc && typeof doc === "object" && doc.meta?.kind === "ed25519-verify";
 }
 
+function isAttestationVectorSet(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "identity-attestation";
+}
+
+// Attestation-layer outcome registry (spec/federation.md "Failure
+// reporting"). Each vector carries a complete attestation document plus the
+// verification context it must be checked against; `expected.status` pins the
+// machine-readable outcome, which is what separates "unknown" from "negative".
+function checkAttestationVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (!v.attestation || !v.expected) {
+      fail(`${label}: vector requires attestation and expected`);
+      continue;
+    }
+    const ctx = { ...(doc.context ?? {}), ...(v.context ?? {}) };
+    const trustRoots = v.trust_roots ?? doc.trust_roots;
+    let result;
+    try {
+      result = verifyIdentityAttestation(v.attestation, {
+        trustRoots,
+        now: new Date(ctx.now),
+        capsuleId: ctx.capsule_id,
+        signerPublicKeyHex: ctx.signer_public_key,
+        expectedIssuer: ctx.expected_issuer,
+        audience: ctx.audience,
+      });
+    } catch (err) {
+      fail(`${label}: verification threw: ${err.message}`);
+      continue;
+    }
+    if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
+      fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    if (v.expected.status && result.status !== v.expected.status) {
+      fail(`${label}: expected status '${v.expected.status}', got '${result.status}'`);
+    }
+    if (v.expected.error_includes && !result.errors.join(" ").includes(v.expected.error_includes)) {
+      fail(`${label}: expected an error containing '${v.expected.error_includes}', got ${result.errors.join("; ")}`);
+    }
+  }
+}
+
 // Ed25519 key/signature validation registry (meta.kind === "ed25519-verify"):
 // each entry pins a (public_key, message, signature) triple and the verdict a
 // conforming verifier must report. The negative entries are witnesses — an
@@ -464,13 +520,14 @@ async function checkFile(path) {
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
   else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
   else if (isKeyValidationVector(doc)) checkKeyValidationVectors(path, doc);
+  else if (isAttestationVectorSet(doc)) checkAttestationVectors(path, doc);
   else if (isCollection(doc)) await checkCollection(path, doc);
   else if (isEmbeddedVector(doc)) await checkEmbeddedVector(path, doc);
   else {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
         `an outcome-vector collection, a signing-input doc, an ed25519-verify doc, ` +
-        `or a jcs number set)`
+        `an identity-attestation set, or a jcs number set)`
     );
   }
 }

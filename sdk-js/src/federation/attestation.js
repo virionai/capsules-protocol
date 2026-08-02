@@ -20,8 +20,16 @@
 import { jcs, bytesToHex, hexToBytes } from "../canonical.js";
 import { ed25519Sign, ed25519Verify } from "../crypto.js";
 import { createPublicKey, verify as nodeVerify } from "node:crypto";
+import { normalizeIssuer } from "./issuer.js";
 
 export const ATTESTATION_TYP = "capsule-identity-attestation";
+
+// Attestation-layer outcome vocabulary (spec/federation.md "Failure
+// reporting"). These are the machine-readable statuses a host policy keys
+// off; `attestation_unverified` is "unknown", not "negative".
+export const ATTESTATION_VERIFIED = "attestation_verified";
+export const ATTESTATION_UNVERIFIED = "attestation_unverified";
+export const ATTESTATION_REJECTED = "attestation_rejected";
 export const ATTESTATION_DOMAIN = Buffer.from(
   "capsule-identity-attestation-v0.6\x00",
   "utf8",
@@ -88,19 +96,66 @@ export function signIdentityAttestation({
 function normalizeTrustRoots(trustRoots) {
   if (!trustRoots) return [];
   const keys = Array.isArray(trustRoots) ? trustRoots : trustRoots.keys ?? [];
-  return keys.map((k) => {
-    // A raw JWKS entry (from Clerk's /.well-known/jwks.json) has kty/kid/alg.
-    if (k.kty && !k.public_key_hex && !k.jwk) {
-      return { kid: k.kid, alg: k.alg ?? (k.kty === "OKP" ? "ed25519-jcs" : "ES256"), jwk: k };
+  const out = [];
+  for (const k of keys) {
+    if (!k || typeof k !== "object") continue;
+    // Already a native entry ({kid, alg, public_key_hex}) or a pre-wrapped
+    // JWK entry ({kid, alg, jwk}).
+    if (k.public_key_hex || k.jwk) {
+      out.push(k);
+      continue;
     }
-    return k;
-  });
+    if (!k.kty) continue;
+    // A raw JWKS entry: Clerk's /.well-known/jwks.json, or a conforming
+    // issuer publishing its NATIVE ed25519-jcs trust root as a standard
+    // RFC 8037 OKP JWK. The native verify path needs raw key bytes, so
+    // decode the base64url `x` coordinate into public_key_hex here.
+    if (k.kty === "OKP") {
+      if (k.crv !== "Ed25519") continue; // X25519/Ed448 are not attestation keys
+      const raw = b64uToBuf(typeof k.x === "string" ? k.x : "");
+      if (raw.length !== 32) continue;
+      out.push({ kid: k.kid, alg: "ed25519-jcs", public_key_hex: bytesToHex(raw), jwk: k });
+      continue;
+    }
+    out.push({ kid: k.kid, alg: k.alg ?? "ES256", jwk: k });
+  }
+  return out;
 }
 
+// `kid` selects the key (spec/profiles/clerk.md "Security notes"). A cached
+// trust-root set may hold several keys — possibly from several issuers — so
+// an unknown or ambiguous kid MUST fail closed. Falling back to "any cached
+// key whose alg matches" would accept an attestation signed by any key in
+// the set. A kid-less attestation resolves only when the set holds exactly
+// one key of the requested algorithm.
 function selectKey(roots, kid, alg) {
-  const byKid = roots.filter((k) => k.kid === kid);
-  const pool = byKid.length ? byKid : roots;
-  return pool.find((k) => k.alg === alg) ?? null;
+  const byAlg = roots.filter((k) => k.alg === alg);
+  if (kid == null || kid === "") return byAlg.length === 1 ? byAlg[0] : null;
+  const matches = byAlg.filter((k) => k.kid === kid);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// Claim timestamps are RFC 3339 instants (spec/federation.md: "issued_at /
+// expires_at are ISO-8601 UTC"). `Date.parse` returns NaN for garbage and
+// every comparison against NaN is false — so an unparseable `expires_at`
+// silently becomes "never expires". Parse strictly and fail closed.
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+function parseInstant(value) {
+  if (typeof value !== "string" || !RFC3339.test(value)) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Project a JWT NumericDate (seconds since epoch) into an RFC 3339 instant.
+// Anything that is not a representable finite number is passed through as a
+// string so parseInstant rejects it — never crash on attacker-shaped input
+// (Date#toISOString throws on out-of-range or NaN dates).
+function jwtInstant(value) {
+  if (value == null) return undefined;
+  if (typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e12) {
+    return new Date(value * 1000).toISOString();
+  }
+  return String(value);
 }
 
 const JWT_ALG_TO_NODE = {
@@ -112,12 +167,29 @@ const JWT_ALG_TO_NODE = {
 
 /**
  * Verify a compact JWT (Clerk-issued or compatible) against trust roots /
- * a JWKS. Fully offline given the JWKS. Returns { ok, claims, errors }.
+ * a JWKS. Fully offline given the JWKS. Returns
+ * { ok, claims, errors, trustRootMissing? }.
  *
- * Checks signature, alg/kid selection, and (when present) exp/nbf plus the
- * caller-supplied issuer/audience.
+ * `claims` is the DECODED token payload, returned on failure too so callers
+ * can report diagnostics — it is authenticated only when ok === true and MUST
+ * never be treated as verified identity otherwise.
+ *
+ * Checks signature, alg/kid selection, exp/nbf when present, and the
+ * caller-supplied issuer and audience — both REQUIRED. `trustRootMissing`
+ * marks the "no cached key for this kid" case, which is unknown rather than
+ * negative (spec/federation.md "Failure reporting").
  */
 export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
+  if (typeof issuer !== "string" || issuer.length === 0) {
+    throw new TypeError(
+      "verifyJwt requires an expected issuer: `iss` is checked against caller-supplied trust configuration, never against the token that carries it",
+    );
+  }
+  if (typeof audience !== "string" || audience.length === 0) {
+    throw new TypeError(
+      "verifyJwt requires an expected audience: an attestation JWT is scoped to the verifying host (spec/profiles/clerk.md)",
+    );
+  }
   const errors = [];
   const nowSec = Math.floor((now instanceof Date ? now.getTime() : (now ?? Date.now())) / 1000);
   const parts = String(compact).split(".");
@@ -135,7 +207,13 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
   const roots = normalizeTrustRoots(trustRoots);
   const match = selectKey(roots, header.kid, header.alg);
   if (!match || !match.jwk) {
-    return { ok: false, claims, errors: [`jwt: no trust-root key for kid=${header.kid}`] };
+    // Not a negative signal: the host simply holds no key for this kid.
+    return {
+      ok: false,
+      claims,
+      errors: [`jwt: no trust-root key for kid=${header.kid}`],
+      trustRootMissing: true,
+    };
   }
   let signatureValid = false;
   try {
@@ -154,31 +232,66 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
   if (!signatureValid) errors.push("jwt: signature invalid");
   if (typeof claims.exp === "number" && nowSec >= claims.exp) errors.push("jwt: expired");
   if (typeof claims.nbf === "number" && nowSec < claims.nbf) errors.push("jwt: not yet valid");
-  if (issuer && claims.iss !== issuer) errors.push(`jwt: issuer mismatch (${claims.iss})`);
-  if (audience) {
-    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!aud.includes(audience)) errors.push(`jwt: audience mismatch (${claims.aud})`);
+  if (normalizeIssuer(claims.iss) !== normalizeIssuer(issuer)) {
+    errors.push(`jwt: issuer mismatch (${claims.iss})`);
   }
+  const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud == null ? [] : [claims.aud];
+  if (!aud.includes(audience)) errors.push(`jwt: audience mismatch (${claims.aud})`);
   return { ok: errors.length === 0, claims, errors };
 }
 
 /**
  * Verify an identity attestation offline and confirm it binds THIS capsule's
- * signer. Returns { ok, subject, claims, errors }.
+ * signer. Returns { ok, status, identity, errors }, where status is one of
+ * ATTESTATION_VERIFIED / ATTESTATION_UNVERIFIED / ATTESTATION_REJECTED
+ * (spec/federation.md "Failure reporting").
  *
- * options:
+ * `identity` is `{ status, subject, claims }` when — and ONLY when — the
+ * attestation verified. An unverified or rejected attestation yields
+ * `identity: null`: a claim never leaves this function without its basis,
+ * and a caller cannot read a subject while skipping the verdict.
+ *
+ * options (capsuleId and signerPublicKeyHex are REQUIRED — an attestation
+ * that is not checked against a specific capsule and signer binds nothing;
+ * see spec/federation.md "Identity attestation"):
  *   trustRoots          issuer public keys / JWKS (required for a real check)
  *   now                 Date | ms | undefined (defaults to Date.now)
- *   capsuleId           expected capsule_id the attestation must bind
- *   signerPublicKeyHex  expected signer key the attestation must bind
+ *   capsuleId           expected capsule_id the attestation MUST bind
+ *   signerPublicKeyHex  expected signer key the attestation MUST bind
+ *   expectedIssuer      REQUIRED issuer identity (origin or bare DNS form)
+ *   audience            REQUIRED for the JWT profile: expected `aud`
  *   jwtBindingClaim     for JWT profile: claim key holding the capsule binding
  *                       object (default "cap")
  */
 export function verifyIdentityAttestation(attestation, options = {}) {
+  if (typeof options.capsuleId !== "string" || options.capsuleId.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.capsuleId: an attestation is only meaningful against a specific capsule (spec/federation.md)",
+    );
+  }
+  if (typeof options.signerPublicKeyHex !== "string" || options.signerPublicKeyHex.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.signerPublicKeyHex: an attestation is only meaningful against a specific signer (spec/federation.md)",
+    );
+  }
+  if (typeof options.expectedIssuer !== "string" || options.expectedIssuer.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.expectedIssuer: the issuer is caller-supplied trust configuration, never read from the attestation being checked (spec/federation.md)",
+    );
+  }
   const errors = [];
+  let trustRootMissing = false;
   const now = options.now instanceof Date ? options.now.getTime() : options.now ?? Date.now();
   if (!attestation || attestation.typ !== ATTESTATION_TYP) {
-    return { ok: false, subject: null, claims: null, errors: ["not a capsule identity attestation"] };
+    return {
+      ok: false,
+      status: ATTESTATION_REJECTED,
+      identity: null,
+      errors: ["not a capsule identity attestation"],
+    };
+  }
+  if (normalizeIssuer(attestation.issuer) !== normalizeIssuer(options.expectedIssuer)) {
+    errors.push(`attestation issuer mismatch: ${attestation.issuer} vs ${options.expectedIssuer}`);
   }
 
   let claims;
@@ -187,6 +300,7 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     const key = selectKey(roots, attestation.kid, "ed25519-jcs");
     if (!key || !key.public_key_hex) {
       errors.push(`no trust-root key for kid=${attestation.kid}`);
+      trustRootMissing = true;
     } else if (typeof attestation.signature !== "string") {
       errors.push("attestation missing signature");
     } else {
@@ -200,20 +314,30 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     claims = attestation.claims ?? {};
   } else if (attestation.jwt) {
     // JWT profile (Clerk): the binding lives inside the verified token.
+    if (typeof options.audience !== "string" || options.audience.length === 0) {
+      throw new TypeError(
+        "verifyIdentityAttestation requires options.audience for the JWT profile: the attestation JWT is scoped to the verifying host (spec/profiles/clerk.md)",
+      );
+    }
     const res = verifyJwt(attestation.jwt, {
       trustRoots: options.trustRoots,
       now,
-      issuer: attestation.issuer,
+      // The expected issuer is caller trust configuration. Reading it from
+      // `attestation.issuer` — a field on the same untrusted wrapper — would
+      // make the `iss` check self-referential and therefore vacuous.
+      issuer: options.expectedIssuer,
+      audience: options.audience,
     });
     errors.push(...res.errors);
+    if (res.trustRootMissing) trustRootMissing = true;
     const bindingKey = options.jwtBindingClaim ?? "cap";
     const binding = res.claims?.[bindingKey] ?? {};
     claims = {
       capsule_id: binding.capsule_id,
       signer_public_key: binding.signer_public_key,
       signer_role: binding.signer_role,
-      issued_at: res.claims?.iat != null ? new Date(res.claims.iat * 1000).toISOString() : undefined,
-      expires_at: res.claims?.exp != null ? new Date(res.claims.exp * 1000).toISOString() : undefined,
+      issued_at: jwtInstant(res.claims?.iat),
+      expires_at: jwtInstant(res.claims?.exp),
       subject: {
         clerk_user_id: res.claims?.sub,
         clerk_org_id: res.claims?.org_id,
@@ -222,27 +346,77 @@ export function verifyIdentityAttestation(attestation, options = {}) {
       },
     };
   } else {
-    return { ok: false, subject: null, claims: null, errors: [`unsupported attestation alg ${attestation.alg}`] };
+    return {
+      ok: false,
+      status: ATTESTATION_REJECTED,
+      identity: null,
+      errors: [`unsupported attestation alg ${attestation.alg}`],
+    };
   }
 
-  // Expiry (ed25519-jcs carries ISO timestamps in claims).
-  if (claims.expires_at && now >= Date.parse(claims.expires_at)) errors.push("attestation expired");
-  if (claims.issued_at && Date.parse(claims.issued_at) - now > 5 * 60 * 1000) {
-    errors.push("attestation issued in the future");
+  // Expiry (ed25519-jcs carries ISO instants in claims; the JWT profile
+  // reprojects iat/exp). An attestation with no expiry, or with an
+  // unparseable one, is REJECTED — never treated as "never expires".
+  if (claims.expires_at == null) {
+    errors.push("attestation missing required claim 'expires_at'");
+  } else {
+    const expiresAt = parseInstant(claims.expires_at);
+    if (expiresAt === null) {
+      errors.push(`attestation expires_at is not an RFC 3339 instant: ${claims.expires_at}`);
+    } else if (now >= expiresAt) {
+      errors.push("attestation expired");
+    }
+  }
+  if (claims.issued_at != null) {
+    const issuedAt = parseInstant(claims.issued_at);
+    if (issuedAt === null) {
+      errors.push(`attestation issued_at is not an RFC 3339 instant: ${claims.issued_at}`);
+    } else if (issuedAt - now > 5 * 60 * 1000) {
+      errors.push("attestation issued in the future");
+    }
   }
 
-  // Binding checks: the attestation must be for THIS capsule and signer.
-  if (options.capsuleId && claims.capsule_id !== options.capsuleId) {
-    errors.push(`capsule_id binding mismatch: ${claims.capsule_id} vs ${options.capsuleId}`);
-  }
-  if (
-    options.signerPublicKeyHex &&
-    claims.signer_public_key?.toLowerCase() !== options.signerPublicKeyHex.toLowerCase()
-  ) {
-    errors.push("signer_public_key binding mismatch");
+  // The binding claims are MANDATORY (spec/federation.md "Identity
+  // attestation"): an attestation whose claims omit them binds nothing. A raw
+  // provider session token — which carries no `cap` object at all — lands
+  // here and is rejected (spec/profiles/clerk.md "Security notes").
+  let bindingComplete = true;
+  for (const field of ["capsule_id", "signer_public_key", "signer_role"]) {
+    const value = claims?.[field];
+    if (typeof value !== "string" || value.length === 0) {
+      errors.push(`attestation missing required binding claim '${field}'`);
+      bindingComplete = false;
+    }
   }
 
-  return { ok: errors.length === 0, subject: claims.subject ?? null, claims, errors };
+  // Binding checks: the attestation MUST be for THIS capsule and signer.
+  if (bindingComplete) {
+    if (claims.capsule_id !== options.capsuleId) {
+      errors.push(`capsule_id binding mismatch: ${claims.capsule_id} vs ${options.capsuleId}`);
+    }
+    if (claims.signer_public_key.toLowerCase() !== options.signerPublicKeyHex.toLowerCase()) {
+      errors.push("signer_public_key binding mismatch");
+    }
+  }
+
+  // spec/federation.md "Failure reporting" distinguishes two oppositely
+  // signed outcomes: `attestation_unverified` (no trust roots cached — the
+  // signer is valid but identity-unverified, NOT a negative signal) from
+  // `attestation_rejected` (a strong negative: bad signature, expiry, or
+  // binding mismatch). Collapsing both into ok:false loses that sign.
+  const ok = errors.length === 0;
+  const status = ok
+    ? ATTESTATION_VERIFIED
+    : trustRootMissing && errors.length === 1
+      ? ATTESTATION_UNVERIFIED
+      : ATTESTATION_REJECTED;
+  return {
+    ok,
+    status,
+    // The verified identity travels WITH its basis, or not at all.
+    identity: ok ? { status, subject: claims.subject ?? null, claims } : null,
+    errors,
+  };
 }
 
 // Exposed for issuers/tests that need to construct a compact JWT.

@@ -142,6 +142,13 @@ Served at `https://<issuer>/.well-known/capsule-issuer.json`:
 `trust_roots` MAY instead carry `jwks_uri`. The document is cacheable; a
 verifier that already holds the trust roots never fetches it.
 
+`issuer` MUST equal the domain the document was fetched from, and
+`jwks_uri` MUST be on that same origin. A reader MUST treat either
+mismatch as `issuer_document_invalid` and compute no trust from the
+document: trust roots are the keys every other check is made against, so
+a document that can name any issuer and point anywhere is not a trust
+anchor at all.
+
 ### Signer document
 
 Served at `https://<issuer>/.well-known/capsule-signers`, content type
@@ -242,10 +249,40 @@ nothing: their key is not in that issuer's document.
 
 An attestation is a signed statement binding **one capsule** and **one
 signer key** to an external subject. Its binding claims MUST include
-`capsule_id`, `signer_public_key`, and `signer_role`; verifiers MUST
-reject an attestation whose `capsule_id`/`signer_public_key` do not
-match the capsule and signer being checked, and MUST reject an expired
-attestation.
+`capsule_id`, `signer_public_key`, and `signer_role`.
+
+A verifier checking an attestation MUST be supplied the capsule id, the
+signer key, and the expected issuer out-of-band: they are host trust
+configuration and are never read from the artifact being checked. The
+verifier MUST reject the attestation unless **all** of the following
+hold.
+
+1. **Binding claims present.** `capsule_id`, `signer_public_key`, and
+   `signer_role` are each present and non-empty. An attestation missing
+   any of them binds nothing, however valid its signature — a raw
+   provider session token is exactly this case.
+2. **Binding matches.** `capsule_id` and `signer_public_key` equal the
+   capsule and signer being checked (`signer_public_key` compared as
+   case-insensitive hex).
+3. **Issuer matches.** The attestation's issuer equals the caller's
+   expected issuer after the normalization in *Vocabulary*. For the JWT
+   profile the token's `iss` is checked against that same
+   caller-supplied value — never against a field of the attestation
+   wrapper, which whoever produced the wrapper also controls — and the
+   token's `aud` MUST match the verifying host's expected audience.
+4. **Key selection is closed.** `kid` selects the trust-root key. An
+   unknown or ambiguous `kid` resolves to *no* key; a verifier MUST NOT
+   fall back to trying the other keys in a cached set. A `kid`-less
+   attestation resolves only when the set holds exactly one key of the
+   requested algorithm.
+5. **Time is parseable and current.** `expires_at` MUST be present, MUST
+   be an RFC 3339 instant, and MUST be in the future. An unparseable
+   timestamp is a rejection, never an absent constraint.
+
+For the `ed25519-jcs` profile a verifier MUST accept an issuer trust
+root published as an RFC 8037 Ed25519 OKP JWK (`kty: "OKP"`,
+`crv: "Ed25519"`, base64url `x`), which is what a JWKS-publishing issuer
+serves.
 
 Because `capsule_id = SHA-256(domain ‖ originator_pubkey ‖ first_event_hash)`
 depends only on the originator key and first event, it is known before
@@ -255,6 +292,23 @@ content index makes it tamper-evident) or delivered as a **detached
 sidecar** and re-associated by `capsule_id`. Embedding is preferred: the
 attestation travels with the file and cannot be altered without failing
 verification.
+
+Embedding the attestation document alone is not yet fully
+self-contained verification. Everything required to verify must be
+capturable inside the capsule at seal time — discovery is an
+optimization, never a precondition — and an audit years later will have
+no live issuer and no host cache. Checking an embedded attestation
+additionally needs (a) the issuer's trust-root key material as it stood
+at seal time (the JWKS entry named by `kid`), (b) the expected issuer
+identity, and (c) for the JWT profile, the audience the token was
+minted for. Today (a)–(c) are host trust configuration with no defined
+location in the capsule layout; a capsule MAY carry a snapshot of them
+alongside the attestation, but a verifier MUST still treat any embedded
+trust-root material as *self-attested* — trust derives only from
+matching it against keys the host obtained out-of-band, exactly as
+[trust.md](trust.md) requires for signer keys. Defining a normative
+embedded location for attestations, trust-root snapshots, and anchor
+proofs is an open v0.7 item.
 
 The attestation answers "who controls this key"; the signer document
 answers "does the issuer still vouch for it". They are independent
@@ -360,7 +414,11 @@ where the layers compose. A signer counts toward a requirement only if
    anchors preferred; self-attested `signed_at` otherwise).
 4. **Attested identity** — where the requirement is identity-scoped,
    the signer is covered by a verified identity attestation for the
-   required role (and, if scoped, the required provider role).
+   required role (and, if scoped, the required provider role). The
+   attestation MUST be one whose `capsule_id` binds **this** capsule:
+   policy evaluation re-checks the binding rather than matching
+   attestations to signers by public key alone, so a cross-capsule
+   replay cannot satisfy a requirement.
 
 Policy evaluation is a pure function of the verification result,
 verified attestations, and cached issuer documents — no network, no
@@ -389,8 +447,19 @@ Attestation-layer categories:
   issuer. Unknown, not negative: the signer is *valid but
   identity-unverified*.
 - `attestation_rejected` — trust roots present but the attestation is
-  expired, its signature fails, or its `capsule_id`/`signer_public_key`
-  binding does not match. Strong negative signal.
+  expired, its signature fails, its binding claims are absent, or its
+  `capsule_id`/`signer_public_key`/issuer binding does not match. Strong
+  negative signal.
+
+These two outcomes are oppositely signed and MUST stay distinguishable
+in an implementation's result: an adapter that collapses both into a
+bare "not ok" destroys the distinction this vocabulary exists to draw.
+The reference adapter reports `attestation_verified`,
+`attestation_unverified`, or `attestation_rejected` on every result —
+and returns the subject identity only inside a structure that carries
+that status, never as a bare field a caller can read while skipping the
+verdict — and `spec/vectors/identity-attestation/vectors.json` pins
+those outcomes.
 
 The verifier's L2 math result is unchanged in every case.
 

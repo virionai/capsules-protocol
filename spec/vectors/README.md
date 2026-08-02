@@ -1,6 +1,6 @@
 # Capsule v0.6 Vectors
 
-This directory contains checked-in protocol vectors. Five shapes exist, all
+This directory contains checked-in protocol vectors. Six shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 
@@ -71,6 +71,19 @@ lane):
    (`ed25519_key_validation_registry`), Swift (`Ed25519KeyValidationTests`)
    and Kotlin (`Ed25519KeyValidationVectorTest`) lanes consume it directly.
 
+6. **Identity-attestation outcome set**
+   (`identity-attestation/vectors.json`, detected by
+   `meta.kind: "identity-attestation"`) — inline attestation documents for
+   the native `ed25519-jcs` profile, the trust-root set and verification
+   context each is checked against (`capsule_id`, `signer_public_key`,
+   `expected_issuer`, `now`; per-vector `trust_roots`/`context` override the
+   top-level ones), and an expected `{ ok, status, error_includes? }`.
+   `status` is the attestation-layer vocabulary of `spec/federation.md`
+   *Failure reporting*: `attestation_verified`, `attestation_unverified`
+   (unknown — no trust roots cached), `attestation_rejected` (strong
+   negative). Only the native profile is pinned: Ed25519 signatures are
+   deterministic, ECDSA (the JWT profile) is not.
+
 Other JSON here (e.g. `tamper-detection/output/keys.json`,
 `unknown-fields/output/keys.json`, and `signer-set/output/keys.json`) is
 supporting material, not a vector, and is ignored by the checker.
@@ -90,6 +103,9 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-ed25519-key-validation-vector.mjs` →
   `ed25519-key-validation.json` (searches node:crypto's raw verify for the
   acceptance witnesses; `--check` detects drift)
+- `sdk-js/tools/generate-attestation-vectors.mjs` →
+  `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
+  byte-stable, supports `--check`)
 
 No warranty: vectors are conformance fixtures only. They are not production
 templates, compliance artifacts, legal advice, security advice, or
