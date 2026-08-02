@@ -69,6 +69,20 @@ incompatible wire changes ship as `0.7`).
 - **Malformed-layout fixtures are drift-checked.** The deterministic generator
   supports `--check`, which runs as a required JavaScript conformance target.
 
+### Security
+
+- **The Swift reader no longer traps on hostile containers.**
+  `CapsuleZip.unpack` indexed its byte array with unvalidated EOCD and
+  central-directory offsets, so a 22-byte crafted `.capsule` produced a
+  Swift array trap — a `fatalError`, which the `do`/`catch` in
+  `CapsuleVerifier.verify` cannot contain — and killed the host process.
+  Every offset is now bounds-checked, the central directory must close
+  exactly on the EOCD, ZIP64 sentinels and ambiguous multi-EOCD archives
+  are refused, and the `spec/format.md` reader limits (10,000 entries,
+  1 GiB total) are enforced on the read path rather than only in `pack`.
+  Malformed bytes now surface as `CapsuleError.malformed` / `ok=false`,
+  matching the JS, Python, and Rust lanes.
+
 ## v0.6.0-prototype.1 — 2026-05-12 (unreleased)
 
 The v0.6 redesign of the Capsule format around the actual product:

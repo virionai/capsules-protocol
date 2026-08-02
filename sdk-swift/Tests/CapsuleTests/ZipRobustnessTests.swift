@@ -156,6 +156,29 @@ final class ZipRobustnessTests: XCTestCase {
         assertMalformed(Data([0x50, 0x4b, 0x05, 0x06]), "signature only")
     }
 
+    // MARK: - Reader limits (spec/format.md: 10,000 entries, 1 GiB)
+
+    func testEntryCountCapIsEnforcedOnRead() {
+        // EOCD declares 20,000 entries; the cap must trip before any walk.
+        let hostile = Self.eocd(entryCount: 20_000, cdSize: 0, cdOffset: 0)
+        XCTAssertThrowsError(try CapsuleZip.unpack(hostile)) { err in
+            XCTAssertTrue("\(err)".contains("too many entries"),
+                          "expected an entry-count rejection, got \(err)")
+        }
+    }
+
+    func testDeclaredEntryCountMustMatchTheDirectoryWalk() {
+        // The walk is driven by the directory's byte size, so a lying EOCD
+        // count cannot hide a record from the strictness checks.
+        var archive = Self.validArchive()
+        let eocdAt = Self.eocdOffset(archive)
+        archive.replaceSubrange((eocdAt + 10)..<(eocdAt + 12), with: Self.le16(7))
+        XCTAssertThrowsError(try CapsuleZip.unpack(archive)) { err in
+            XCTAssertTrue("\(err)".contains("entry count mismatch"),
+                          "expected a count-mismatch rejection, got \(err)")
+        }
+    }
+
     // MARK: - The happy path still works
 
     func testWellFormedArchiveStillRoundTrips() throws {

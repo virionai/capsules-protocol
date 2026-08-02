@@ -7,6 +7,10 @@ public enum CapsuleZip {
     private static let DOS_TIME: UInt16 = 0
     private static let DOS_DATE: UInt16 = 0x0021 // 1980-01-01
     private static let MAX_ENTRIES = 10_000
+    /// Reader-side total-uncompressed-size cap (spec/format.md
+    /// "File-count and total-uncompressed-size limits"): 1 GiB, matching
+    /// sdk-js's MAX_TOTAL_BYTES and verifier-rust's MAX_TOTAL_BYTES.
+    private static let MAX_TOTAL_BYTES = 1024 * 1024 * 1024
     private static let EOCD_MIN = 22
     private static let MAX_COMMENT = 0xFFFF
     private static let EOCD_SIG: UInt32 = 0x0605_4b50
@@ -87,8 +91,10 @@ public enum CapsuleZip {
     ///
     /// Mirrors `scanCentralDirectory` in `sdk-js/src/zip.js`: the central
     /// directory is walked by its declared byte size (not by the
-    /// attacker-controlled EOCD record count) and ZIP64 sentinels are
-    /// refused outright.
+    /// attacker-controlled EOCD record count, which is cross-checked
+    /// afterwards), ZIP64 sentinels are refused outright, and the
+    /// spec/format.md reader limits (10,000 entries, 1 GiB total) are
+    /// enforced here on the read path, not only in `pack`.
     public static func unpack(_ bytes: Data) throws -> [(path: String, data: Data)] {
         let b = [UInt8](bytes)
         guard b.count >= EOCD_MIN else { throw CapsuleError.malformed("zip too small") }
@@ -130,6 +136,9 @@ public enum CapsuleZip {
         guard cdCount != 0xFFFF, cdSize != 0xFFFF_FFFF, cdOffset != 0xFFFF_FFFF else {
             throw CapsuleError.malformed("zip: ZIP64 archives are not supported")
         }
+        guard cdCount <= MAX_ENTRIES else {
+            throw CapsuleError.malformed("zip: too many entries (\(cdCount))")
+        }
         // Central-directory geometry must close exactly on the EOCD; this
         // is what makes every subsequent record offset in-bounds.
         guard cdOffset <= eocd, cdSize <= eocd, cdOffset + cdSize == eocd else {
@@ -138,6 +147,7 @@ public enum CapsuleZip {
 
         let cdEnd = eocd
         var out: [(String, Data)] = []
+        var totalBytes = 0
         var p = cdOffset
         while p < cdEnd {
             guard p + 46 <= cdEnd else {
@@ -188,7 +198,18 @@ public enum CapsuleZip {
             guard dataOff <= cdOffset, compSize <= cdOffset - dataOff else {
                 throw CapsuleError.malformed("zip: entry data out of range for \(name)")
             }
+            totalBytes += compSize
+            guard totalBytes <= MAX_TOTAL_BYTES else {
+                throw CapsuleError.malformed("zip: total-size limit exceeded")
+            }
             out.append((name, Data(b[dataOff..<(dataOff + compSize)])))
+            guard out.count <= MAX_ENTRIES else {
+                throw CapsuleError.malformed("zip: too many entries (\(out.count))")
+            }
+        }
+        guard out.count == cdCount else {
+            throw CapsuleError.malformed(
+                "zip: central-directory entry count mismatch (EOCD \(cdCount), actual \(out.count))")
         }
         return out
     }
