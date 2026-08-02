@@ -144,6 +144,8 @@ const OPEN_REASON = {
   unsafe_path: /(parent traversal|absolute|NUL)/,
   unsupported_compression: /only STORED supported/,
   symlink_entry: /symlink/,
+  directory_marker_shape: /directory (attribute on non-directory name|marker with nonzero size)/,
+  local_central_name_mismatch: /local\/central name mismatch/,
 };
 
 async function checkCollection(path, doc) {

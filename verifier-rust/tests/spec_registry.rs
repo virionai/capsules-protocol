@@ -142,6 +142,8 @@ fn open_reason_needles(reason: &str) -> &'static [&'static str] {
         "unsafe_path" => &["parent-traversal", "path is absolute"],
         "unsupported_compression" => &["unsupported compression"],
         "symlink_entry" => &["symlink"],
+        "directory_marker_shape" => &["directory marker shape"],
+        "local_central_name_mismatch" => &["local/central name mismatch"],
         other => panic!("unknown open-stage reason {other:?}"),
     }
 }

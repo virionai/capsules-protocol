@@ -40,6 +40,8 @@ OPEN_REASON_PATTERNS = {
     "unsafe_path": r"(parent traversal|absolute)",
     "unsupported_compression": r"only STORED",
     "symlink_entry": r"symlink",
+    "directory_marker_shape": r"directory (attribute on non-directory name|marker with nonzero size)",
+    "local_central_name_mismatch": r"local/central name mismatch",
 }
 
 AREA_PREDICATES = {
