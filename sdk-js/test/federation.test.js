@@ -269,21 +269,30 @@ test("evaluateSignerPolicy enforces role and quorum over trusted+attested signer
       ],
     },
   };
+  const capsuleId = "a".repeat(64);
   const attested = [
-    { signer_public_key: admin, signer_role: "originator", subject: { org_role: "admin" } },
-    { signer_public_key: reviewer, signer_role: "reviewer", subject: { org_role: "member" } },
+    { capsule_id: capsuleId, signer_public_key: admin, signer_role: "originator", subject: { org_role: "admin" } },
+    { capsule_id: capsuleId, signer_public_key: reviewer, signer_role: "reviewer", subject: { org_role: "member" } },
   ];
-  const ok = evaluateSignerPolicy(verifyResult, attested, {
-    required: [
-      { role: "originator", org_role: "admin" },
-      { role: "reviewer", quorum: 1 },
-    ],
-  });
+  const ok = evaluateSignerPolicy(
+    verifyResult,
+    attested,
+    {
+      required: [
+        { role: "originator", org_role: "admin" },
+        { role: "reviewer", quorum: 1 },
+      ],
+    },
+    { capsuleId },
+  );
   assert.equal(ok.satisfied, true, JSON.stringify(ok.errors));
 
-  const unmet = evaluateSignerPolicy(verifyResult, attested, {
-    required: [{ role: "reviewer", quorum: 2 }],
-  });
+  const unmet = evaluateSignerPolicy(
+    verifyResult,
+    attested,
+    { required: [{ role: "reviewer", quorum: 2 }] },
+    { capsuleId },
+  );
   assert.equal(unmet.satisfied, false);
   assert.ok(unmet.errors[0].includes("needs 2"));
 });
@@ -827,4 +836,33 @@ test("subject identity is nested under its basis and absent unless verified", ()
   const rejected = verifyIdentityAttestation(forged, { ...base, trustRoots });
   assert.equal(rejected.status, "attestation_rejected");
   assert.equal(rejected.identity, null);
+});
+
+test("evaluateSignerPolicy rejects an attestation bound to another capsule", () => {
+  const admin = "1".repeat(64);
+  const capsuleId = "a".repeat(64);
+  const verifyResult = {
+    envelope: { signers: [{ public_key: admin, valid: true, trusted: true }] },
+  };
+  // A validly-signed attestation for a DIFFERENT capsule, replayed here.
+  const replayed = [
+    { capsule_id: "b".repeat(64), signer_public_key: admin, signer_role: "originator", subject: { org_role: "admin" } },
+  ];
+  const res = evaluateSignerPolicy(
+    verifyResult,
+    replayed,
+    { required: [{ role: "originator", org_role: "admin" }] },
+    { capsuleId },
+  );
+  assert.equal(res.satisfied, false, "a cross-capsule attestation must not satisfy policy");
+  assert.ok(res.errors.some((e) => e.includes("is bound to capsule_id")));
+  assert.equal(res.matched.length, 0);
+});
+
+test("evaluateSignerPolicy refuses to run without a capsule id", () => {
+  const verifyResult = { envelope: { signers: [] } };
+  assert.throws(
+    () => evaluateSignerPolicy(verifyResult, [], { required: [] }),
+    /requires options\.capsuleId/,
+  );
 });
