@@ -1,8 +1,20 @@
 // JCS — RFC 8785 canonicalization. Mirrors the JavaScript reference SDK.
 //
-// Object keys sorted by code-unit order. Numbers via shortest-roundtrip,
-// rejecting NaN/Infinity. Strings escape RFC 8259 mandatory chars and
-// U+0000..U+001F. Arrays preserve insertion order.
+// Object keys sorted by UTF-16 code-unit order, per RFC 8785 §3.2.3. This
+// lane gets that for free: `sortedBy` is `sortedWith(compareBy(selector))`,
+// whose comparator bottoms out in `compareValues(a, b)` ->
+// `Comparable.compareTo` -> java.lang.String.compareTo, which is specified
+// to compare `char` values — and a Java `char` IS a UTF-16 code unit. Do
+// NOT replace it with a Collator, a locale-aware comparator, or a
+// codePoints() comparison: code-point order disagrees with UTF-16 whenever
+// a supplementary key (>= U+10000) meets a key in U+E000..U+FFFF, which is
+// exactly the bug sdk-py and sdk-swift had. Pinned by
+// SpecRegistryTest.jcsKeyOrderRegistry. Manifest.buildContentIndex and
+// CapsuleZip.pack lean on the same property for path ordering.
+//
+// Numbers via shortest-roundtrip, rejecting NaN/Infinity. Strings escape
+// RFC 8259 mandatory chars and U+0000..U+001F. Arrays preserve insertion
+// order.
 
 package ai.virion.capsule.core
 

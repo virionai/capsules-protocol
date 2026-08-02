@@ -8,6 +8,7 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -102,6 +103,58 @@ class SpecRegistryTest {
             }
             assertVerifyOutcome(name, expected, verify(bytes, allowlist))
         }
+    }
+
+    /**
+     * JCS object-member ordering registry (RFC 8785 §3.2.3): members sort
+     * on their UTF-16 code-unit sequences.
+     *
+     * AUDIT RESULT: this lane was already correct and needs no source
+     * change. `sortedBy { it.first }` is `sortedWith(compareBy(selector))`,
+     * whose comparator body is `compareValues(a, b)` ->
+     * `(a as Comparable<Any>).compareTo(b)` -> `java.lang.String.compareTo`,
+     * specified to compare `char` values — and a Java `char` IS a UTF-16
+     * code unit. Contrast Rust (`str: Ord` is UTF-8 byte order == code-point
+     * order) and Swift (`String: Comparable` is normalization-aware), both
+     * of which needed fixes. These vectors pin the property so nobody
+     * "improves" it into a `java.text.Collator` or a `codePoints()`
+     * comparison.
+     */
+    @Test
+    fun jcsKeyOrderRegistry() {
+        val file = File(vectorsDir(), "jcs-key-order.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "jcs-key-order registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val keys = v.getAsJsonArray("keys").map { it.asString }
+            val pairs: List<Pair<String, JCSValue>> =
+                keys.mapIndexed { i, k -> k to JCSValue.Integer(i.toLong()) }
+            val canon = JCS.bytes(JCSValue.Obj(pairs))
+            assertEquals(v.get("canonical_utf8_hex").asString, CapsuleCrypto.bytesToHex(canon), name)
+            assertEquals(v.get("sha256_hex").asString, CapsuleCrypto.sha256Hex(canon), name)
+        }
+    }
+
+    /**
+     * The comparator claim itself, independent of the vector file: the two
+     * orderings genuinely differ, so `jcsKeyOrderRegistry` above is not
+     * passing by coincidence.
+     */
+    @Test
+    fun stringCompareToIsUtf16CodeUnitOrder() {
+        val emoji = String(Character.toChars(0x1F600)) // D83D DE00
+        val privateUse = String(Character.toChars(0xE000)) // E000
+        assertTrue(
+            emoji < privateUse,
+            "String.compareTo must be UTF-16 code-unit order (RFC 8785 3.2.3)",
+        )
+        assertTrue(
+            Character.codePointAt(emoji, 0) > Character.codePointAt(privateUse, 0),
+            "...and must NOT be code-point order",
+        )
     }
 
     private fun assertEncryptedRefused(name: String, bytes: ByteArray) {
