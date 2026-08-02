@@ -182,3 +182,52 @@ test("CapsuleBuilder: { pith: false } per-event opts out for one event only", as
   assert.equal(events[0].payload.summary, "Alice\n\nsubmitted.");
   assert.equal(events[1].payload.summary, "Bob approved.");
 });
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+test("compressText: truncation never splits a surrogate pair", () => {
+  // The default cut index (280 - 1 ellipsis = 279) is odd, so an all-emoji
+  // string lands mid-pair without a boundary guard.
+  const out = compressText("🙂".repeat(200));
+  assert.ok(out.text.length <= 280);
+  assert.ok(!LONE_SURROGATE.test(out.text), "output must be well-formed Unicode");
+  assert.ok(out.text.endsWith("…"));
+});
+
+test("compressText: surrogate-safe at every odd and even cut index", () => {
+  const input = "🙂".repeat(64);
+  for (let maxChars = 2; maxChars <= 128; maxChars++) {
+    const { text } = compressText(input, { maxChars });
+    assert.ok(!LONE_SURROGATE.test(text), `maxChars=${maxChars} split a pair`);
+    assert.ok(text.length <= maxChars, `maxChars=${maxChars} overflowed`);
+  }
+});
+
+test("compressText: maxChars of 1 yields the bare ellipsis", () => {
+  assert.equal(compressText("hello world", { maxChars: 1 }).text, "…");
+  assert.equal(compressText("🙂🙂🙂", { maxChars: 1 }).text, "…");
+});
+
+test("CapsuleBuilder: an emoji summary seals and its chain bytes canonicalize", async () => {
+  const ed = generateEd25519();
+  const builder = new CapsuleBuilder({
+    originator: { publicKey: ed.publicKeyHex },
+    participants: [{ actor_id: "human:alice", role: "originator" }],
+    createdAt: TS,
+  });
+  builder.setProgram("# X");
+  builder.appendEvent({
+    actor: "human:alice",
+    kind: "observation",
+    action: "note",
+    target: "x",
+    timestamp: TS,
+    payload: { summary: "🙂".repeat(200) },
+  });
+  const bytes = await builder.seal({
+    signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
+    signedAt: TS,
+  });
+  const summary = (await CapsuleReader.fromBytes(bytes)).events()[0].payload.summary;
+  assert.ok(!LONE_SURROGATE.test(summary));
+});

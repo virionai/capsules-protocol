@@ -93,10 +93,13 @@ function firstSentences(input, maxSentences) {
 
 function truncateAtWordBoundary(input, maxChars) {
   if (input.length <= maxChars) return input;
-  if (maxChars <= ELLIPSIS.length) return ELLIPSIS.slice(0, maxChars);
+  // maxChars is a positive integer and ELLIPSIS is one UTF-16 code unit,
+  // so this branch is only reachable with maxChars === 1: there is no room
+  // for content, only the ellipsis itself.
+  if (maxChars <= ELLIPSIS.length) return ELLIPSIS;
 
   const limit = maxChars - ELLIPSIS.length;
-  const prefix = input.slice(0, limit);
+  const prefix = sliceAtCodePointBoundary(input, limit);
   const trimmedPrefix = prefix.trimEnd();
   const lastSpace = trimmedPrefix.lastIndexOf(" ");
   const minimumUsefulBoundary = Math.floor(limit * 0.6);
@@ -108,6 +111,23 @@ function truncateAtWordBoundary(input, maxChars) {
         : trimmedPrefix;
   const cleaned = bounded.replace(/[\s,;:.!?-]+$/u, "");
   return `${cleaned.length > 0 ? cleaned : trimmedPrefix}${ELLIPSIS}`;
+}
+
+/**
+ * `input.slice(0, limit)` cuts UTF-16 code units. When the code unit at
+ * `limit - 1` is a high surrogate its low surrogate lives at `limit`, so a
+ * naive slice ends in a lone surrogate — text that is no longer well-formed
+ * Unicode and that the JCS acceptance boundary rejects at seal time
+ * (spec/canonicalization.md). Drop the straddling unit instead.
+ *
+ * `limit` is always >= 1 here because the maxChars <= ELLIPSIS.length case
+ * returns earlier.
+ */
+function sliceAtCodePointBoundary(input, limit) {
+  if (limit >= input.length) return input;
+  const unit = input.charCodeAt(limit - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) return input.slice(0, limit - 1);
+  return input.slice(0, limit);
 }
 
 function positiveIntegerOrDefault(value, fallback) {
