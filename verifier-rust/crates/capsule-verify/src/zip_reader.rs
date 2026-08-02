@@ -23,7 +23,7 @@
 //! See `spec/format.md` § "Container properties" for the canonical statement
 //! of these rules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
 
 use thiserror::Error;
@@ -197,41 +197,93 @@ fn read_local_name(bytes: &[u8], offset: usize, index: usize) -> Result<Vec<u8>,
     Ok(bytes[offset + 30..end].to_vec())
 }
 
-/// Walk the RAW central directory and return the authoritative set of
-/// non-directory entry names.
+/// Locate the archive's end-of-central-directory (EOCD) record.
 ///
-/// The `zip` crate indexes entries by name and silently keeps one copy
-/// when an archive contains duplicates, so the duplicate never surfaces
-/// through `ZipArchive` — exactly the parser differential the spec must
-/// reject. This scan runs before the crate parses anything, and it is also
-/// where the entry set is decided: `unpack_zip` asserts that what it
-/// extracted matches this set exactly.
-///
-/// Structural errors (no EOCD, truncated directory) return an empty set
-/// and are left for `ZipArchive` to report with its own diagnostics; ZIP64
-/// sentinel values are rejected here because a capsule can never
-/// legitimately need ZIP64 under the entry/size caps.
-fn scan_central_directory(bytes: &[u8]) -> Result<std::collections::BTreeSet<String>, ZipError> {
-    let mut names = std::collections::BTreeSet::new();
+/// The EOCD is the LAST record of a conforming archive: its declared
+/// comment length must land exactly at end-of-file. A signature-shaped
+/// byte sequence whose declared comment length points anywhere else is
+/// not an EOCD, and an archive with no conforming candidate carries bytes
+/// it does not account for — the exact shape that makes two ZIP readers
+/// disagree about which central directory is authoritative. Both cases
+/// are hard rejections: this reader never falls back to a more permissive
+/// locator. Mirrors `scanCentralDirectory` in `sdk-js/src/zip.js`, which
+/// throws.
+fn locate_eocd(bytes: &[u8]) -> Result<usize, ZipError> {
     if bytes.len() < EOCD_MIN {
-        return Ok(names);
+        return Err(ZipError::InvalidContainer(
+            "too small to be a zip".to_string(),
+        ));
     }
     let lowest = bytes.len().saturating_sub(EOCD_MIN + MAX_COMMENT);
-    let mut eocd = None;
+    let mut stray_signature = false;
     let mut p = bytes.len() - EOCD_MIN;
     loop {
-        if read_u32(bytes, p) == EOCD_SIG
-            && p + EOCD_MIN + read_u16(bytes, p + 20) as usize == bytes.len()
-        {
-            eocd = Some(p);
-            break;
+        if read_u32(bytes, p) == EOCD_SIG {
+            if p + EOCD_MIN + read_u16(bytes, p + 20) as usize == bytes.len() {
+                return Ok(p);
+            }
+            stray_signature = true;
         }
         if p == lowest {
             break;
         }
         p -= 1;
     }
-    let Some(eocd) = eocd else { return Ok(names) };
+    Err(ZipError::InvalidContainer(
+        if stray_signature {
+            "trailing bytes after end-of-central-directory record"
+        } else {
+            "end-of-central-directory record not found"
+        }
+        .to_string(),
+    ))
+}
+
+/// Cross-check the number of central-directory records this scan walked by
+/// byte range against the number `ZipArchive` indexed (which it derives
+/// from the attacker-controlled EOCD count). Any disagreement means the two
+/// parsers are reading different archives, so reject rather than trust the
+/// more permissive one.
+fn cross_check_entry_count(scanned: usize, parsed: usize) -> Result<(), ZipError> {
+    if scanned != parsed {
+        return Err(ZipError::InvalidContainer(format!(
+            "central-directory record count disagrees with archive parser (scan {scanned}, parser {parsed})"
+        )));
+    }
+    Ok(())
+}
+
+/// What the raw central-directory scan decided about the archive.
+struct CentralDirectoryScan {
+    /// The authoritative set of non-directory entry names. `unpack_zip`
+    /// asserts the extracted set equals this exactly.
+    names: BTreeSet<String>,
+    /// Number of central-directory records walked by byte range (including
+    /// directory markers). `unpack_zip` cross-checks this against
+    /// `ZipArchive::len()` via [`cross_check_entry_count`].
+    record_count: usize,
+}
+
+/// Walk the RAW central directory and return the authoritative entry set
+/// plus the number of records walked.
+///
+/// The `zip` crate indexes entries by name and silently keeps one copy
+/// when an archive contains duplicates, so the duplicate never surfaces
+/// through `ZipArchive` — exactly the parser differential the spec must
+/// reject. This scan runs before the crate parses anything, and it is also
+/// where the entry set is decided: `unpack_zip` asserts that what it
+/// extracted matches the returned name set exactly, and that the crate
+/// indexed exactly as many records as this scan walked.
+///
+/// Structural errors (missing or ambiguous EOCD, trailing bytes, truncated
+/// directory) are hard rejections raised here, starting with
+/// [`locate_eocd`]. Deferring them to `ZipArchive`, whose locator tolerates
+/// trailing garbage, would silently skip every check below — that was the
+/// F02 vulnerability. ZIP64 sentinel values are also rejected because a
+/// capsule can never legitimately need ZIP64 under the entry/size caps.
+fn scan_central_directory(bytes: &[u8]) -> Result<CentralDirectoryScan, ZipError> {
+    let mut names = BTreeSet::new();
+    let eocd = locate_eocd(bytes)?;
     // Reject a later raw EOCD signature so this strictness scan cannot select
     // a different directory from an underlying parser that searches by the
     // last signature occurrence.
@@ -349,7 +401,10 @@ fn scan_central_directory(bytes: &[u8]) -> Result<std::collections::BTreeSet<Str
             "central-directory entry count mismatch (EOCD {total_entries}, actual {actual_entries})"
         )));
     }
-    Ok(names)
+    Ok(CentralDirectoryScan {
+        names,
+        record_count: actual_entries,
+    })
 }
 
 /// Read every entry of a STORED-only ZIP archive, sorted by path.
@@ -359,12 +414,14 @@ fn scan_central_directory(bytes: &[u8]) -> Result<std::collections::BTreeSet<Str
 /// safety violation, compression mismatch, or limit overflow, an error is
 /// returned and no partial state escapes.
 pub fn unpack_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
-    let expected = scan_central_directory(bytes)?;
+    let scan = scan_central_directory(bytes)?;
+    let expected = scan.names;
     let cursor = Cursor::new(bytes);
     let mut archive =
         ZipArchive::new(cursor).map_err(|e| ZipError::InvalidContainer(e.to_string()))?;
 
     let total_entries = archive.len();
+    cross_check_entry_count(scan.record_count, total_entries)?;
     if total_entries > MAX_ENTRIES {
         return Err(ZipError::TooManyEntries(total_entries));
     }
@@ -683,6 +740,88 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("multiple end-of-central-directory records"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes_after_eocd() {
+        // One appended byte pushes EOF past the EOCD's declared comment
+        // length. The strictness scan must reject the container instead of
+        // silently deferring to `ZipArchive`, whose locator tolerates the
+        // padding. sdk-js throws on the identical bytes.
+        let mut bytes = make_zip(&[("a.txt", b"a", CompressionMethod::Stored)]);
+        bytes.push(0x00);
+        let err = unpack_zip(&bytes).expect_err("must reject trailing bytes");
+        assert!(
+            err.to_string()
+                .contains("trailing bytes after end-of-central-directory"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_hidden_entry_behind_trailing_byte() {
+        // The F02 attack shape: understate the EOCD entry count so a reader
+        // that walks by that count never sees the last record, then append
+        // one byte so the strictness pass used to no-op entirely.
+        let mut bytes = make_zip(&[
+            ("a.txt", b"a", CompressionMethod::Stored),
+            ("zz-hidden.sh", b"#!/bin/sh\n", CompressionMethod::Stored),
+        ]);
+        let eocd = bytes.len() - 22;
+        bytes[eocd + 8..eocd + 10].copy_from_slice(&1u16.to_le_bytes());
+        bytes[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
+        bytes.push(0x00);
+        let err = unpack_zip(&bytes).expect_err("must reject hidden entry");
+        assert!(
+            err.to_string()
+                .contains("trailing bytes after end-of-central-directory"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_input_too_small_for_eocd() {
+        let err = unpack_zip(b"not a zip").expect_err("must reject short input");
+        assert!(
+            err.to_string().contains("too small to be a zip"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_archive_without_eocd_signature() {
+        let mut bytes = make_zip(&[("a.txt", b"a", CompressionMethod::Stored)]);
+        let eocd = bytes.len() - 22;
+        bytes[eocd..eocd + 4].copy_from_slice(&0u32.to_le_bytes());
+        let err = unpack_zip(&bytes).expect_err("must reject missing EOCD");
+        assert!(
+            err.to_string()
+                .contains("end-of-central-directory record not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scan_reports_the_number_of_central_directory_records() {
+        let bytes = make_zip(&[
+            ("a.txt", b"1", CompressionMethod::Stored),
+            ("b.txt", b"2", CompressionMethod::Stored),
+            ("c.txt", b"3", CompressionMethod::Stored),
+        ]);
+        let scan = scan_central_directory(&bytes).expect("scan must succeed");
+        assert_eq!(scan.record_count, 3);
+        assert_eq!(scan.names.len(), 3, "all three entries are files");
+    }
+
+    #[test]
+    fn entry_count_cross_check_rejects_parser_disagreement() {
+        assert!(cross_check_entry_count(3, 3).is_ok());
+        let err = cross_check_entry_count(3, 2).expect_err("mismatch must be rejected");
+        assert!(
+            err.to_string()
+                .contains("central-directory record count disagrees with archive parser"),
             "unexpected error: {err}"
         );
     }

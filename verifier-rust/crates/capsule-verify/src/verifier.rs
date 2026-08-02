@@ -1017,6 +1017,59 @@ mod tests {
         );
     }
 
+    /// F02 regression. Appending a single byte after the EOCD must not
+    /// disable the container strictness pass: the padded capsule fails
+    /// closed with a Malformed error and zero trusted signers, while the
+    /// unmodified fixture still verifies. The JS reference lane rejects
+    /// the identical padded bytes at open time.
+    #[test]
+    fn trailing_byte_after_eocd_fails_closed() {
+        let clean = clean_capsule_bytes();
+        let map = unpack_zip(&clean).expect("clean fixture unzips");
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let allowlist = vec![manifest.originator.public_key.clone()];
+
+        let mut padded = clean.clone();
+        padded.push(0x00);
+        let padded_result = verify_capsule(
+            &padded,
+            &VerifyOptions {
+                allowlist: allowlist.clone(),
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(!padded_result.ok, "padded capsule must not verify");
+        assert_eq!(
+            padded_result.trusted_signer_count, 0,
+            "no signer may be trusted on a rejected container"
+        );
+        assert!(
+            padded_result.errors.iter().any(|e| {
+                e.category == TopErrorCategory::Malformed
+                    && e.message
+                        .contains("trailing bytes after end-of-central-directory")
+            }),
+            "expected a Malformed trailing-bytes error, got: {:?}",
+            padded_result.errors
+        );
+
+        let control = verify_capsule(
+            &clean,
+            &VerifyOptions {
+                allowlist,
+                recipient_private_key: None,
+            },
+        );
+        assert!(
+            control.ok,
+            "control must verify; errors: {:?}",
+            control.errors
+        );
+        assert!(control.trusted_signer_count >= 1, "control must be trusted");
+    }
+
     /// With the originator's pubkey on the allowlist, at least one signer
     /// must be marked trusted.
     #[test]
