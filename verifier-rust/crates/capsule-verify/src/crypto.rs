@@ -5,7 +5,7 @@
 //! `0x` prefix, no whitespace. This matches the JS reference's lowercase
 //! output and keeps both implementations interchangeable.
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -52,9 +52,54 @@ pub fn hex_to_bytes(s: &str) -> Result<Vec<u8>, CryptoError> {
     hex::decode(s).map_err(|_| CryptoError::NonHexCharacter)
 }
 
+/// Field prime p = 2^255 - 19, little-endian.
+const ED25519_P_LE: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
+/// The 8 points whose order divides 8, as canonical y encodings with the
+/// x-sign bit cleared: the identity (y = 1), the two order-4 points (y = 0),
+/// the order-2 point (y = p - 1), and the four order-8 points (two y values,
+/// two x signs each). Masking the sign bit means each entry covers both signs.
+const ED25519_SMALL_ORDER_Y_HEX: [&str; 5] = [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+];
+
+/// True when a 32-byte Ed25519 public key is canonically encoded and is not
+/// one of the 8 small-subgroup points.
+///
+/// `VerifyingKey::from_bytes` decompresses without a canonicity check, and
+/// the non-strict `Verifier::verify` accepts small-order keys — which is a
+/// no-private-key forgery: take `edff…ff7f`, send a 64-byte all-zero
+/// signature, and vary any signed field until the cofactored equation holds.
+fn ed25519_public_key_is_acceptable(public_key: &[u8; 32]) -> bool {
+    let mut masked = *public_key;
+    masked[31] &= 0x7f;
+    // Little-endian comparison against p, most significant byte first.
+    // Equality with p is itself non-canonical, so the loop falling through
+    // means "not acceptable".
+    let mut canonical = false;
+    for i in (0..32).rev() {
+        if masked[i] != ED25519_P_LE[i] {
+            canonical = masked[i] < ED25519_P_LE[i];
+            break;
+        }
+    }
+    if !canonical {
+        return false;
+    }
+    let masked_hex = bytes_to_hex(&masked);
+    !ED25519_SMALL_ORDER_Y_HEX.contains(&masked_hex.as_str())
+}
+
 /// Verify an Ed25519 signature using a raw 32-byte public key and 64-byte
 /// signature. Returns `false` on any error (wrong length, malformed key,
-/// invalid signature). Never panics.
+/// non-canonical or small-order key, invalid signature). Never panics.
 pub fn ed25519_verify(public_key_raw: &[u8], message: &[u8], signature: &[u8]) -> bool {
     let pk_bytes: &[u8; 32] = match public_key_raw.try_into() {
         Ok(arr) => arr,
@@ -64,12 +109,18 @@ pub fn ed25519_verify(public_key_raw: &[u8], message: &[u8], signature: &[u8]) -
         Ok(arr) => arr,
         Err(_) => return false,
     };
+    if !ed25519_public_key_is_acceptable(pk_bytes) {
+        return false;
+    }
     let key = match VerifyingKey::from_bytes(pk_bytes) {
         Ok(k) => k,
         Err(_) => return false,
     };
     let sig = Signature::from_bytes(sig_bytes);
-    key.verify(message, &sig).is_ok()
+    // `verify_strict` also rejects a small-order R; ed25519-dalek already
+    // rejects a non-reduced S (`Scalar::from_canonical_bytes`) for both
+    // verify paths.
+    key.verify_strict(message, &sig).is_ok()
 }
 
 #[cfg(test)]
@@ -111,6 +162,60 @@ mod tests {
         assert_eq!(hex_to_bytes("abc"), Err(CryptoError::OddHexLength));
         // uppercase rejected (we only accept lowercase, matching the JS reference)
         assert_eq!(hex_to_bytes("AB"), Err(CryptoError::NonHexCharacter));
+    }
+
+    /// Witness triples an unguarded verifier accepts: the 8 small-subgroup
+    /// encodings plus the non-canonical encodings that decode into it.
+    #[rustfmt::skip]
+    const SMALL_ORDER_WITNESSES: [(&str, &str, u32); 12] = [
+        ("0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000000", 5),
+        ("0000000000000000000000000000000000000000000000000000000000000080", "0000000000000000000000000000000000000000000000000000000000000000", 0),
+        ("0100000000000000000000000000000000000000000000000000000000000000", "0100000000000000000000000000000000000000000000000000000000000000", 0),
+        ("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", "0000000000000000000000000000000000000000000000000000000000000000", 8),
+        ("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85", "0000000000000000000000000000000000000000000000000000000000000000", 3),
+        ("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", "0000000000000000000000000000000000000000000000000000000000000000", 3),
+        ("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa", "0000000000000000000000000000000000000000000000000000000000000000", 15),
+        ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0100000000000000000000000000000000000000000000000000000000000000", 0),
+        ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "0100000000000000000000000000000000000000000000000000000000000000", 0),
+        ("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0000000000000000000000000000000000000000000000000000000000000000", 1),
+        ("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0100000000000000000000000000000000000000000000000000000000000000", 0),
+        ("0100000000000000000000000000000000000000000000000000000000000080", "0100000000000000000000000000000000000000000000000000000000000000", 0),
+    ];
+
+    #[test]
+    fn ed25519_rejects_small_order_and_non_canonical_keys() {
+        for (pk_hex, r_hex, probe) in SMALL_ORDER_WITNESSES {
+            let pk = hex_to_bytes(pk_hex).unwrap();
+            let mut sig = hex_to_bytes(r_hex).unwrap();
+            sig.extend_from_slice(&[0u8; 32]);
+            let message = format!("capsule-low-order-probe-{probe}");
+            assert!(
+                !ed25519_verify(&pk, message.as_bytes(), &sig),
+                "{pk_hex}: small-order / non-canonical key must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ed25519_rejects_non_reduced_signature_s() {
+        // RFC 8032 section 7.1 TEST 2, then the same signature with S + L.
+        let pk = hex_to_bytes(
+            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        )
+        .unwrap();
+        let msg = hex_to_bytes("72").unwrap();
+        let good = hex_to_bytes(
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da\
+             085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+        )
+        .unwrap();
+        let non_reduced = hex_to_bytes(
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da\
+             f52db7415978abc61b2c2eb6aeebfca0387b2eaeb4302aeeb00d291612bb0c10",
+        )
+        .unwrap();
+        assert!(ed25519_verify(&pk, &msg, &good));
+        assert!(!ed25519_verify(&pk, &msg, &non_reduced));
     }
 
     #[test]
