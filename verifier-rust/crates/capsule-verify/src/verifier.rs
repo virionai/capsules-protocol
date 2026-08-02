@@ -593,6 +593,24 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         }
     }
 
+    // ---- (5b) first_event_hash binding ----------------------------------
+    // `manifest.first_event_hash` is the capsule_id preimage;
+    // `envelope.first_event_hash` is what the chain walk in step 9 is
+    // checked against. `manifest.md` and `envelope.md` both pin them to the
+    // hash of chain event 1, so a drift means capsule_id names a chain this
+    // capsule does not carry. None==None is the legal empty-chain shape;
+    // the chain walk enforces anchor/event-count consistency separately.
+    if manifest.first_event_hash != envelope.first_event_hash {
+        errors.push(TopError::outer(
+            TopErrorCategory::ChainAnchor,
+            format!(
+                "manifest.first_event_hash mismatch: {} vs envelope.first_event_hash {}",
+                anchor_or_null(&manifest.first_event_hash),
+                anchor_or_null(&envelope.first_event_hash)
+            ),
+        ));
+    }
+
     // ---- (6) manifest_hash check ----------------------------------------
     // Hash the PRESERVED manifest tree, not the typed view: unknown members
     // are part of the signed document and must be canonicalised.
@@ -624,8 +642,17 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     //   - Encrypted: `content.enc` present, cipher on the whitelist (and
     //                != "none"), encrypted_blob_hash matches sha256(content.enc).
     // Anything else is an Encryption-category error.
-    let is_encrypted = files.contains_key("content.enc");
-    if is_encrypted {
+    //
+    // `is_encrypted` requires BOTH the signed cipher declaration and the
+    // blob. Keying it off file presence alone lets an attacker who appends
+    // a `content.enc` to a plain capsule switch the verifier into encrypted
+    // mode, which skips the chain walk in step 9 and reports chain.ok=true
+    // for a chain that was never looked at. The shape checks right below
+    // deliberately stay keyed off `blob_present`: an illegal cipher/blob
+    // combination must be reported no matter which half is missing.
+    let blob_present = files.contains_key("content.enc");
+    let is_encrypted = blob_present && envelope.cipher != "none";
+    if blob_present {
         match envelope.encrypted_blob_hash.as_deref() {
             None => {
                 errors.push(TopError::outer(
@@ -648,7 +675,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 None => {
                     errors.push(TopError::outer(
                         TopErrorCategory::Malformed,
-                        "internal: is_encrypted set but content.enc absent",
+                        "internal: blob_present set but content.enc absent",
                     ));
                 }
             },
@@ -674,6 +701,66 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                     envelope.cipher
                 ),
             ));
+        }
+    }
+
+    // ---- (8b) manifest.encryption agreement -----------------------------
+    // `manifest.md` fixes `encryption` as null for plain capsules and
+    // {metadata_path, cipher} for encrypted ones. The SIGNED
+    // `envelope.cipher` is authoritative; the manifest declaration must
+    // agree with it, and the declared metadata_path must resolve to a file
+    // that is present AND covered by the content index.
+    match (envelope.cipher.as_str(), manifest.encryption.as_ref()) {
+        ("none", None) => {}
+        ("none", Some(_)) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Encryption,
+                "manifest.encryption must be null when envelope.cipher is 'none'",
+            ));
+        }
+        (cipher, None) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Encryption,
+                format!("manifest.encryption must be an object when envelope.cipher is '{cipher}'"),
+            ));
+        }
+        (cipher, Some(enc)) => {
+            if enc.cipher != cipher {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.cipher mismatch: '{}' vs envelope.cipher '{cipher}'",
+                        enc.cipher
+                    ),
+                ));
+            }
+            if enc.metadata_path.is_empty() {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    "manifest.encryption.metadata_path must be a non-empty string",
+                ));
+            } else if !files.contains_key(&enc.metadata_path) {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.metadata_path missing from capsule: {}",
+                        enc.metadata_path
+                    ),
+                ));
+            } else if !manifest
+                .content_index
+                .files
+                .iter()
+                .any(|f| f.path == enc.metadata_path)
+            {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.metadata_path not covered by content index: {}",
+                        enc.metadata_path
+                    ),
+                ));
+            }
         }
     }
 
@@ -1430,9 +1517,101 @@ fn assemble_result(
 mod tests {
     use super::*;
     use crate::test_support::{
-        chain_binding_capsule_bytes, clean_capsule_bytes, recipient_x25519_private_key,
+        chain_binding_capsule_bytes, clean_capsule_bytes, originator_ed25519_public_key_hex,
+        recipient_x25519_private_key, semantic_binding_capsule_bytes,
         synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes,
     };
+
+    /// A plain capsule (signed cipher "none") with a `content.enc` appended
+    /// and a corrupt chain. Encrypted-mode detection must key off the signed
+    /// cipher, not file presence — otherwise the chain walk is skipped and
+    /// `chain.ok` is reported true for a chain nobody looked at.
+    #[test]
+    fn smuggled_blob_does_not_skip_the_chain_walk() {
+        let bytes = semantic_binding_capsule_bytes("smuggled-blob-broken-chain.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+
+        assert!(!result.ok, "smuggled blob + broken chain must not verify");
+        assert!(
+            result.chain.note.is_none(),
+            "chain must be walked, not deferred; got note {:?}",
+            result.chain.note
+        );
+        assert!(
+            !result.chain.ok,
+            "the corrupt chain must fail; got {:?}",
+            result.chain
+        );
+    }
+
+    /// `manifest.first_event_hash` (the capsule_id preimage) disagrees with
+    /// `envelope.first_event_hash` (which still matches chain event 1). The
+    /// capsule is correctly signed over its own manifest, so only an
+    /// explicit cross-check catches it.
+    #[test]
+    fn manifest_first_event_hash_must_match_envelope() {
+        let bytes = semantic_binding_capsule_bytes("first-event-hash-drift.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+
+        assert!(!result.ok, "first_event_hash drift must not verify");
+        assert!(
+            result.errors.iter().any(|e| e.category
+                == TopErrorCategory::ChainAnchor
+                && e.message.contains("manifest.first_event_hash mismatch")),
+            "expected a ChainAnchor error naming manifest.first_event_hash; got: {:?}",
+            result.errors
+        );
+    }
+
+    /// `manifest.encryption` must agree with the signed `envelope.cipher`,
+    /// and its `metadata_path` must resolve to a file in the package.
+    #[test]
+    fn manifest_encryption_must_agree_with_envelope_cipher() {
+        let declared = verify_capsule(
+            &semantic_binding_capsule_bytes("encryption-declared-plain.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!declared.ok, "plain capsule declaring encryption must fail");
+        assert!(
+            declared.errors.iter().any(|e| e.category == TopErrorCategory::Encryption
+                && e.message.contains("manifest.encryption must be")),
+            "expected an encryption-shape error; got: {:?}",
+            declared.errors
+        );
+
+        let dangling = verify_capsule(
+            &semantic_binding_capsule_bytes("encryption-metadata-path-dangling.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!dangling.ok, "dangling metadata_path must fail");
+        assert!(
+            dangling.errors.iter().any(|e| e.category == TopErrorCategory::Encryption
+                && e.message.contains("manifest.encryption.metadata_path")),
+            "expected a metadata_path error; got: {:?}",
+            dangling.errors
+        );
+    }
+
+    /// L3 decryption must resolve the decryption metadata through
+    /// `manifest.encryption.metadata_path`, not a hardcoded default path.
+    #[test]
+    fn l3_follows_manifest_declared_metadata_path() {
+        let bytes = semantic_binding_capsule_bytes("encryption-metadata-path-relocated.capsule");
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![originator_ed25519_public_key_hex()],
+                recipient_private_key: Some(recipient_x25519_private_key()),
+            },
+        );
+
+        assert!(
+            result.ok,
+            "relocated metadata_path must still decrypt at L3; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.level, "L3", "level must upgrade to L3");
+    }
 
     /// Shared plumbing for the chain-walk field-rule tests below: unpack
     /// the clean fixture and hand back (manifest, envelope, events).

@@ -336,6 +336,89 @@ fn ijson_acceptance_boundary() {
     }
 }
 
+/// Per-lane mapping of the registry's normative verify-stage reason
+/// categories (semantic-binding/vectors.json) onto this verifier's error
+/// messages. Panics on an unknown category so a new reason cannot be
+/// silently skipped.
+fn verify_reason_needle(reason: &str) -> &'static str {
+    match reason {
+        "first_event_hash_binding" => "manifest.first_event_hash mismatch",
+        "encryption_shape" => "manifest.encryption must be",
+        "encryption_metadata_path" => "manifest.encryption.metadata_path",
+        other => panic!("unknown verify-stage reason {other:?}"),
+    }
+}
+
+/// Manifest claims must agree with the signed envelope, the chain, and the
+/// files (spec/manifest.md, spec/envelope.md). Every fixture is
+/// well-formed and correctly signed; only its semantics are wrong.
+/// `requires: ["encryption"]` vectors run here — this lane implements L3
+/// decryption — and `decryptable_with` pins that the decryption metadata
+/// is resolved through `manifest.encryption.metadata_path`, never a
+/// hardcoded path.
+#[test]
+fn semantic_binding_registry_outcomes() {
+    let path = vectors_dir().join("semantic-binding/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        if let Some(requires) = v["requires"].as_array() {
+            for req in requires {
+                // This lane implements every capability defined today;
+                // fail loudly on one it does not know rather than skipping.
+                assert_eq!(
+                    req.as_str(),
+                    Some("encryption"),
+                    "{name}: unknown requirement {req:?}"
+                );
+            }
+        }
+        let expected = &v["expected"];
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, expected, &result);
+
+        if let Some(reason) = expected["reason"].as_str() {
+            let needle = verify_reason_needle(reason);
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                haystack.contains(needle),
+                "{name}: expected an error for reason {reason:?} ({needle:?}); got {haystack:?}"
+            );
+        }
+
+        if let Some(key_name) = expected["decryptable_with"].as_str() {
+            let keys = load_json(&base.join(doc["keys_file"].as_str().expect("keys_file")));
+            let priv_hex = keys
+                .pointer(&format!("/{key_name}/privateKey"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("{name}: keys_file has no {key_name}/privateKey"));
+            let priv_bytes: [u8; 32] = hex::decode(priv_hex)
+                .expect("private key hex")
+                .try_into()
+                .expect("private key must be 32 bytes");
+            let file = v["capsule_file"].as_str().expect("capsule_file");
+            let bytes = std::fs::read(base.join(file)).expect("read fixture");
+            let l3 = verify_capsule(
+                &bytes,
+                &VerifyOptions {
+                    allowlist: allowlist.clone(),
+                    recipient_private_key: Some(priv_bytes),
+                },
+            );
+            assert!(
+                l3.ok,
+                "{name}: L3 decrypt must follow manifest.encryption.metadata_path; errors: {:?}",
+                l3.errors
+            );
+            assert_eq!(l3.level, "L3", "{name}: level must upgrade to L3");
+        }
+    }
+}
+
 /// Per-lane mapping of the registry's normative open-stage reason
 /// categories onto this verifier's error messages. The Rust verifier
 /// never panics: open failures surface as `Malformed` errors in the

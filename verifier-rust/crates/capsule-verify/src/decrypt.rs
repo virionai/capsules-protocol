@@ -62,10 +62,13 @@ pub enum DecryptError {
     /// Currently only `"ChaCha20-Poly1305"` and `"none"` are recognized.
     #[error("unsupported cipher: {0}")]
     UnsupportedCipher(String),
-    /// `skills/decryption/decryption.json` was not present in the outer
-    /// ZIP. Required for any encrypted capsule.
-    #[error("decryption metadata missing: skills/decryption/decryption.json")]
-    DecryptionMetadataMissing,
+    /// The decryption metadata file — `manifest.encryption.metadata_path`,
+    /// or the spec default `skills/decryption/decryption.json` when the
+    /// manifest omits the block — was not present in the outer ZIP.
+    /// Required for any encrypted capsule. The wrapped string is the path
+    /// that was looked up.
+    #[error("decryption metadata missing: {0}")]
+    DecryptionMetadataMissing(String),
     /// `skills/decryption/decryption.json` was present but failed to
     /// parse. The wrapped error string is the deserializer's message.
     #[error("decryption metadata invalid: {0}")]
@@ -163,10 +166,23 @@ pub fn decrypt_inner_zip(
         .get("content.enc")
         .ok_or(DecryptError::NotEncrypted)?;
 
-    // Step 3: locate decryption metadata.
+    // Step 3: locate decryption metadata. The path is whatever
+    // `manifest.encryption.metadata_path` declares — the reference reader
+    // (sdk-js/src/reader.js) resolves it that way, so hardcoding the
+    // default location makes this verifier reject capsules the reference
+    // implementation reads. The spec default is only the fallback for a
+    // manifest that omits the block; `verify_capsule` separately rejects
+    // an encrypted capsule whose manifest.encryption is missing or points
+    // at a path that is not in the package.
+    let meta_path = manifest
+        .encryption
+        .as_ref()
+        .map(|e| e.metadata_path.as_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or("skills/decryption/decryption.json");
     let meta_bytes = files
-        .get("skills/decryption/decryption.json")
-        .ok_or(DecryptError::DecryptionMetadataMissing)?;
+        .get(meta_path)
+        .ok_or_else(|| DecryptError::DecryptionMetadataMissing(meta_path.to_string()))?;
 
     // Step 4: parse decryption metadata.
     let meta: DecryptionMetadata = serde_json::from_slice(meta_bytes)

@@ -68,6 +68,46 @@ pub fn chain_binding_capsule_bytes(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("read fixture {name:?} failed: {e}"))
 }
 
+/// Resolve a capsule fixture by name under
+/// `spec/vectors/semantic-binding/output` and read it into memory. These
+/// fixtures are well-formed, correctly signed capsules whose manifest
+/// claims disagree with the envelope, the chain, or the files; regenerate
+/// them with `node sdk-js/tools/generate-semantic-binding-fixtures.mjs`.
+pub fn semantic_binding_capsule_bytes(name: &str) -> Vec<u8> {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = crate_dir
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("spec/vectors/semantic-binding/output")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|_| {
+            panic!("semantic-binding fixture {name:?} missing; run node sdk-js/tools/generate-semantic-binding-fixtures.mjs")
+        });
+    std::fs::read(&path).unwrap_or_else(|e| panic!("read fixture {name:?} failed: {e}"))
+}
+
+/// Reads the originator's Ed25519 public key (lowercase hex) from
+/// `spec/vectors/tamper-detection/output/keys.json` — the allowlist entry
+/// every checked-in fixture is signed against.
+pub fn originator_ed25519_public_key_hex() -> String {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = crate_dir
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("spec/vectors/tamper-detection/output/keys.json")
+        .canonicalize()
+        .expect("keys.json missing; populate spec/vectors before running parity tests");
+    let bytes = std::fs::read(&path).expect("read keys.json");
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("keys.json is valid JSON");
+    v.pointer("/originator/publicKey")
+        .and_then(|x| x.as_str())
+        .expect("keys.json contains originator.publicKey")
+        .to_string()
+}
+
 /// Reads the recipient's X25519 32-byte secret from
 /// `spec/vectors/tamper-detection/output/keys.json` (the same fixture the JS
 /// reference SDK uses to build `clean-encrypted.capsule`). Used by the
