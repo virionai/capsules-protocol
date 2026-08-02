@@ -99,12 +99,12 @@
       {
         "path": "spec/format.md",
         "title": "File layout",
-        "sha256": "03e8030101a4d2d072daddeff27a4c9d6377522775d3bc806a729f99165b5537"
+        "sha256": "2231f7a07dd4f9f63538b12ec242566696626f32c40a1f192e8f570439112184"
       },
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "897f56a723e13e4d02589ecdc84095596cbbcc7d3788e389781903d43fbae90a"
+        "sha256": "9ce2b5538688752df094f9152bd11e7bace1308d3e7ce04eef003c0525571e72"
       },
       {
         "path": "spec/chain.md",
