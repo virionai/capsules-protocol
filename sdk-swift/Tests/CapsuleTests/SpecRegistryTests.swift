@@ -252,6 +252,105 @@ final class SpecRegistryTests: XCTestCase {
         }
     }
 
+    // MARK: - chain-binding/vectors.json
+
+    /// Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
+    /// chains"). A chain with zero events is legal — the weakest honest
+    /// shape — and then manifest.first_event_hash,
+    /// envelope.first_event_hash and envelope.entry_hash MUST all be null
+    /// (claiming an anchor over zero events fails closed; those anchors
+    /// are the only envelope-to-chain binding in a plain capsule). The
+    /// verifier must REPORT that no events were walked (notes pin).
+    func testChainBindingRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("chain-binding/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "chain-binding registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - semantic-binding/vectors.json
+
+    /// Per-lane mapping of the registry's normative verify-stage reason
+    /// categories onto this SDK's check details.
+    private static let verifyReasonNeedles: [String: String] = [
+        "first_event_hash_binding": "manifest.first_event_hash mismatch",
+        "encryption_shape": "manifest.encryption must be",
+        "encryption_metadata_path": "manifest.encryption.metadata_path",
+    ]
+
+    /// Optional lane capabilities a semantic-binding vector may declare in
+    /// requires[]. This SDK implements all of them, so nothing is skipped;
+    /// the set exists so an unknown requirement fails loudly instead of
+    /// silently skipping a vector.
+    private static let knownRequirements: Set<String> = ["encryption"]
+
+    /// Manifest claims must agree with the signed envelope, the chain, and
+    /// the files. Every fixture is well-formed and correctly signed; only
+    /// its semantics are wrong, so nothing but an explicit cross-check
+    /// catches it. `decryptable_with` pins that L3 decryption resolves the
+    /// metadata through manifest.encryption.metadata_path, never a
+    /// hardcoded path.
+    func testSemanticBindingRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("semantic-binding/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let keysDoc = try loadJSON(
+            base.appendingPathComponent(try XCTUnwrap(doc["keys_file"] as? String))
+                .standardizedFileURL
+        )
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "semantic-binding registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            for req in (vector["requires"] as? [String]) ?? [] {
+                XCTAssertTrue(Self.knownRequirements.contains(req),
+                              "\(name): unknown requirement \(req)")
+            }
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            let v = CapsuleVerifier.verify(bytes, allowlist: keys)
+            assertVerifyOutcome(name, expected, v)
+
+            if let reason = expected["reason"] as? String {
+                let needle = Self.verifyReasonNeedles[reason]
+                XCTAssertNotNil(needle, "\(name): unknown verify-stage reason \(reason)")
+                XCTAssertTrue(haystack(v).contains(needle ?? "\u{0}"),
+                              "\(name): expected reason \(reason); got \(haystack(v))")
+            }
+
+            if let keyName = expected["decryptable_with"] as? String {
+                let pair = try XCTUnwrap(keysDoc[keyName] as? [String: Any],
+                                         "\(name): keys_file has no keypair \(keyName)")
+                let pub = Bytes.fromHex(try XCTUnwrap(pair["publicKey"] as? String))
+                let priv = Bytes.fromHex(try XCTUnwrap(pair["privateKey"] as? String))
+                let l3 = CapsuleVerifier.verify(
+                    bytes,
+                    recipientPrivateKey: priv,
+                    recipientPublicKey: pub,
+                    allowlist: keys
+                )
+                XCTAssertTrue(
+                    l3.ok,
+                    "\(name): L3 must follow manifest.encryption.metadata_path; failing: "
+                    + l3.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" }
+                        .joined(separator: ", ")
+                )
+                XCTAssertEqual(l3.level, "L3", "\(name): level must be L3")
+            }
+        }
+    }
+
     // MARK: - malformed-layout/vectors.json
 
     func testMalformedRegistryOutcomes() throws {

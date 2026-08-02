@@ -26,13 +26,18 @@ public struct ParsedCapsule {
         self.programMd = programMd; self.agentsMd = agentsMd; self.files = files
     }
 
-    /// True when the outer manifest carries a non-null `encryption` field.
-    /// Plain capsules return false; encrypted-outer capsules return true.
+    /// True only for a genuine encrypted-outer capsule: the SIGNED
+    /// `envelope.cipher` is not "none" AND `content.enc` is present.
+    /// Mirrors sdk-js/src/reader.js. The manifest's `encryption` block is
+    /// deliberately not an input here — it is cross-checked by
+    /// `CapsuleVerifier` instead, so a manifest that merely claims
+    /// encryption cannot steer the reader away from the chain.
     public var isEncrypted: Bool {
-        guard case .object(let pairs) = manifest,
-              let enc = pairs.first(where: { $0.0 == "encryption" })
+        guard case .object(let pairs) = envelope,
+              let cipherVal = pairs.first(where: { $0.0 == "cipher" })?.1,
+              case .string(let cipher) = cipherVal
         else { return false }
-        return enc.1 != .null
+        return cipher != "none" && files["content.enc"] != nil
     }
 
     /// Parsed `skills/decryption/decryption.json` for encrypted outer
@@ -93,20 +98,20 @@ public enum CapsuleReader {
         let manifest = try parseJSONFile(mfBytes, name: "manifest.json")
         let envelope = try parseJSONFile(envBytes, name: "provenance/envelope.json")
 
-        // Detect encrypted-outer. The chain/program/agents files live
-        // inside the encrypted blob, not the outer zip.
+        // Detect encrypted-outer from the SIGNED envelope.cipher plus the
+        // presence of the blob — never from the manifest's own claim. The
+        // chain/program/agents files live inside the ciphertext, not the
+        // outer zip, so getting this wrong either hides the chain or makes
+        // a manifest claim enough to skip verifying it.
         let encrypted: Bool = {
-            guard case .object(let pairs) = manifest,
-                  let enc = pairs.first(where: { $0.0 == "encryption" })
+            guard case .object(let pairs) = envelope,
+                  let cipherVal = pairs.first(where: { $0.0 == "cipher" })?.1,
+                  case .string(let cipher) = cipherVal
             else { return false }
-            return enc.1 != .null
+            return cipher != "none" && files["content.enc"] != nil
         }()
 
         if encrypted {
-            // Outer must carry the ciphertext blob.
-            if files["content.enc"] == nil {
-                throw CapsuleError.malformed("encrypted outer missing content.enc")
-            }
             return ParsedCapsule(
                 manifest: manifest, envelope: envelope, events: [],
                 programMd: "", agentsMd: nil, files: files

@@ -199,12 +199,18 @@ public enum CapsuleVerifier {
         record("zip_parse", true, "\(parsed.files.count) files")
         record("json_parse", true)
 
-        // capsule_id derivation
+        // capsule_id derivation. A zero-event capsule (spec/chain.md
+        // "Empty chains") carries first_event_hash: null and derives with
+        // 32 zero bytes standing in for first_event_hash_raw
+        // (spec/manifest.md "id"); whether null is LEGAL here is decided
+        // by the anchor checks below, which fail closed on any
+        // anchor/event-count inconsistency.
         if let pubHex = lookupString(parsed.manifest, ["originator", "public_key"]),
-           let firstHash = lookupString(parsed.manifest, ["first_event_hash"]),
            let mfId = lookupString(parsed.manifest, ["id"]),
            let envId = lookupString(parsed.envelope, ["capsule_id"])
         {
+            let firstHash = lookupString(parsed.manifest, ["first_event_hash"])
+                ?? String(repeating: "0", count: 64)
             // Untrusted hex from manifest — degrade gracefully on bad input
             // (originator pub must be 64 hex chars, first_event_hash 64).
             if let pubBytes = try? Bytes.fromHexThrowing(pubHex, label: "manifest.originator.public_key"),
@@ -224,6 +230,21 @@ public enum CapsuleVerifier {
         } else {
             record("capsule_id", false, "missing fields")
         }
+
+        // Semantic binding: manifest.first_event_hash is the capsule_id
+        // preimage; envelope.first_event_hash is what the chain anchor
+        // checks below compare against. manifest.md and envelope.md both
+        // pin them to the hash of chain event 1, so they must agree —
+        // otherwise capsule_id names a chain this capsule does not carry.
+        // null==null is the legal empty-chain shape, enforced against the
+        // event count below.
+        let mfFirstClaim = lookupString(parsed.manifest, ["first_event_hash"])
+        let envFirstClaim = lookupString(parsed.envelope, ["first_event_hash"])
+        record("first_event_hash_binding", mfFirstClaim == envFirstClaim,
+               mfFirstClaim == envFirstClaim
+                   ? (mfFirstClaim ?? "null")
+                   : "manifest.first_event_hash mismatch: \(mfFirstClaim ?? "null") "
+                     + "vs envelope.first_event_hash \(envFirstClaim ?? "null")")
 
         // manifest hash. Canonicalization can refuse the manifest (e.g. an
         // integer outside ±(2^53 − 1)) — that is a fail-closed check
@@ -310,13 +331,12 @@ public enum CapsuleVerifier {
             } else {
                 record("encrypted_blob_hash", false, "content.enc missing")
             }
-            // Cipher must be the supported AEAD.
+            // Cipher must be the supported AEAD. The manifest's own
+            // encryption declaration is checked against the signed cipher
+            // in the manifest_encryption block below.
             let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
             record("envelope_cipher", envCipher == "ChaCha20-Poly1305",
                    envCipher.isEmpty ? "missing" : envCipher)
-            let mfCipher = lookupString(parsed.manifest, ["encryption", "cipher"]) ?? ""
-            record("manifest_cipher", mfCipher == "ChaCha20-Poly1305",
-                   mfCipher.isEmpty ? "missing" : mfCipher)
             // chain is deferred — content lives inside the ciphertext.
             record("chain", true, "deferred to L3 (encrypted outer)")
         } else {
@@ -331,18 +351,87 @@ public enum CapsuleVerifier {
                    chainErrors.isEmpty
                        ? "\(parsed.events.count) events"
                        : chainErrors.joined(separator: "; "))
-            if let firstEvHash = parsed.events.first.flatMap({ lookupString($0, ["hash"]) }),
-               let envFirst = lookupString(parsed.envelope, ["first_event_hash"]) {
-                record("first_event_hash", firstEvHash == envFirst)
-            }
-            if let lastEvHash = parsed.events.last.flatMap({ lookupString($0, ["hash"]) }),
-               let envEntry = lookupString(parsed.envelope, ["entry_hash"]) {
-                record("entry_hash", lastEvHash == envEntry)
+            // Envelope-to-chain anchors. These MUST fail closed: an anchor
+            // that is missing or null over a non-empty chain is a failure,
+            // never a silently skipped comparison — in a plain capsule
+            // these anchors are the only envelope-to-chain binding.
+            let envFirst = lookupString(parsed.envelope, ["first_event_hash"])
+            let envEntry = lookupString(parsed.envelope, ["entry_hash"])
+            if parsed.events.isEmpty {
+                // Empty chain is LEGAL — the weakest honest shape (a
+                // template or draft capsule, spec/chain.md "Empty
+                // chains") — and then the capsule must not claim chain
+                // anchors it does not have: manifest.first_event_hash,
+                // envelope.first_event_hash and envelope.entry_hash must
+                // all be null. Reported honestly via the note.
+                notes.append("empty chain: no events to walk; envelope anchors checked to be null instead")
+                let firstProblems: [String] = [
+                    envFirst.map { "envelope.first_event_hash must be null when the chain has no events; got \($0)" },
+                    mfFirstClaim.map { "manifest.first_event_hash must be null when the chain has no events; got \($0)" },
+                ].compactMap { $0 }
+                record("first_event_hash", firstProblems.isEmpty,
+                       firstProblems.isEmpty ? "null (empty chain)"
+                                             : firstProblems.joined(separator: "; "))
+                record("entry_hash", envEntry == nil,
+                       envEntry.map { "envelope.entry_hash must be null when the chain has no events; got \($0)" }
+                           ?? "null (empty chain)")
+            } else {
+                let firstEvHash = parsed.events.first.flatMap { lookupString($0, ["hash"]) }
+                let lastEvHash = parsed.events.last.flatMap { lookupString($0, ["hash"]) }
+                let firstOk = firstEvHash != nil && firstEvHash == envFirst
+                record("first_event_hash", firstOk,
+                       firstOk ? "" :
+                       "envelope.first_event_hash mismatch: \(envFirst ?? "null") vs \(firstEvHash ?? "null")")
+                let entryOk = lastEvHash != nil && lastEvHash == envEntry
+                record("entry_hash", entryOk,
+                       entryOk ? "" :
+                       "envelope.entry_hash mismatch: \(envEntry ?? "null") vs \(lastEvHash ?? "null")")
             }
             // Plain must declare cipher="none" and encrypted_blob_hash=null.
             let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
             record("envelope_cipher", envCipher == "none",
                    envCipher.isEmpty ? "missing" : envCipher)
+        }
+
+        // Encryption declaration. manifest.md fixes manifest.encryption as
+        // null for plain capsules and {metadata_path, cipher} for encrypted
+        // ones. The SIGNED envelope.cipher is authoritative; the manifest
+        // must agree with it, and the declared metadata_path must resolve
+        // to a file that is present AND covered by the content index.
+        let declaredCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
+        let mfEncryptionPresent: Bool = {
+            guard case .object(let pairs) = parsed.manifest,
+                  let enc = pairs.first(where: { $0.0 == "encryption" })?.1
+            else { return false }
+            return enc != .null
+        }()
+        let mfCipher = lookupString(parsed.manifest, ["encryption", "cipher"])
+        let mfMetadataPath = lookupString(parsed.manifest, ["encryption", "metadata_path"])
+        if declaredCipher == "none" {
+            record("manifest_encryption", !mfEncryptionPresent,
+                   mfEncryptionPresent
+                     ? "manifest.encryption must be null when envelope.cipher is 'none'"
+                     : "null")
+        } else if !mfEncryptionPresent {
+            record("manifest_encryption", false,
+                   "manifest.encryption must be an object when envelope.cipher is '\(declaredCipher)'")
+        } else if mfCipher != declaredCipher {
+            record("manifest_encryption", false,
+                   "manifest.encryption.cipher mismatch: \(mfCipher ?? "null") "
+                   + "vs envelope.cipher '\(declaredCipher)'")
+        } else if let path = mfMetadataPath, !path.isEmpty {
+            if parsed.files[path] == nil {
+                record("manifest_encryption", false,
+                       "manifest.encryption.metadata_path missing from capsule: \(path)")
+            } else if !contentIndexPaths(parsed.manifest).contains(path) {
+                record("manifest_encryption", false,
+                       "manifest.encryption.metadata_path not covered by content index: \(path)")
+            } else {
+                record("manifest_encryption", true, path)
+            }
+        } else {
+            record("manifest_encryption", false,
+                   "manifest.encryption.metadata_path must be a non-empty string")
         }
 
         // envelope signatures + trust attribution
@@ -508,6 +597,25 @@ public enum CapsuleVerifier {
             }
         }
         return errors
+    }
+
+    /// Paths listed in `manifest.content_index.files[]`.
+    private static func contentIndexPaths(_ manifest: JCSValue) -> Set<String> {
+        guard case .object(let pairs) = manifest,
+              let ci = pairs.first(where: { $0.0 == "content_index" })?.1,
+              case .object(let ciPairs) = ci,
+              let filesVal = ciPairs.first(where: { $0.0 == "files" })?.1,
+              case .array(let items) = filesVal
+        else { return [] }
+        var out = Set<String>()
+        for item in items {
+            if case .object(let entry) = item,
+               let pathVal = entry.first(where: { $0.0 == "path" })?.1,
+               case .string(let path) = pathVal {
+                out.insert(path)
+            }
+        }
+        return out
     }
 
     private static func lookupValue(_ v: JCSValue, _ path: [String]) -> JCSValue? {
