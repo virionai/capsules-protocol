@@ -10,6 +10,7 @@
 //!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //!   - signer-set/vectors.json         (signer-set binding outcomes)
 //!   - signing-input.json              (byte-level signing/hashing pins)
+//!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!
 //! The registry's `reason` categories are normative; the substring tables
 //! below map each category onto this lane's error messages.
@@ -375,6 +376,48 @@ fn signing_input_pins() {
         assert!(
             ed25519_verify(&pk, &input, &sig),
             "pinned signature must verify over reconstructed signing input"
+        );
+    }
+}
+
+/// JCS object-member ordering registry (RFC 8785 §3.2.3): members sort on
+/// their UTF-16 code-unit sequences.
+///
+/// That is NOT Rust's `str` ordering. `str: Ord` compares UTF-8 bytes,
+/// which is Unicode code-point order, and the two disagree whenever a
+/// supplementary-plane key (>= U+10000, UTF-16 lead surrogate
+/// 0xD800..0xDBFF) meets a key in U+E000..U+FFFF. This lane is correct by
+/// construction because `serde_jcs` wraps keys in a `Utf16Key` whose `Ord`
+/// compares `Vec<u16>` from `encode_utf16()`; the vectors pin that against
+/// a future dependency bump or a hand-rolled replacement.
+#[test]
+fn jcs_key_order_registry() {
+    let path = vectors_dir().join("jcs-key-order.json");
+    let doc = load_json(&path);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty(), "vector file is empty");
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let keys = v["keys"].as_array().expect("keys");
+        // serde_json::Map is a BTreeMap here, so insertion order is
+        // irrelevant: serde_jcs re-sorts on UTF-16 regardless.
+        let mut map = serde_json::Map::new();
+        for (i, k) in keys.iter().enumerate() {
+            map.insert(
+                k.as_str().expect("key is a string").to_string(),
+                Value::from(i),
+            );
+        }
+        let canon = jcs(&Value::Object(map));
+        assert_eq!(
+            hex::encode(&canon),
+            v["canonical_utf8_hex"].as_str().expect("canonical_utf8_hex"),
+            "{name}: canonical bytes"
+        );
+        assert_eq!(
+            sha256_hex(&canon),
+            v["sha256_hex"].as_str().expect("sha256_hex"),
+            "{name}: sha256"
         );
     }
 }

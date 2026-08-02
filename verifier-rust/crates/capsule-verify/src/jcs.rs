@@ -14,8 +14,12 @@
 //!   uses `ryu-js` which mirrors that behavior)
 //! - `-0` → `0` (negative zero collapses)
 //! - control characters → lowercase `\u00XX` (RFC 8259 + JCS)
-//! - object keys sorted by code-unit order (ASCII-only keys in our use case
-//!   make this equivalent to `&str` byte order; documented for posterity)
+//! - object keys sorted by UTF-16 code-unit order. This is NOT `&str` byte
+//!   order: Rust's `str: Ord` is UTF-8 byte order == code-point order, and
+//!   the two disagree once a supplementary key (>= U+10000) meets a key in
+//!   U+E000..U+FFFF. `serde_jcs` 0.2.0 wraps keys in a `Utf16Key` whose
+//!   `Ord` compares `Vec<u16>` built by `encode_utf16()` (lib.rs:100-134),
+//!   which is correct; pinned by `spec_registry::jcs_key_order_registry`.
 //!
 //! If `serde_jcs` ever diverges from the JS oracle, replace the body of
 //! [`jcs`] with an inline canonicalizer; the public API and tests stay put.
@@ -24,12 +28,14 @@ use serde_json::Value;
 
 /// Canonicalize `value` per RFC 8785 (JCS) and return UTF-8 bytes.
 ///
-/// Object keys are sorted in UTF-16 code-unit order. For ASCII-only keys —
-/// which covers all manifest, envelope, and chain-record keys in the v0.6
-/// capsule format — this coincides with the byte order of UTF-8 strings. If
-/// the schema ever introduces keys containing supplementary (non-BMP)
-/// characters, the underlying `serde_jcs` crate already handles UTF-16
-/// ordering correctly.
+/// Object keys are sorted in UTF-16 code-unit order (RFC 8785 §3.2.3). All
+/// v0.6 manifest, envelope, and chain-record keys are ASCII, where that
+/// coincides with UTF-8 byte order — but the guarantee does not rest on
+/// that: `serde_jcs` compares `Vec<u16>` from `encode_utf16()`, so
+/// supplementary-plane keys are ordered correctly too. Do not swap in a
+/// canonicalizer that sorts `&str` directly: that is code-point order, and
+/// it disagrees with UTF-16 whenever a key >= U+10000 meets a key in
+/// U+E000..U+FFFF.
 ///
 /// Panics if `value` contains a non-finite number (NaN or ±Infinity), which
 /// `serde_json::Value` cannot represent in the first place, so this is a
