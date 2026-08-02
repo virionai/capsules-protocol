@@ -184,17 +184,32 @@ const OPEN_REASON = {
   local_central_name_mismatch: /local\/central name mismatch/,
 };
 
+// Map a verify-stage `reason` category (semantic-binding/vectors.json) to
+// the JS reference lane's error message. Same contract as OPEN_REASON: the
+// category is normative, the string is implementation-defined per lane.
+const VERIFY_REASON = {
+  first_event_hash_binding: /manifest\.first_event_hash mismatch/,
+  encryption_shape: /manifest\.encryption must be/,
+  encryption_metadata_path: /manifest\.encryption\.metadata_path/,
+};
+
+// Optional lane capabilities a vector may require. The JS reference lane
+// implements all of them and therefore skips nothing; the list exists so a
+// typo in a vector's `requires` cannot silently make other lanes skip it.
+const KNOWN_REQUIREMENTS = new Set(["encryption"]);
+
 async function checkCollection(path, doc) {
   // capsule_file / keys_file paths are relative to the collection file.
   const base = dirname(path);
   // Resolve the allowlist origin: an inline hex key, or the originator key in
   // a referenced keys.json.
   let allowlist = [];
+  let keys = null;
   if (doc.originator_public_key_hex) {
     allowlist = [doc.originator_public_key_hex];
   } else if (doc.keys_file) {
     try {
-      const keys = JSON.parse(await readFile(join(base, doc.keys_file), "utf8"));
+      keys = JSON.parse(await readFile(join(base, doc.keys_file), "utf8"));
       if (keys.originator?.publicKey) allowlist = [keys.originator.publicKey];
     } catch (err) {
       fail(`${path}: keys_file unreadable: ${err.message}`);
@@ -207,6 +222,9 @@ async function checkCollection(path, doc) {
     if (!v.capsule_file || !v.expected) {
       fail(`${label}: vector requires capsule_file and expected`);
       continue;
+    }
+    for (const req of v.requires ?? []) {
+      if (!KNOWN_REQUIREMENTS.has(req)) fail(`${label}: unknown requirement '${req}'`);
     }
     let bytes;
     try {
@@ -277,14 +295,47 @@ async function checkCollection(path, doc) {
         fail(`${label}: expected '${area}' to fail, but it did not`);
       }
     }
-    if (v.expected.error_includes) {
-      const haystack = [
-        ...result.errors,
-        ...result.contentIndex.errors,
-        ...(result.chain.errors ?? []).map((e) => (typeof e === "string" ? e : e.message ?? "")),
-      ].join(" ");
-      if (!haystack.includes(v.expected.error_includes)) {
-        fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
+    const haystack = [
+      ...result.errors,
+      ...result.contentIndex.errors,
+      ...(result.chain.errors ?? []).map((e) => (typeof e === "string" ? e : e.message ?? "")),
+    ].join(" ");
+    if (v.expected.error_includes && !haystack.includes(v.expected.error_includes)) {
+      fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
+    }
+    // Verify-stage reason categories (semantic-binding/vectors.json): the
+    // category is normative; VERIFY_REASON maps it to this lane's message.
+    if (v.expected.reason && v.expected.stage !== "open") {
+      const pattern = VERIFY_REASON[v.expected.reason];
+      if (!pattern) {
+        fail(`${label}: unknown verify-stage reason '${v.expected.reason}'`);
+      } else if (!pattern.test(haystack)) {
+        fail(`${label}: expected an error for reason '${v.expected.reason}'; got: ${haystack}`);
+      }
+    }
+    // L3 pin: the fixture must decrypt with the named keys_file keypair,
+    // resolving the metadata through manifest.encryption.metadata_path,
+    // and the decrypted inner capsule must verify against the outer.
+    if (v.expected.decryptable_with) {
+      const pair = keys?.[v.expected.decryptable_with];
+      if (!pair?.publicKey || !pair?.privateKey) {
+        fail(`${label}: keys_file has no keypair '${v.expected.decryptable_with}'`);
+      } else {
+        try {
+          const inner = await reader.decrypt({
+            recipientPublicKey: pair.publicKey,
+            recipientPrivateKey: pair.privateKey,
+          });
+          const innerResult = await verifyCapsule(inner, {
+            allowlist,
+            outerEnvelope: reader.envelope(),
+          });
+          if (!innerResult.ok) {
+            fail(`${label}: inner capsule does not verify: ${innerResult.errors.join("; ")}`);
+          }
+        } catch (err) {
+          fail(`${label}: decrypt with '${v.expected.decryptable_with}' failed: ${err.message}`);
+        }
       }
     }
     // Honest-reporting pins: some rules require the verifier to REPORT a

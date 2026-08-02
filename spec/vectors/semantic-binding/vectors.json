@@ -1,0 +1,67 @@
+{
+  "meta": {
+    "name": "semantic-binding",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected outcomes for capsules whose container, hashes, and signatures are all well-formed, but whose manifest CLAIMS disagree with the signed envelope, the chain, or the files on disk. Every fixture here opens cleanly and (where the mutation touched signed bytes) carries a valid originator signature over its own manifest — the defect is semantic, not structural. Unless a vector says otherwise the stage is 'verify': the capsule opens and verification must report ok=false.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "generator": "sdk-js/tools/generate-semantic-binding-fixtures.mjs (derived from ../tamper-detection/output/clean.capsule, clean-encrypted.capsule and tampered-chain.capsule; re-signed with the throwaway key in ../tamper-detection/output/keys.json)",
+  "keys_file": "../tamper-detection/output/keys.json",
+  "reasons": {
+    "first_event_hash_binding": "manifest.first_event_hash, envelope.first_event_hash and the hash of chain event 1 do not all agree. manifest.first_event_hash is the capsule_id preimage, so a drift here means capsule_id names a chain the capsule does not carry",
+    "encryption_shape": "manifest.encryption disagrees with the SIGNED envelope.cipher: non-null on a cipher='none' capsule, null on an encrypted one, or naming a different cipher",
+    "encryption_metadata_path": "manifest.encryption.metadata_path does not resolve to a file that is present in the package AND covered by manifest.content_index"
+  },
+  "notes": [
+    "The 'reason' field is normative when present: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
+    "'failing' names the result areas that must be reported failed, using the same area vocabulary as tamper-detection/vectors.json (content_index, chain, envelope, encrypted_blob).",
+    "'decryptable_with' names a keypair in keys_file. Lanes that implement L3 decryption MUST decrypt the fixture using that keypair, resolving the decryption metadata through manifest.encryption.metadata_path rather than a hardcoded path, and the decrypted inner capsule must verify. Lanes with no decryption support skip it.",
+    "'requires' lists optional capabilities a lane must implement before the vector is meaningful. The only value defined today is 'encryption'. A lane that does not implement a listed capability SKIPS the vector rather than asserting on it — the Kotlin core is a plain-capsule L2 verifier and refuses encrypted capsules at open time."
+  ],
+  "vectors": [
+    {
+      "name": "first-event-hash-drift",
+      "capsule_file": "output/first-event-hash-drift.capsule",
+      "expected": { "ok": false, "reason": "first_event_hash_binding" },
+      "note": "manifest.first_event_hash is a decoy; manifest.id and envelope.capsule_id are correctly derived from it and the envelope is validly signed, while envelope.first_event_hash still matches chain event 1. Only the manifest-vs-envelope cross-check catches it."
+    },
+    {
+      "name": "first-event-hash-chain-mismatch",
+      "capsule_file": "output/first-event-hash-chain-mismatch.capsule",
+      "expected": { "ok": false, "error_includes": "envelope.first_event_hash mismatch" },
+      "note": "manifest AND envelope agree on the same decoy first_event_hash (the manifest/envelope binding holds and capsule_id derives cleanly from it), but the hash of chain event 1 is a different value. The envelope-to-chain anchor comparison is the only remaining binding, and a lane that skips it when a value is missing or 'looks consistent' passes a capsule_id naming a chain it does not carry."
+    },
+    {
+      "name": "encryption-declared-plain",
+      "capsule_file": "output/encryption-declared-plain.capsule",
+      "expected": { "ok": false, "reason": "encryption_shape" },
+      "note": "Signed cipher is 'none' and there is no content.enc, but the manifest declares encryption. A reader that answers 'is this encrypted?' from the manifest skips the chain walk on a plain capsule."
+    },
+    {
+      "name": "encryption-metadata-path-dangling",
+      "capsule_file": "output/encryption-metadata-path-dangling.capsule",
+      "requires": ["encryption"],
+      "expected": { "ok": false, "reason": "encryption_metadata_path" },
+      "note": "Encrypted capsule whose declared metadata_path names a file that is not in the package."
+    },
+    {
+      "name": "encryption-metadata-path-relocated",
+      "capsule_file": "output/encryption-metadata-path-relocated.capsule",
+      "requires": ["encryption"],
+      "expected": { "ok": true, "decryptable_with": "recipient" },
+      "note": "Positive control: the decryption metadata really lives at skills/decryption/keys-v2.json and is covered by the content index. Verification must pass, and L3 decryption must follow manifest.encryption.metadata_path."
+    },
+    {
+      "name": "smuggled-blob-broken-chain",
+      "capsule_file": "output/smuggled-blob-broken-chain.capsule",
+      "expected": { "ok": false, "failing": ["chain", "content_index"] },
+      "note": "Signed cipher is 'none' but a content.enc was appended, and chain/events.jsonl is corrupt. Encrypted-mode detection must key off the signed cipher, not file presence, or the chain is never walked and chain.ok is reported true for a broken chain."
+    },
+    {
+      "name": "plain-null-encryption-control",
+      "capsule_file": "../tamper-detection/output/clean.capsule",
+      "expected": { "ok": true },
+      "note": "Positive control: the untouched clean plain capsule (encryption null, anchors agreeing everywhere) must still verify with every semantic-binding check in force. Re-pins the tamper-detection clean fixture under this collection so the checks above cannot overreach."
+    }
+  ]
+}
