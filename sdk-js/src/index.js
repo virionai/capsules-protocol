@@ -23,6 +23,10 @@ export {
   buildChainEvents,
   hashEvent,
   verifyChain,
+  isValidEventKind,
+  participantActorIds,
+  EVENT_KINDS,
+  HOST_ACTOR,
 } from "./chain.js";
 
 export {

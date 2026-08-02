@@ -4,6 +4,48 @@ import { bytesToHex, concatBytes, hexToBytes, jcs, sha256 } from "./canonical.js
 
 const GENESIS_PREV = Buffer.alloc(32, 0);
 
+/**
+ * The closed `kind` enum from spec/chain.md "Field rules": readers reject
+ * unknown kinds, and builders refuse to append them. This is not a tier
+ * question — a capsule with a custom event kind is not making a weaker
+ * claim, it is unreadable to the foreign LLM reader the format serves.
+ */
+export const EVENT_KINDS = Object.freeze([
+  "decision",
+  "observation",
+  "mutation",
+  "session",
+  "checkpoint",
+]);
+
+const EVENT_KIND_SET = new Set(EVENT_KINDS);
+
+/**
+ * The one actor a chain event may always name without a matching manifest
+ * participant — backstop events emitted by the host runtime.
+ */
+export const HOST_ACTOR = "system:host";
+
+/** True when `kind` is one of the five values spec/chain.md allows. */
+export function isValidEventKind(kind) {
+  return EVENT_KIND_SET.has(kind);
+}
+
+/**
+ * Normalize a manifest `participants[]` array into a Set of actor ids.
+ * Accepts participant objects ({ actor_id }) or bare actor-id strings;
+ * anything else is ignored.
+ */
+export function participantActorIds(participants) {
+  const out = new Set();
+  if (!Array.isArray(participants)) return out;
+  for (const p of participants) {
+    if (typeof p === "string") out.add(p);
+    else if (p && typeof p.actor_id === "string") out.add(p.actor_id);
+  }
+  return out;
+}
+
 // Chain-bound hex is lowercase per spec/chain.md. verifyChain feeds a
 // stored hash straight into hexToBytes to seed the next link, so the
 // canonical-form check has to happen before that call, not inside it.
@@ -74,9 +116,20 @@ export function eventsFromJsonl(bytes) {
   });
 }
 
-/** Verify a chain. Returns { ok, errors: [{ seq, message }] }. */
-export function verifyChain(events) {
+/**
+ * Verify a chain. Returns { ok, errors: [{ seq, message }] }.
+ *
+ * `options.participants` is the manifest's `participants[]` (objects with
+ * `actor_id`, or bare actor-id strings). The spec/chain.md step-6 actor
+ * rule is CONDITIONAL on that claim: when the set is non-empty, every
+ * event actor must be a member or the literal "system:host" (fail-closed);
+ * when it is empty or absent, the manifest binds no actor set and the walk
+ * accepts any actor — the CALLER (verifyCapsule) reports the reduced
+ * assurance. The `kind` enum is enforced unconditionally.
+ */
+export function verifyChain(events, options = {}) {
   const errors = [];
+  const participantIds = participantActorIds(options.participants);
   let prev = GENESIS_PREV;
   events.forEach((e, i) => {
     if (e == null || typeof e !== "object" || Array.isArray(e)) {
@@ -84,6 +137,21 @@ export function verifyChain(events) {
       return;
     }
     const seq = e.seq ?? i + 1;
+    // spec/chain.md step 6 — when the manifest declares participants, the
+    // actor must be one of them or the host. An empty set is no claim.
+    if (participantIds.size > 0 && e.actor !== HOST_ACTOR && !participantIds.has(e.actor)) {
+      errors.push({
+        seq,
+        message: `actor ${JSON.stringify(e.actor ?? null)} not in manifest.participants and not system:host`,
+      });
+    }
+    // spec/chain.md "Field rules" — `kind` is a closed enum.
+    if (!EVENT_KIND_SET.has(e.kind)) {
+      errors.push({
+        seq,
+        message: `kind ${JSON.stringify(e.kind ?? null)} is not one of ${EVENT_KINDS.join(", ")}`,
+      });
+    }
     if (e.seq !== i + 1) {
       errors.push({ seq, message: `seq ${e.seq} expected ${i + 1}` });
     }

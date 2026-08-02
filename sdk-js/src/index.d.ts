@@ -230,6 +230,15 @@ export interface VerifyResult {
    * lower assurance.
    */
   signerSet: { bound: boolean; ok: boolean; errors: string[] };
+  /**
+   * Chain.md step-6 actor binding — same claim shape as signerSet.
+   * bound=true means manifest.participants[] is non-empty and every chain
+   * event actor must be a member or "system:host" (failures surface in
+   * chain.errors, fail-closed). bound=false means the manifest declares
+   * no participants — no claim about who acted — so verification can
+   * still succeed at a visibly lower assurance (reported in notes).
+   */
+  actorSet: { bound: boolean };
   /** Number of DISTINCT public keys that are both valid and on your allowlist. */
   trustedSignerCount: number;
   notes: string[];
@@ -256,7 +265,26 @@ export function sha256Hex(bytes: Uint8Array): string;
 
 export function buildChainEvents(bareEvents: Array<Record<string, unknown>>): ChainEvent[];
 export function hashEvent(event: Record<string, unknown>): Uint8Array;
-export function verifyChain(events: ChainEvent[]): {
+export type EventKind =
+  | "decision"
+  | "observation"
+  | "mutation"
+  | "session"
+  | "checkpoint";
+
+/** The closed `kind` enum from spec/chain.md "Field rules". */
+export const EVENT_KINDS: readonly EventKind[];
+/** The one actor that never needs a participant entry: the host runtime. */
+export const HOST_ACTOR: "system:host";
+export function isValidEventKind(kind: unknown): kind is EventKind;
+export function participantActorIds(
+  participants?: Array<Participant | string> | null,
+): Set<string>;
+
+export function verifyChain(
+  events: ChainEvent[],
+  options?: { participants?: Array<Participant | string> | null },
+): {
   ok: boolean;
   errors: Array<{ seq: number; message: string }>;
 };

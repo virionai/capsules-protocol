@@ -5,6 +5,10 @@ import {
   buildChainEvents,
   eventsToJsonl,
   firstAndEntryHash,
+  isValidEventKind,
+  participantActorIds,
+  EVENT_KINDS,
+  HOST_ACTOR,
 } from "./chain.js";
 import {
   bytesToHex,
@@ -90,17 +94,44 @@ export class CapsuleBuilder {
    * defaults to "observation", `target` to "capsule", and `timestamp`
    * to the builder's `createdAt` value. Per-call opt-out: { pith: false }
    * skips payload normalization for this event.
+   *
+   * Rejects (spec/chain.md):
+   *   - a `kind` outside the closed enum, always, and
+   *   - when the builder declares a non-empty `participants[]`, an
+   *     `actor` that is neither "system:host" nor a declared participant.
+   *     The builder never auto-registers participants — declaring who may
+   *     act is the caller's decision, and a capsule that names declared
+   *     participants while its chain smuggles others would fail every
+   *     conformant verifier. A builder with NO declared participants
+   *     accepts any actor: that capsule makes a visibly weaker claim
+   *     (verifiers report the actor set as unbound).
    */
   appendEvent(event, options = {}) {
     if (!event.actor || !event.action) {
       throw new Error("event requires actor and action");
+    }
+    const kind = event.kind ?? "observation";
+    if (!isValidEventKind(kind)) {
+      throw new Error(
+        `event kind ${JSON.stringify(kind)} is not one of ${EVENT_KINDS.join(", ")}`,
+      );
+    }
+    // Recomputed on every call so mutating builder.participants between
+    // appends behaves predictably.
+    const declared = participantActorIds(this.participants);
+    if (declared.size > 0 && event.actor !== HOST_ACTOR && !declared.has(event.actor)) {
+      throw new Error(
+        `event actor ${JSON.stringify(event.actor)} is not a declared participant: ` +
+          `add { actor_id: ${JSON.stringify(event.actor)}, role: "..." } to the builder's ` +
+          `participants[] (only "system:host" may appear without one)`,
+      );
     }
     const applyPith = options.pith !== false && this.pith;
     const rawPayload = event.payload ?? {};
     const payload = applyPith ? compressEventPayload(rawPayload) : rawPayload;
     this.bareEvents.push({
       actor: event.actor,
-      kind: event.kind ?? "observation",
+      kind,
       action: event.action,
       target: event.target ?? "capsule",
       timestamp: event.timestamp ?? this.createdAt,

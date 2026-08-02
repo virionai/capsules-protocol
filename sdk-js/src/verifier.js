@@ -6,7 +6,7 @@
 // verifies.
 
 import { sha256Hex, jcs } from "./canonical.js";
-import { verifyChain, firstAndEntryHash } from "./chain.js";
+import { verifyChain, firstAndEntryHash, participantActorIds } from "./chain.js";
 import {
   buildContentIndex,
   compareCommitmentMembers,
@@ -31,6 +31,7 @@ function failClosed(message, level) {
     contentIndex: { ok: false, errors: [] },
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: false, errors: [] },
+    actorSet: { bound: false },
     trustedSignerCount: 0,
     notes: [],
   };
@@ -63,6 +64,7 @@ function failClosed(message, level) {
  *     contentIndex: { ok, errors },
  *     envelope: { ok, signers: [{role, public_key, valid, trusted}] },
  *     signerSet: { bound, ok, errors: [string] },
+ *     actorSet: { bound },
  *     trustedSignerCount: number,
  *     notes: [string]
  *   }
@@ -74,6 +76,13 @@ function failClosed(message, level) {
  *                 succeeds (absence is a weaker claim, not a violation),
  *                 but the reported assurance visibly excludes signer-set
  *                 integrity.
+ * actorSet is the chain.md step-6 actor binding, the same shape of claim:
+ *   bound=true  — manifest.participants[] is non-empty; every chain event
+ *                 actor must be a member or "system:host" (failures surface
+ *                 in chain.errors, fail-closed).
+ *   bound=false — the manifest declares no participants, so it makes no
+ *                 claim about who acted. Verification still succeeds; the
+ *                 unbound actor set is reported here and in notes.
  * trustedSignerCount counts DISTINCT trusted public keys, not signer rows.
  */
 export async function verifyCapsule(readerOrBytes, options = {}) {
@@ -119,12 +128,28 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     contentIndex: { ok: false, errors: [] },
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: true, errors: [] },
+    actorSet: { bound: false },
     trustedSignerCount: 0,
     notes,
   };
 
   const manifest = reader.manifest();
   const envelope = reader.envelope();
+
+  // Actor-set binding: like signer_commitment, PRESENCE BINDS, ABSENCE
+  // REPORTS. A non-empty manifest.participants[] binds every chain event
+  // actor to the declared set (enforced in the chain walk below,
+  // fail-closed — participants is covered by manifest_hash inside the
+  // signed payload, so an attacker cannot empty it without breaking the
+  // signature). An empty set is a visibly weaker claim made honestly:
+  // verification proceeds and the reduced assurance is reported.
+  const participantIds = participantActorIds(manifest.participants);
+  result.actorSet.bound = participantIds.size > 0;
+  if (!result.actorSet.bound) {
+    notes.push(
+      "manifest.participants empty: chain actors are not bound to a declared participant set",
+    );
+  }
 
   // Format / version checks
   if (manifest.format?.version !== "0.6") {
@@ -273,7 +298,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
         );
       }
     } else if (events !== null) {
-      result.chain = verifyChain(events);
+      result.chain = verifyChain(events, { participants: manifest.participants });
       const { firstEventHash, entryHash } = firstAndEntryHash(events);
       if (firstEventHash !== envelope.first_event_hash) {
         errors.push(
