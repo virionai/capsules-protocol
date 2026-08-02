@@ -1,5 +1,5 @@
 {
-  "description": "JCS (RFC 8785) number serialization vectors. ieee_hex is the big-endian IEEE-754 binary64 bit pattern of the input; expected is its canonical serialization per ECMAScript Number::toString (ECMA-262 7.1.12.1). Implementations must parse the bit pattern (not the expected string) and serialize it.",
+  "description": "JCS (RFC 8785) number serialization vectors. ieee_hex is the big-endian IEEE-754 binary64 bit pattern of the input; expected is its canonical serialization per ECMAScript Number::toString (ECMA-262 7.1.12.1). Implementations must parse the bit pattern (not the expected string) and serialize it. An entry marked \"accepted\": false is outside the I-JSON acceptance boundary (spec/canonicalization.md): \"expected\" records the Number::toString layout for reference, but canonicalization must refuse the value.",
   "oracle": "Node.js 22 JSON.stringify over the decoded double. Targeted edges (zeros, subnormals, extremes, 2^53 boundary, exponent-notation thresholds at 1e21 and 1e-7) plus mulberry32(8785)-seeded random bit patterns and magnitudes.",
   "vectors": [
     {
@@ -124,11 +124,13 @@
     },
     {
       "ieee_hex": "4340000000000000",
-      "expected": "9007199254740992"
+      "expected": "9007199254740992",
+      "accepted": false
     },
     {
       "ieee_hex": "4340000000000001",
-      "expected": "9007199254740994"
+      "expected": "9007199254740994",
+      "accepted": false
     },
     {
       "ieee_hex": "c33fffffffffffff",
@@ -140,11 +142,13 @@
     },
     {
       "ieee_hex": "4341c37937e08000",
-      "expected": "10000000000000000"
+      "expected": "10000000000000000",
+      "accepted": false
     },
     {
       "ieee_hex": "4415af1d78b58c40",
-      "expected": "100000000000000000000"
+      "expected": "100000000000000000000",
+      "accepted": false
     },
     {
       "ieee_hex": "444b1ae4d6e2ef50",
@@ -172,7 +176,8 @@
     },
     {
       "ieee_hex": "444b1ae4d6e2ef4f",
-      "expected": "999999999999999900000"
+      "expected": "999999999999999900000",
+      "accepted": false
     },
     {
       "ieee_hex": "3ea0c6f7a0b5ed8d",
@@ -460,7 +465,8 @@
     },
     {
       "ieee_hex": "c41ffe4ab369fb39",
-      "expected": "-147543180396668530000"
+      "expected": "-147543180396668530000",
+      "accepted": false
     },
     {
       "ieee_hex": "86cbf08b3bc3b843",
@@ -656,7 +662,8 @@
     },
     {
       "ieee_hex": "435755d5d0c11597",
-      "expected": "26273205132219996"
+      "expected": "26273205132219996",
+      "accepted": false
     },
     {
       "ieee_hex": "990e267d8da3788b",
@@ -860,7 +867,8 @@
     },
     {
       "ieee_hex": "4441ec887006ad1f",
-      "expected": "661277290433645200000"
+      "expected": "661277290433645200000",
+      "accepted": false
     },
     {
       "ieee_hex": "3ae5698c1c61d6ea",
@@ -876,7 +884,8 @@
     },
     {
       "ieee_hex": "43d781da8f3fda6b",
-      "expected": "6775500974617898000"
+      "expected": "6775500974617898000",
+      "accepted": false
     },
     {
       "ieee_hex": "3f13f9516a7ef9db",
@@ -888,7 +897,8 @@
     },
     {
       "ieee_hex": "441b1a5318c779e1",
-      "expected": "124989744275808340000"
+      "expected": "124989744275808340000",
+      "accepted": false
     },
     {
       "ieee_hex": "c2c98a220105d589",
@@ -896,11 +906,13 @@
     },
     {
       "ieee_hex": "c3a990cc3ef98a28",
-      "expected": "-921098409220576300"
+      "expected": "-921098409220576300",
+      "accepted": false
     },
     {
       "ieee_hex": "c3a2446e028e9985",
-      "expected": "-658148974180221600"
+      "expected": "-658148974180221600",
+      "accepted": false
     },
     {
       "ieee_hex": "be3add8089524eac",
@@ -924,7 +936,8 @@
     },
     {
       "ieee_hex": "438c3df5b984cf13",
-      "expected": "254381597973406300"
+      "expected": "254381597973406300",
+      "accepted": false
     },
     {
       "ieee_hex": "c25cdbd111cce3db",

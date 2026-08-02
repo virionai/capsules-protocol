@@ -18,10 +18,13 @@
 //      verifier's own tests.
 //
 //   3. A JCS number-serialization vector set (jcs-numbers.json): a `vectors`
-//      array of `{ ieee_hex, expected }` entries, where `ieee_hex` is the
-//      big-endian IEEE-754 binary64 bit pattern of the input and `expected`
-//      its canonical RFC 8785 serialization. Implementations must parse the
-//      bit pattern (not the expected string) and serialize it.
+//      array of `{ ieee_hex, expected, accepted? }` entries, where `ieee_hex`
+//      is the big-endian IEEE-754 binary64 bit pattern of the input and
+//      `expected` its canonical RFC 8785 serialization. Implementations must
+//      parse the bit pattern (not the expected string) and serialize it.
+//      `accepted: false` marks a bit pattern outside the I-JSON acceptance
+//      boundary (spec/canonicalization.md): `expected` records the
+//      Number::toString layout, but canonicalization must refuse the value.
 //
 //   4. An Ed25519 key/signature validation registry (meta.kind
 //      "ed25519-verify"): a `vectors` array of `{ public_key_hex,
@@ -300,6 +303,20 @@ function checkNumberVectors(path, doc) {
     const value = Buffer.from(ieee_hex, "hex").readDoubleBE(0);
     if (!Number.isFinite(value)) {
       fail(`${path}: vectors[${i}]: bit pattern is not a finite double`);
+      return;
+    }
+    if (entry.accepted === false) {
+      // Outside the I-JSON acceptance boundary: `expected` documents the
+      // Number::toString layout, but canonicalization must refuse the value.
+      let threw = false;
+      try {
+        jcs(value);
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        fail(`${path}: vectors[${i}] (bits ${ieee_hex}): accepted:false but jcs() accepted it`);
+      }
       return;
     }
     const got = Buffer.from(jcs(value)).toString("utf8");

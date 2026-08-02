@@ -14,6 +14,7 @@ export {
 } from "./crypto.js";
 
 export {
+  assertIJson,
   jcs,
   sha256,
   sha256Hex,
