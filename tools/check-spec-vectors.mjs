@@ -185,6 +185,14 @@ const OPEN_REASON = {
 };
 
 async function checkCollection(path, doc) {
+  // F40: an empty collection is a hard failure, not a silent no-op. A
+  // registry emptied by a bad merge would otherwise still pass — the only
+  // zero-guard used to be the global `checked === 0` at the bottom, which
+  // a single surviving collection satisfies.
+  if (doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
   // capsule_file / keys_file paths are relative to the collection file.
   const base = dirname(path);
   // Resolve the allowlist origin: an inline hex key, or the originator key in
