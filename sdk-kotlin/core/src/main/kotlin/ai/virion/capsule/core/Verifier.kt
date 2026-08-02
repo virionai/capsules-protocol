@@ -441,6 +441,25 @@ object CapsuleVerifier {
                 }
                 errors += "seq $seq: seq $rendered expected $seq"
             }
+            // spec/chain.md "Untrusted content" — when present, every
+            // marking must match the path grammar. An unparseable marking
+            // silently unmarks LLM-authored content for every host.
+            val upfValue = obj.pairs.firstOrNull { it.first == "untrusted_payload_fields" }?.second
+            if (upfValue != null) {
+                val items = (upfValue as? JCSValue.Arr)?.items
+                if (items == null) {
+                    errors += "seq $seq: untrusted_payload_fields must be an array of payload paths"
+                } else {
+                    items.forEachIndexed { idx, item ->
+                        val p = (item as? JCSValue.Str)?.v
+                        if (p == null || !Chain.isValidUntrustedPayloadPath(p)) {
+                            val rendered2 = if (p != null) Chain.debugQuoted(p) else "non-string"
+                            errors += "seq $seq: untrusted_payload_fields[$idx] is not a " +
+                                "valid payload path: $rendered2"
+                        }
+                    }
+                }
+            }
 
             var stored: String? = null
             val withoutHash = mutableListOf<Pair<String, JCSValue>>()

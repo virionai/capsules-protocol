@@ -62,6 +62,16 @@
         "actor_set_bound": true
       },
       "note": "Positive control: the declared participant carries only actor_id + role. The base spec (manifest.md field rules) requires the actor_id pattern and nothing else — label is advisory display text — so every lane MUST verify this capsule with the actor set bound. A lane whose typed manifest view demands label refuses a spec-valid capsule (addendum A12)."
+    },
+    {
+      "name": "invalid-untrusted-path",
+      "capsule_file": "output/invalid-untrusted-path.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["chain"],
+        "error_includes": "untrusted_payload_fields[0] is not a valid payload path"
+      },
+      "note": "chain.md 'Untrusted content' path grammar: every entry must match payload(.segment)+ with segment = [A-Za-z0-9_-]+. The single event carries the entry \"not-payload.note\", correctly hashed and signed, so only the grammar rule decides it. A marking a host cannot resolve silently unmarks LLM-authored content — verifiers reject it fail-closed (addendum A15)."
     }
   ]
 }

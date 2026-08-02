@@ -46,9 +46,10 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
 - `timestamp`: ISO 8601 UTC, no fractional seconds. Advisory only;
   authoritative time-binding is the envelope's `signed_at`.
 - `payload`: free-form JSON object. May contain LLM-authored text.
-- `untrusted_payload_fields`: dotted paths into `payload` whose contents
-  must be treated as untrusted by readers — see "Untrusted content"
-  below.
+- `untrusted_payload_fields`: paths into `payload` naming members whose
+  contents must be treated as untrusted by readers. Every entry MUST
+  match the path grammar in "Untrusted content" below; writers refuse
+  to emit a non-conforming entry and verifiers reject it fail-closed.
 - `prev_hash`: hex of the previous event's `hash`, or 64 zeroes for the
   first event.
 - `hash`: see "Hashing" below.
@@ -101,6 +102,56 @@ into a model context. Readers should:
 
 The default for narrative summary/statement fields is to mark them
 untrusted unless the host knows otherwise.
+
+### Path grammar (normative)
+
+Each `untrusted_payload_fields` entry is a string matching:
+
+```
+path    = "payload" 1*( "." segment )
+segment = 1*( ALPHA / DIGIT / "_" / "-" )
+```
+
+`"payload.summary"` and `"payload.review.notes"` are well-formed;
+`"payload"` alone (no segment), `"payload..x"` (empty segment),
+`"not-payload.note"` (wrong root), and any entry that is not a string
+are not.
+
+Rules:
+
+- **Writers MUST NOT emit** an event whose `untrusted_payload_fields`
+  contains a non-string entry or an entry outside the grammar; the
+  reference builders reject the marking at append time, when the caller
+  still has it in hand.
+- **Verifiers MUST reject** such an event (a chain-area failure,
+  fail-closed, in every profile). A marking a host cannot parse
+  silently unmarks LLM-authored content for every downstream reader —
+  the marking is inside the event hash, so this is the capsule
+  malformed about its own safety claim, not a policy choice.
+- The member itself remains OPTIONAL, and an empty array is legal:
+  "nothing here is marked untrusted" is a claim the grammar does not
+  police. Only present entries are validated.
+
+### Resolution (the host-projection contract)
+
+Hosts project a marking onto the payload deterministically, with no
+invented semantics:
+
+- Split the path on `"."`. Discard the leading `payload` root. Each
+  remaining segment names an object member, looked up in order starting
+  at the event's `payload` object.
+- Only JSON **object** members are traversable. There is no array
+  indexing, wildcard, or escape syntax in v0.6.
+- A path that fails to resolve — a named member is absent, or an
+  intermediate value is not an object — marks **nothing**. It is not an
+  integrity violation (payload shapes evolve; the claim covers the
+  member *if present*), and hosts MUST NOT guess at near-miss members.
+- A member whose name contains characters outside the segment alphabet
+  cannot be marked. Writers MUST NOT put untrusted narrative under such
+  a name.
+
+Conformance vector: `spec/vectors/chain-rules/`
+(`invalid-untrusted-path` MUST fail verification).
 
 ## Empty chains
 
@@ -183,6 +234,10 @@ The reader walks the chain in order:
    mirrors the signer-set rule: presence binds, absence reports.
 7. Confirm `kind` is one of the five values in the enum above —
    unconditionally.
+8. When `untrusted_payload_fields` is present, confirm it is an array
+   and every entry matches the path grammar in "Untrusted content" —
+   unconditionally. An unparseable marking silently unmarks content
+   for every downstream host.
 
 A mismatch at any step fails verification. The reader reports which
 event failed which check; it does not stop at the first error.

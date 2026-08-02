@@ -1247,6 +1247,19 @@ pub(crate) fn chain_walk_into(
                 EVENT_KINDS.join(", ")
             ));
         }
+        // spec/chain.md "Untrusted content" — when present, every marking
+        // must match the path grammar. An unparseable marking silently
+        // unmarks LLM-authored content for every downstream host. (A
+        // non-array member, or a non-string entry, already fails the typed
+        // event parse in this lane.)
+        for (i, p) in e.untrusted_payload_fields.iter().enumerate() {
+            if !crate::chain::is_valid_untrusted_payload_path(p) {
+                chain_check.errors.push(format!(
+                    "seq {}: untrusted_payload_fields[{}] is not a valid payload path: {:?}",
+                    e.seq, i, p
+                ));
+            }
+        }
     }
 
     chain_check.ok = chain_check.errors.is_empty();

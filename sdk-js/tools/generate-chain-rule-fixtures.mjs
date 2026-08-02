@@ -153,6 +153,17 @@ async function main() {
   noLabelBuilder.appendEvent(bareEvent());
   const participantWithoutLabel = await seal(noLabelBuilder, originator);
 
+  // (6) invalid-untrusted-path: untrusted_payload_fields carries an entry
+  // outside the normative grammar (chain.md "Untrusted content":
+  // payload(.segment)+). Correctly hashed and signed — the marking is
+  // covered by the event hash — so only the grammar rule decides it. An
+  // unparseable marking silently unmarks content for every host.
+  const untrustedBuilder = newBuilder(originator, DECLARED);
+  untrustedBuilder.bareEvents.push(
+    bareEvent({ untrusted_payload_fields: ["not-payload.note"] }),
+  );
+  const invalidUntrustedPath = await seal(untrustedBuilder, originator);
+
   const keys = {
     originator: {
       publicKey: originator.publicKeyHex,
@@ -166,6 +177,7 @@ async function main() {
     ["unbound-actors.capsule", unboundActors],
     ["non-contiguous-seq.capsule", nonContiguousSeq],
     ["participant-without-label.capsule", participantWithoutLabel],
+    ["invalid-untrusted-path.capsule", invalidUntrustedPath],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

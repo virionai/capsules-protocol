@@ -492,6 +492,34 @@ public enum CapsuleReader {
             if storedSeq != Int64(seq) {
                 errors.append("seq \(seq): seq \(seqRendered) expected \(seq)")
             }
+            // spec/chain.md "Untrusted content" — when present, every
+            // marking must match the path grammar. An unparseable marking
+            // silently unmarks LLM-authored content for every host.
+            if let upfValue = pairs.first(where: { $0.0 == "untrusted_payload_fields" })?.1 {
+                if case .array(let items) = upfValue {
+                    for (idx, item) in items.enumerated() {
+                        let ok: Bool
+                        let rendered: String
+                        if case .string(let p) = item {
+                            ok = Chain.isValidUntrustedPayloadPath(p)
+                            rendered = Chain.debugQuoted(p)
+                        } else {
+                            ok = false
+                            rendered = "non-string"
+                        }
+                        if !ok {
+                            errors.append(
+                                "seq \(seq): untrusted_payload_fields[\(idx)] is not a "
+                                    + "valid payload path: \(rendered)"
+                            )
+                        }
+                    }
+                } else {
+                    errors.append(
+                        "seq \(seq): untrusted_payload_fields must be an array of payload paths"
+                    )
+                }
+            }
             var withoutHash: [(String, JCSValue)] = []
             var stored: String?
             for (k, v) in pairs {

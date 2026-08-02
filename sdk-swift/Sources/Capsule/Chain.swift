@@ -78,6 +78,33 @@ public enum Chain {
         EVENT_KINDS.contains(kind)
     }
 
+    /// The normative `untrusted_payload_fields` path grammar from
+    /// spec/chain.md "Untrusted content":
+    ///
+    ///     path    = "payload" 1*( "." segment )
+    ///     segment = 1*( ALPHA / DIGIT / "_" / "-" )
+    ///
+    /// A marking outside the grammar has no defined resolution — a host
+    /// cannot tell which payload member the author marked untrusted — so
+    /// writers refuse to emit it and verifiers reject it fail-closed
+    /// (vector chain-rules/invalid-untrusted-path).
+    public static func isValidUntrustedPayloadPath(_ path: String) -> Bool {
+        let segments = path.split(separator: ".", omittingEmptySubsequences: false)
+        guard segments.count >= 2, segments[0] == "payload" else { return false }
+        for seg in segments.dropFirst() {
+            if seg.isEmpty { return false }
+            for scalar in seg.unicodeScalars {
+                switch scalar {
+                case "0"..."9", "a"..."z", "A"..."Z", "_", "-":
+                    continue
+                default:
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
     /// Render a string the way Rust's `{:?}` renders a `String` (and JS's
     /// `JSON.stringify` a plain-ASCII one), so all five lanes emit
     /// byte-identical verifier messages. `nil` renders as `null` (a
