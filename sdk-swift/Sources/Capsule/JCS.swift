@@ -59,6 +59,16 @@ public enum JCS {
             guard d.isFinite else {
                 throw CapsuleError.malformed("JCS: non-finite number")
             }
+            // I-JSON acceptance boundary (spec/canonicalization.md), the
+            // double half of the `.integer` guard above: an integral double
+            // below 1e21 serializes as a *plain integer literal*, so the same
+            // ±(2^53 - 1) limit applies to it. Without this, 1e19 laid out as
+            // 10000000000000000000 and no native-integer parser read it back
+            // the same. Carried here as well as in `assertAcceptable` so no
+            // canonicalization path can bypass the rule.
+            guard isAcceptableDouble(d) else {
+                throw CapsuleError.malformed(outOfExactRange("(number)"))
+            }
             return serializeNumber(d)
         case .string(let s): return encodeString(s)
         case .array(let arr):
@@ -80,6 +90,68 @@ public enum JCS {
 
     public static func bytes(_ v: JCSValue) throws -> Data {
         return Data(try canonical(v).utf8)
+    }
+
+    /// Largest integer exactly representable as an IEEE-754 binary64: 2^53 - 1.
+    public static let maxSafeInteger: Int64 = (1 << 53) - 1
+
+    /// Smallest magnitude whose ECMAScript `Number::toString` form uses
+    /// exponent notation. Below it an integral double serializes as a plain
+    /// integer literal; at or above it the token carries an `e`.
+    private static let plainIntegerCeiling = 1e21
+
+    /// Enforce the I-JSON acceptance boundary from `spec/canonicalization.md`.
+    ///
+    /// Swift `String` is a sequence of Unicode scalars and `JSONSerialization`
+    /// refuses lone-surrogate escapes at parse time, so only the number rule
+    /// needs enforcing here: a number whose canonical token is a *plain
+    /// integer literal* must satisfy |n| <= 2^53 - 1. Values at or above
+    /// 1e21 serialize in exponent form, which round-trips through every
+    /// lane's double path, and are accepted.
+    ///
+    /// `canonical` carries the same rule as a last-resort backstop; this is
+    /// the walking gate that names the offending path, so a builder or reader
+    /// rejection tells the caller *which* value it was.
+    public static func assertAcceptable(_ v: JCSValue, path: String = "$") throws {
+        switch v {
+        case .null, .bool, .string:
+            return
+        case .integer(let i):
+            if i.magnitude > UInt64(maxSafeInteger) {
+                throw CapsuleError.malformed(outOfExactRange(path))
+            }
+        case .decimal(let d):
+            if !d.isFinite {
+                throw CapsuleError.malformed("JCS: non-finite number at \(path)")
+            }
+            if !isAcceptableDouble(d) {
+                throw CapsuleError.malformed(outOfExactRange(path))
+            }
+        case .array(let items):
+            for (i, item) in items.enumerated() {
+                try assertAcceptable(item, path: "\(path)[\(i)]")
+            }
+        case .object(let pairs):
+            for (key, value) in pairs {
+                try assertAcceptable(value, path: "\(path).\(key)")
+            }
+        }
+    }
+
+    /// `false` when `d` is integral, beyond ±(2^53 - 1), and below 1e21 —
+    /// i.e. exactly when its canonical token is an unsafe plain integer
+    /// literal. Non-finite values are handled by the callers.
+    private static func isAcceptableDouble(_ d: Double) -> Bool {
+        let magnitude = abs(d)
+        let integral = d == d.rounded(.towardZero)
+        return !(integral
+            && magnitude > Double(maxSafeInteger)
+            && magnitude < plainIntegerCeiling)
+    }
+
+    private static func outOfExactRange(_ path: String) -> String {
+        "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1) at \(path); "
+            + "not representable identically across implementations"
     }
 
     /// Strict UTF-16 code-unit ordering, per RFC 8785 §3.2.3.

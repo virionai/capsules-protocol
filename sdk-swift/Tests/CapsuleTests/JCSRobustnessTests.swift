@@ -14,6 +14,13 @@
 // A regression here does not show up as a failing assertion; it shows up
 // as the test bundle crashing with "Precondition failed: JCS: integer
 // outside IEEE-754 exact range".
+//
+// Since the I-JSON acceptance boundary landed (spec/canonicalization.md),
+// the refusal happens at the reader's parse boundary rather than at the
+// individual manifest/chain/envelope hash steps — "at parse time or at the
+// canonicalization gate, whichever the implementation reaches first; both
+// are conforming". These tests therefore pin the `parse` check plus the
+// message, which is what the operator sees. `ok == false` is unchanged.
 
 import Foundation
 import XCTest
@@ -52,9 +59,23 @@ final class JCSRobustnessTests: XCTestCase {
         ])
         let v = CapsuleVerifier.verify(bytes)
         XCTAssertFalse(v.ok, "manifest with 2^53+1 integer must not verify")
-        let mh = v.checks.first(where: { $0.name == "manifest_hash" })
-        XCTAssertEqual(mh?.ok, false,
-                       "manifest_hash must fail closed; got \(String(describing: mh))")
+        Self.assertAcceptanceRefusal(v, naming: "manifest.json")
+    }
+
+    /// The refusal must be reported as a canonicalization error naming the
+    /// offending document — never as a hash mismatch, and never as a JSON
+    /// syntax error, since the bytes parse perfectly well.
+    private static func assertAcceptanceRefusal(_ v: CapsuleVerification, naming file: String) {
+        let parse = v.checks.first(where: { $0.name == "parse" })
+        XCTAssertEqual(parse?.ok, false,
+                       "must fail closed at parse; got \(String(describing: parse))")
+        let detail = parse?.detail ?? ""
+        XCTAssertTrue(detail.contains("2^53"),
+                      "detail must name the acceptance rule; got \(detail)")
+        XCTAssertTrue(detail.contains(file),
+                      "detail must name the offending document; got \(detail)")
+        XCTAssertFalse(detail.contains("failed to parse"),
+                       "the JSON parsed fine; this is not a syntax error: \(detail)")
     }
 
     func testChainEventWithOutOfRangeIntegerFailsVerificationWithoutTrapping() {
@@ -70,7 +91,7 @@ final class JCSRobustnessTests: XCTestCase {
         ])
         let v = CapsuleVerifier.verify(bytes)
         XCTAssertFalse(v.ok, "chain event with 2^53+1 integer must not verify")
-        XCTAssertEqual(v.checks.first(where: { $0.name == "chain" })?.ok, false)
+        Self.assertAcceptanceRefusal(v, naming: "chain/events.jsonl")
     }
 
     func testEnvelopeWithOutOfRangeIntegerFailsVerificationWithoutTrapping() {
@@ -87,6 +108,6 @@ final class JCSRobustnessTests: XCTestCase {
         ])
         let v = CapsuleVerifier.verify(bytes)
         XCTAssertFalse(v.ok, "envelope with 2^53+1 integer must not verify")
-        XCTAssertEqual(v.checks.first(where: { $0.name == "envelope_signature" })?.ok, false)
+        Self.assertAcceptanceRefusal(v, naming: "provenance/envelope.json")
     }
 }
