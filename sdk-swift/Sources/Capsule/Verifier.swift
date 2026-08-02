@@ -31,6 +31,14 @@ public struct CapsuleVerification {
     /// integrity — verification can still succeed, at a visibly lower
     /// assurance.
     public let signerSetBound: Bool
+    /// Actor-set binding (chain.md step 6): the same claim shape as
+    /// `signerSetBound`. `true` means `manifest.participants[]` is
+    /// non-empty and every chain event actor must be a member or the
+    /// literal `system:host` — failures surface in the `chain` check,
+    /// fail-closed. `false` means the manifest declares no participants,
+    /// i.e. no claim about who acted: verification can still succeed at a
+    /// visibly lower assurance, reported in `notes`.
+    public let actorSetBound: Bool
     public let notes: [String]
 }
 
@@ -57,6 +65,7 @@ public enum CapsuleVerifier {
                 ok: false, level: "L2",
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
+                actorSetBound: false,
                 notes: initialNotes
             )
         }
@@ -89,6 +98,7 @@ public enum CapsuleVerifier {
                 ok: false, level: "L3",
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
+                actorSetBound: false,
                 notes: initialNotes
             )
         }
@@ -113,6 +123,7 @@ public enum CapsuleVerifier {
                 signers: outer.signers,
                 trustedSignerCount: outer.trustedSignerCount,
                 signerSetBound: outer.signerSetBound,
+                actorSetBound: outer.actorSetBound,
                 notes: outer.notes
             )
         }
@@ -167,6 +178,7 @@ public enum CapsuleVerifier {
             // documents for its separate outer/inner counts.
             trustedSignerCount: outer.trustedSignerCount + innerResult.trustedSignerCount,
             signerSetBound: outer.signerSetBound,
+            actorSetBound: outer.actorSetBound,
             notes: outer.notes
         )
     }
@@ -308,9 +320,17 @@ public enum CapsuleVerifier {
             // chain is deferred — content lives inside the ciphertext.
             record("chain", true, "deferred to L3 (encrypted outer)")
         } else {
-            // Plain-capsule checks: chain integrity + envelope anchors.
-            let chainOk = CapsuleReader.verifyChain(parsed.events)
-            record("chain", chainOk, "\(parsed.events.count) events")
+            // Plain-capsule checks: chain integrity (hash linkage plus the
+            // spec/chain.md per-event actor and kind rules) + envelope
+            // anchors.
+            let chainErrors = CapsuleReader.verifyChain(
+                parsed.events,
+                participants: CapsuleReader.participantActorIds(parsed.manifest)
+            )
+            record("chain", chainErrors.isEmpty,
+                   chainErrors.isEmpty
+                       ? "\(parsed.events.count) events"
+                       : chainErrors.joined(separator: "; "))
             if let firstEvHash = parsed.events.first.flatMap({ lookupString($0, ["hash"]) }),
                let envFirst = lookupString(parsed.envelope, ["first_event_hash"]) {
                 record("first_event_hash", firstEvHash == envFirst)
@@ -358,6 +378,18 @@ public enum CapsuleVerifier {
             notes.append("manifest.signer_commitment absent: the signer set is not bound by the seal")
         }
 
+        // Actor-set binding: PRESENCE BINDS, ABSENCE REPORTS — the same
+        // contract as signer_commitment. A non-empty
+        // manifest.participants[] bound the chain walk above
+        // (fail-closed); an empty one is the manifest declining to name
+        // who acted, which verifies at a visibly lower assurance. Safe to
+        // condition on because participants is covered by manifest_hash
+        // inside the signed payload.
+        let actorSetBound = !CapsuleReader.participantActorIds(parsed.manifest).isEmpty
+        if !actorSetBound {
+            notes.append("manifest.participants empty: chain actors are not bound to a declared participant set")
+        }
+
         // Originator binding (invariant): the manifest names an originator
         // key — that key must actually have sealed the capsule with a valid
         // envelope signature under role "originator".
@@ -379,6 +411,7 @@ public enum CapsuleVerifier {
                 signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
             ).count,
             signerSetBound: signerSetBound,
+            actorSetBound: actorSetBound,
             notes: notes
         )
     }

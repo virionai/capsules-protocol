@@ -81,13 +81,37 @@ public final class CapsuleBuilder {
 
     /// Append a chain event. The seq, event_id, prev_hash, and hash are
     /// computed at seal time.
+    ///
+    /// Throws (spec/chain.md) when `kind` is outside the closed enum
+    /// (always), or when the builder declares a non-empty participant set
+    /// and `actor` is neither `"system:host"` nor a declared actor id.
+    /// The builder never auto-registers participants — declaring who may
+    /// act is the caller's decision. A builder with NO declared
+    /// participants accepts any actor: that capsule makes a visibly
+    /// weaker claim (verifiers report the actor set as unbound).
     @discardableResult
     public func appendEvent(
         actor: String, kind: String, action: String, target: String,
         timestamp: String? = nil,
         payload: JCSValue = .object([]),
         untrustedPayloadFields: [String] = []
-    ) -> CapsuleBuilder {
+    ) throws -> CapsuleBuilder {
+        guard Chain.isValidEventKind(kind) else {
+            throw CapsuleError.malformed(
+                "event kind \(Chain.debugQuoted(kind)) is not one of "
+                    + Chain.EVENT_KINDS.joined(separator: ", ")
+            )
+        }
+        guard participants.isEmpty
+                || actor == Chain.HOST_ACTOR
+                || participants.contains(where: { $0.actorId == actor })
+        else {
+            throw CapsuleError.malformed(
+                "event actor \(Chain.debugQuoted(actor)) is not a declared participant: "
+                    + "call setParticipants(_:) with actor_id \(Chain.debugQuoted(actor)) "
+                    + "before appendEvent (only \"system:host\" may appear without one)"
+            )
+        }
         bareEvents.append(BareEvent(
             actor: actor, kind: kind, action: action, target: target,
             timestamp: timestamp ?? createdAt,

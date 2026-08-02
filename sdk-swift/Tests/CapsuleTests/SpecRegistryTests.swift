@@ -8,6 +8,8 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - signer-set/vectors.json         (signer-set binding outcomes)
+//   - chain-rules/vectors.json        (per-event actor + kind field rules)
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -137,6 +139,24 @@ final class SpecRegistryTests: XCTestCase {
                 "\(name): expected signerSetBound=\(bound)"
             )
         }
+        // Actor-set binding (chain.md step 6) follows the signer-set
+        // contract: a non-empty manifest.participants[] binds the chain's
+        // actors; an empty one must be REPORTED as unbound, never
+        // rejected.
+        if let bound = expected["actor_set_bound"] as? Bool {
+            XCTAssertEqual(
+                v.actorSetBound, bound,
+                "\(name): expected actorSetBound=\(bound)"
+            )
+        }
+        // Honest-reporting pin: some rules require the verifier to REPORT
+        // a weaker claim machine-readably, not just to pass/fail.
+        if let needle = expected["notes_includes"] as? String {
+            XCTAssertTrue(
+                v.notes.contains(where: { $0.contains(needle) }),
+                "\(name): expected a note containing \(needle); got \(v.notes)"
+            )
+        }
     }
 
     // MARK: - tamper-detection/vectors.json
@@ -174,6 +194,32 @@ final class SpecRegistryTests: XCTestCase {
         let keys = try allowlist(doc, base: base)
         let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
         XCTAssertFalse(vectors.isEmpty, "signer-set registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - chain-rules/vectors.json
+
+    /// chain.md per-event field rules (verification steps 6 and 7). The
+    /// actor rule is conditional on the manifest's own claim: a non-empty
+    /// participants[] binds every event actor to the declared set or
+    /// system:host (fail-closed); an empty one verifies with
+    /// actorSetBound=false plus a note — absence is a weaker claim made
+    /// honestly. The kind enum is closed in every tier. All three
+    /// fixtures are cryptographically well-formed, so only these rules
+    /// decide them.
+    func testChainRulesRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("chain-rules/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "chain-rules registry is empty")
         for vector in vectors {
             let name = vector["name"] as? String ?? "<unnamed>"
             let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")

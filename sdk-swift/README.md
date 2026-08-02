@@ -49,7 +49,7 @@ import Capsule
 let kp = Ed25519KeyPair.generate()    // or load from Keychain
 let builder = CapsuleBuilder(originator: .init(keyPair: kp, label: "My App"))
 
-builder
+try builder
     .setProgram("# What this capsule is\n\n…\n")
     .setAgents("# Agents\n\n- human:user\n- ai:my-on-device-llm\n")
     .setParticipants([

@@ -115,7 +115,7 @@ final class EncryptedRoundTripTests: XCTestCase {
             originator: .init(keyPair: origin, label: "test-originator"),
             createdAt: signedAt
         )
-        builder
+        try builder
             .setProgram("# Hello\n\nEncrypted capsule under test.\n")
             .setAgents("# Agents\n")
             .appendEvent(

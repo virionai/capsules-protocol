@@ -61,6 +61,40 @@ public struct BuiltEvent {
 public enum Chain {
     static let GENESIS_PREV = Data(repeating: 0, count: 32)
 
+    /// The closed `kind` enum from spec/chain.md "Field rules". Readers
+    /// reject unknown kinds and the builder refuses to append them — in
+    /// every tier, because a custom kind is not a weaker claim, it is
+    /// unreadable to the foreign LLM reader the format serves.
+    public static let EVENT_KINDS = [
+        "decision", "observation", "mutation", "session", "checkpoint",
+    ]
+
+    /// The one actor a chain event may always name without a matching
+    /// manifest participant — backstop events emitted by the host runtime.
+    public static let HOST_ACTOR = "system:host"
+
+    /// True when `kind` is one of the five values spec/chain.md allows.
+    public static func isValidEventKind(_ kind: String) -> Bool {
+        EVENT_KINDS.contains(kind)
+    }
+
+    /// Render a string the way Rust's `{:?}` renders a `String` (and JS's
+    /// `JSON.stringify` a plain-ASCII one), so all five lanes emit
+    /// byte-identical verifier messages. `nil` renders as `null` (a
+    /// missing field).
+    public static func debugQuoted(_ s: String?) -> String {
+        guard let s else { return "null" }
+        var out = "\""
+        for ch in s.unicodeScalars {
+            switch ch {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            default: out.unicodeScalars.append(ch)
+            }
+        }
+        return out + "\""
+    }
+
     public static func build(_ bare: [BareEvent]) throws -> [BuiltEvent] {
         var prev = GENESIS_PREV
         var out: [BuiltEvent] = []

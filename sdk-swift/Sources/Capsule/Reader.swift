@@ -318,31 +318,108 @@ public enum CapsuleReader {
         return nil
     }
 
-    /// Verify chain hash linkage. Independent of envelope sigs.
-    public static func verifyChain(_ events: [JCSValue]) -> Bool {
+    /// Verify chain hash linkage plus the per-event field rules from
+    /// spec/chain.md (verification steps 6 and 7). Independent of
+    /// envelope signatures. Returns one message per failure; an empty
+    /// array means the chain verifies.
+    ///
+    /// The step-6 actor rule is CONDITIONAL on the manifest's own claim:
+    /// a NON-EMPTY `participants` set binds every event actor to the
+    /// declared set (or the literal "system:host"), fail-closed. An
+    /// EMPTY set is the manifest making no claim about who acted — the
+    /// walk accepts any actor then, and the CALLER (CapsuleVerifier)
+    /// reports the reduced assurance. Safe because participants is
+    /// covered by manifest_hash inside the signed payload. The `kind`
+    /// enum is enforced unconditionally.
+    public static func verifyChain(_ events: [JCSValue],
+                                   participants: Set<String> = []) -> [String]
+    {
+        var errors: [String] = []
         var prev = Chain.GENESIS_PREV
         for (i, e) in events.enumerated() {
-            guard case .object(let pairs) = e else { return false }
+            let seq = i + 1
+            guard case .object(let pairs) = e else {
+                errors.append("seq \(seq): event is not a JSON object")
+                continue
+            }
+            // spec/chain.md step 6 — when the manifest declares
+            // participants, the actor must be one of them or the host.
+            let actor = stringField(pairs, "actor")
+            if !participants.isEmpty
+                && actor != Chain.HOST_ACTOR
+                && !(actor.map { participants.contains($0) } ?? false)
+            {
+                errors.append(
+                    "seq \(seq): actor \(Chain.debugQuoted(actor)) "
+                        + "not in manifest.participants and not system:host"
+                )
+            }
+            // spec/chain.md "Field rules" — `kind` is a closed enum.
+            let kind = stringField(pairs, "kind")
+            if !(kind.map { Chain.isValidEventKind($0) } ?? false) {
+                errors.append(
+                    "seq \(seq): kind \(Chain.debugQuoted(kind)) is not one of "
+                        + Chain.EVENT_KINDS.joined(separator: ", ")
+                )
+            }
             var withoutHash: [(String, JCSValue)] = []
             var stored: String?
             for (k, v) in pairs {
                 if k == "hash", case .string(let s) = v { stored = s }
                 else { withoutHash.append((k, v)) }
             }
-            guard let storedHash = stored,
-                  let prevHash = pairs.first(where: { $0.0 == "prev_hash" }),
-                  case .string(let prevHex) = prevHash.1
-            else { return false }
-            if i == 0 && prevHex != Bytes.toHex(Chain.GENESIS_PREV) { return false }
-            if i > 0 && prevHex != Bytes.toHex(prev) { return false }
+            guard let storedHash = stored else {
+                errors.append("seq \(seq): hash missing or wrong length")
+                continue
+            }
+            guard let prevHex = stringField(pairs, "prev_hash") else {
+                errors.append("seq \(seq): prev_hash missing or wrong length")
+                continue
+            }
+            let expectedPrev = Bytes.toHex(prev)
+            if prevHex != expectedPrev {
+                errors.append(
+                    "seq \(seq): prev_hash mismatch: got \(prevHex), expected \(expectedPrev)"
+                )
+            }
             // An event that cannot be canonicalized (integer outside
             // ±(2^53 − 1)) has no interoperable hash — fail closed.
-            guard let canonical = try? JCS.bytes(.object(withoutHash)) else { return false }
+            guard let canonical = try? JCS.bytes(.object(withoutHash)) else {
+                errors.append("seq \(seq): recompute failed: event cannot be canonicalized")
+                continue
+            }
             let h = Hash.sha256(Bytes.concat(prev, canonical))
-            if Bytes.toHex(h) != storedHash { return false }
+            let recomputed = Bytes.toHex(h)
+            if recomputed != storedHash {
+                errors.append(
+                    "seq \(seq): hash mismatch: stored \(storedHash), recomputed \(recomputed)"
+                )
+            }
             prev = h
         }
-        return true
+        return errors
+    }
+
+    /// Read a string field out of a JCS object's key/value pairs.
+    static func stringField(_ pairs: [(String, JCSValue)], _ key: String) -> String? {
+        guard let v = pairs.first(where: { $0.0 == key })?.1,
+              case .string(let s) = v else { return nil }
+        return s
+    }
+
+    /// Collect `manifest.participants[].actor_id` into a lookup set.
+    public static func participantActorIds(_ manifest: JCSValue) -> Set<String> {
+        guard case .object(let pairs) = manifest,
+              let ps = pairs.first(where: { $0.0 == "participants" })?.1,
+              case .array(let items) = ps
+        else { return [] }
+        var out: Set<String> = []
+        for item in items {
+            guard case .object(let fields) = item,
+                  let id = stringField(fields, "actor_id") else { continue }
+            out.insert(id)
+        }
+        return out
     }
 
     /// `parseJSON` with the offending file named in the error, so a reader

@@ -16,7 +16,7 @@ final class SignerSetTests: XCTestCase {
             originator: .init(keyPair: kp, label: "Acme"),
             createdAt: "2026-05-07T12:00:00Z"
         )
-        builder
+        try builder
             .setProgram("# Loan file\n")
             .setParticipants([.init(actorId: "human:alice", role: "originator", label: "Alice")])
             .appendEvent(

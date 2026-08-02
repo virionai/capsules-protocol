@@ -12,7 +12,7 @@ final class RoundTripTests: XCTestCase {
         let builder = CapsuleBuilder(
             originator: .init(keyPair: kp, label: "Test originator")
         )
-        builder
+        try builder
             .setProgram("# Hello\n\nA test capsule.\n")
             .setAgents("# Agents\n\n- human:test\n")
             .setParticipants([
