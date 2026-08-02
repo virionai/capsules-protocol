@@ -25,9 +25,9 @@ use crate::decrypt::decrypt_inner_zip;
 use crate::manifest::{compute_capsule_id, content_index_exclusions, manifest_hash};
 use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::verifier::{
-    chain_walk_into, check_signer_set, originator_binding_error, verify_content_index,
-    verify_envelope_signatures, ChainCheck, ContentIndexCheck, EnvelopeCheck, TopError,
-    TopErrorCategory, TopErrorScope, VerifyOptions,
+    anchor_or_null, chain_walk_into, check_signer_set, originator_binding_error,
+    verify_content_index, verify_envelope_signatures, ChainCheck, ContentIndexCheck,
+    EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions,
 };
 use crate::zip_reader::unpack_zip;
 
@@ -70,6 +70,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     inner_envelope_check: &mut Option<EnvelopeCheck>,
     inner_content_index_check: &mut Option<ContentIndexCheck>,
     errors: &mut Vec<TopError>,
+    notes: &mut Vec<String>,
     level: &mut String,
 ) {
     // Step 1: decrypt content.enc.
@@ -219,7 +220,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // error tagged `CapsuleId` with the `"L3 inner: "` prefix.
     match hex_to_bytes(&inner_manifest.originator.public_key) {
         Ok(pk) if pk.len() == 32 => {
-            match compute_capsule_id(&pk, &inner_manifest.first_event_hash) {
+            match compute_capsule_id(&pk, inner_manifest.first_event_hash.as_deref()) {
                 Ok(expected_id) => {
                     if expected_id != inner_manifest.id {
                         errors.push(TopError::inner(
@@ -339,11 +340,17 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         &inner_envelope,
         &mut new_chain,
         errors,
+        notes,
         TopErrorScope::Inner,
     );
+    let walked_empty = new_chain.note.is_some();
     *chain_check = new_chain;
-    // The chain was actually verified — clear any L2 deferred note.
-    chain_check.note = None;
+    if !walked_empty {
+        // The chain was actually walked — clear the L2 deferred note.
+        // (A zero-event inner chain keeps its own empty-chain note: the
+        // honest report that nothing was walked.)
+        chain_check.note = None;
+    }
 
     // Step 5: L3 cross-checks: inner manifest/envelope anchors must match
     // the outer envelope. Each mismatch is its own ChainAnchor error so
@@ -362,7 +369,8 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             TopErrorCategory::ChainAnchor,
             format!(
                 "L3: inner.first_event_hash mismatch: inner {}, outer {}",
-                inner_envelope.first_event_hash, outer_envelope.first_event_hash
+                anchor_or_null(&inner_envelope.first_event_hash),
+                anchor_or_null(&outer_envelope.first_event_hash)
             ),
         ));
     }
@@ -371,29 +379,33 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             TopErrorCategory::ChainAnchor,
             format!(
                 "L3: inner.entry_hash mismatch: inner {}, outer {}",
-                inner_envelope.entry_hash, outer_envelope.entry_hash
+                anchor_or_null(&inner_envelope.entry_hash),
+                anchor_or_null(&outer_envelope.entry_hash)
             ),
         ));
     }
-    // Also cross-check inner first/entry events against the outer envelope
+    // Also cross-check inner first/entry events against the inner envelope
     // anchors — guards against an inner envelope whose anchors disagree with
-    // its own chain.
+    // its own chain. (The zero-event inner case is handled by
+    // `chain_walk_into` above: anchors must be null, fail-closed.)
     if let (Some(first), Some(last)) = (inner_events.first(), inner_events.last()) {
-        if first.event.hash != inner_envelope.first_event_hash {
+        if inner_envelope.first_event_hash.as_deref() != Some(first.event.hash.as_str()) {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner first event hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    first.event.hash, inner_envelope.first_event_hash
+                    first.event.hash,
+                    anchor_or_null(&inner_envelope.first_event_hash)
                 ),
             ));
         }
-        if last.event.hash != inner_envelope.entry_hash {
+        if inner_envelope.entry_hash.as_deref() != Some(last.event.hash.as_str()) {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner entry hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    last.event.hash, inner_envelope.entry_hash
+                    last.event.hash,
+                    anchor_or_null(&inner_envelope.entry_hash)
                 ),
             ));
         }

@@ -9,6 +9,7 @@
 //!   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
 //!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //!   - signer-set/vectors.json         (signer-set binding outcomes)
+//!   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!
 //! The registry's `reason` categories are normative; the substring tables
@@ -121,6 +122,16 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
             result.signer_set
         );
     }
+    // Honest-reporting pin: some rules require the verifier to REPORT a
+    // weaker claim machine-readably (e.g. a zero-event chain that was not
+    // walked), not just to pass/fail.
+    if let Some(needle) = expected["notes_includes"].as_str() {
+        assert!(
+            result.notes.iter().any(|n| n.contains(needle)),
+            "{name}: expected a note containing {needle:?}; got {:?}",
+            result.notes
+        );
+    }
 }
 
 fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyResult {
@@ -186,6 +197,30 @@ fn unknown_fields_registry_outcomes() {
 #[test]
 fn signer_set_registry_outcomes() {
     let path = vectors_dir().join("signer-set/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
+/// chains"). A chain with zero events is legal — the weakest honest
+/// shape — and then manifest.first_event_hash, envelope.first_event_hash
+/// and envelope.entry_hash MUST all be null (claiming an anchor over
+/// zero events fails closed; those anchors are the only envelope-to-
+/// chain binding in a plain capsule). The verifier must REPORT that no
+/// events were walked (notes pin). And an event whose stored bytes omit
+/// the optional untrusted_payload_fields member must verify: the hash
+/// preimage is the stored line, never a typed-struct round-trip.
+#[test]
+fn chain_binding_registry_outcomes() {
+    let path = vectors_dir().join("chain-binding/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);

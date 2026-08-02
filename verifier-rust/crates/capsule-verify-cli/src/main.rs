@@ -181,18 +181,22 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         r.content_index.errors.clone(),
     );
 
-    // Chain check. For encrypted outers the verifier sets `chain.note`
-    // to record that the chain walk was deferred to L3 — render the line
-    // as a PASS with the note as the indented sub-line, NOT as a failure
-    // and NOT as the verifier's chain.errors. For plain capsules,
-    // `chain.note` is None and we render walk + anchor errors normally.
+    // Chain check. `chain.note` records a walk that legitimately did not
+    // run: "deferred to L3 (encrypted outer)", or a zero-event chain whose
+    // anchors were checked for null instead. The note always renders as
+    // the indented sub-line so a not-walked chain is never presented as an
+    // unqualified pass — but it does NOT force the glyph to PASS: anchor
+    // violations (e.g. a claimed anchor over an empty chain) still render
+    // the line as a failure with their messages underneath.
+    let mut chain_msgs: Vec<String> = Vec::new();
     if let Some(note) = r.chain.note.as_deref() {
-        print_check("chain", true, vec![note.to_string()]);
-    } else {
-        let mut chain_msgs = r.chain.errors.clone();
-        chain_msgs.extend(strings_of(errors_for(r, TopErrorCategory::ChainAnchor)));
-        print_check("chain", r.chain.ok && chain_msgs.is_empty(), chain_msgs);
+        chain_msgs.push(note.to_string());
     }
+    chain_msgs.extend(r.chain.errors.clone());
+    let anchor_msgs = strings_of(errors_for(r, TopErrorCategory::ChainAnchor));
+    let chain_ok = r.chain.ok && r.chain.errors.is_empty() && anchor_msgs.is_empty();
+    chain_msgs.extend(anchor_msgs);
+    print_check("chain", chain_ok, chain_msgs);
 
     print_check(
         "envelope_signature",

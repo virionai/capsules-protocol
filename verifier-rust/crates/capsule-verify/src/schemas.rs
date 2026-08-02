@@ -136,7 +136,12 @@ pub struct Manifest {
     pub id: String,
     pub originator: Originator,
     pub participants: Vec<Participant>,
-    pub first_event_hash: String,
+    /// `None` is the legal zero-event shape (spec/chain.md "Empty
+    /// chains"): a capsule with no events has no first event to hash, so
+    /// the manifest writes `null` and `capsule_id` derives with 32 zero
+    /// bytes standing in. The verifier enforces the null-anchor /
+    /// event-count consistency in both directions.
+    pub first_event_hash: Option<String>,
     pub content_index: ContentIndex,
     pub skill_trust: BTreeMap<String, String>,
     pub encryption: Option<Encryption>,
@@ -167,8 +172,13 @@ pub struct Signer {
 pub struct Envelope {
     pub version: String,
     pub capsule_id: String,
-    pub first_event_hash: String,
-    pub entry_hash: String,
+    /// `None` (stored `null`) is the legal zero-event shape — see
+    /// [`Manifest::first_event_hash`]. In a plain capsule these two
+    /// anchors are the only envelope-to-chain binding, so the verifier
+    /// requires them null over an empty chain and matching over a
+    /// non-empty one, fail-closed both ways.
+    pub first_event_hash: Option<String>,
+    pub entry_hash: Option<String>,
     pub manifest_hash: String,
     pub content_index_hash: String,
     pub encrypted_blob_hash: Option<String>,

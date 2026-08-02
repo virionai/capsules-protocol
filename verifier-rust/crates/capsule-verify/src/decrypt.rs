@@ -428,7 +428,9 @@ mod tests {
         // documents so the pin survives fixture keypair re-baselines.
         let expected = format!(
             r#"{{"capsule_id":"{}","cipher":"ChaCha20-Poly1305","first_event_hash":"{}","originator_public_key":"{}","version":"0.6"}}"#,
-            envelope.capsule_id, envelope.first_event_hash, manifest.originator.public_key
+            envelope.capsule_id,
+            envelope.first_event_hash.as_deref().expect("encrypted fixture has a chain"),
+            manifest.originator.public_key
         );
         assert_eq!(
             got,

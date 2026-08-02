@@ -59,18 +59,28 @@ pub enum CapsuleIdError {
 /// Compute capsule_id as `sha256_hex(domain || originator_pubkey_raw ||
 /// first_event_hash_raw)`, where `domain = b"capsule-id-v0.6\0"`.
 ///
+/// `first_event_hash_hex: None` is the zero-event capsule shape
+/// (spec/chain.md "Empty chains"): there is no first event, and the
+/// derivation uses 32 zero bytes — the genesis prev-hash value — in
+/// place of `first_event_hash_raw` (spec/manifest.md "Capsule identity").
+///
 /// Mirrors `computeCapsuleId` in `sdk-js/src/manifest.js`.
 pub fn compute_capsule_id(
     originator_pubkey_raw: &[u8],
-    first_event_hash_hex: &str,
+    first_event_hash_hex: Option<&str>,
 ) -> Result<String, CapsuleIdError> {
     if originator_pubkey_raw.len() != 32 {
         return Err(CapsuleIdError::BadOriginatorLength);
     }
-    if first_event_hash_hex.len() != 64 {
-        return Err(CapsuleIdError::BadFirstEventHashShape);
-    }
-    let feh_raw = hex_to_bytes(first_event_hash_hex)?;
+    let feh_raw: Vec<u8> = match first_event_hash_hex {
+        None => vec![0u8; 32], // genesis stand-in for an empty chain
+        Some(hex) => {
+            if hex.len() != 64 {
+                return Err(CapsuleIdError::BadFirstEventHashShape);
+            }
+            hex_to_bytes(hex)?
+        }
+    };
     let mut input =
         Vec::with_capacity(CAPSULE_ID_DOMAIN.len() + originator_pubkey_raw.len() + feh_raw.len());
     input.extend_from_slice(CAPSULE_ID_DOMAIN);
@@ -163,20 +173,30 @@ mod tests {
     fn capsule_id_matches_stored() {
         let (manifest, _) = load_clean();
         let pk = hex_to_bytes(&manifest.originator.public_key).unwrap();
-        let id = compute_capsule_id(&pk, &manifest.first_event_hash).unwrap();
+        let id = compute_capsule_id(&pk, manifest.first_event_hash.as_deref()).unwrap();
         assert_eq!(id, manifest.id);
     }
 
     #[test]
     fn capsule_id_rejects_short_pubkey() {
-        let err = compute_capsule_id(&[0u8; 31], &"00".repeat(32)).unwrap_err();
+        let err = compute_capsule_id(&[0u8; 31], Some(&"00".repeat(32))).unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadOriginatorLength));
     }
 
     #[test]
     fn capsule_id_rejects_short_first_event_hash() {
-        let err = compute_capsule_id(&[0u8; 32], "deadbeef").unwrap_err();
+        let err = compute_capsule_id(&[0u8; 32], Some("deadbeef")).unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadFirstEventHashShape));
+    }
+
+    /// `None` (a zero-event capsule) derives exactly like the genesis
+    /// zero hash — 32 zero bytes stand in for `first_event_hash_raw`
+    /// (spec/manifest.md "Capsule identity").
+    #[test]
+    fn capsule_id_none_uses_genesis_zero_bytes() {
+        let via_none = compute_capsule_id(&[7u8; 32], None).unwrap();
+        let via_zero_hex = compute_capsule_id(&[7u8; 32], Some(&"0".repeat(64))).unwrap();
+        assert_eq!(via_none, via_zero_hex);
     }
 
     #[test]
