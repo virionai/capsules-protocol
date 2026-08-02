@@ -295,13 +295,18 @@ public final class CapsuleBuilder {
 
         // 5) Outer manifest + envelope. The outer content_index covers
         // only skills/decryption/decryption.json — manifest.json,
-        // provenance/envelope.json, and content.enc are excluded from the
-        // index by `buildContentIndex` (see spec/manifest.md).
+        // provenance/envelope.json, and (because this capsule declares a
+        // cipher) content.enc are excluded. The content.enc exclusion is
+        // requested explicitly here: it is conditional on the signed
+        // envelope.cipher, not on file presence (see spec/manifest.md).
         let outerSidecars: [(String, Data)] = [
             ("skills/decryption/decryption.json", decryptionMetaBytes),
             ("content.enc", contentEnc),
         ]
-        let outerContentIndex = try Manifest.buildContentIndex(outerSidecars)
+        let outerContentIndex = try Manifest.buildContentIndex(
+            outerSidecars,
+            excluded: Manifest.contentIndexExclusions(true)
+        )
         let outerManifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
