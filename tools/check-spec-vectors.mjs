@@ -702,6 +702,11 @@ async function checkFile(path) {
     fail(`${path}: cannot parse JSON: ${err.message}`);
     return;
   }
+  // The lane × collection coverage manifest is metadata, not a vector set;
+  // tools/check-vector-registry.mjs (its own conformance target) validates
+  // it. Recognized here only so the walker's fail-closed rule below does
+  // not misreport it as an unknown vector document.
+  if (doc?.meta?.kind === "vector-registry") return;
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
   // Must sit before isCollection, which would otherwise swallow the file
   // (it also carries a `vectors` array).

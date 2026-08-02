@@ -161,6 +161,21 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    // Lane × collection coverage: every vector collection on disk must be
+    // listed in spec/vectors/registry.json with a consumer (or explicit
+    // exemption) for EVERY lane. Closes the meta-pattern where registry
+    // consumption was opt-in per lane by hardcoded filename, so a new
+    // collection was invisible to four lanes by default.
+    id: "vector-registry",
+    name: "spec/vectors lane-coverage manifest",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node tools/check-vector-registry.mjs",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     // The sdk-js README quickstart, verbatim. Gates the copy-paste
     // onboarding path: if this fails, the README's first code block is
     // broken for new integrators.
