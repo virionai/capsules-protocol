@@ -63,6 +63,13 @@ hashing footgun.
 The genesis previous-hash value is 32 zero bytes (not the 64 ASCII zeros
 of the prior format).
 
+`JCS(...)` above is defined only over I-JSON input. An event whose payload
+carries a number outside the IEEE-754 exact-integer range, or a string with
+an unpaired surrogate, has no canonical form: builders MUST reject it at
+`appendEvent` time, and verifiers MUST report the refusal as a
+canonicalization error rather than as a hash mismatch. See
+[canonicalization.md](canonicalization.md).
+
 ## Untrusted content
 
 Any field in a chain event whose value is LLM-authored or
