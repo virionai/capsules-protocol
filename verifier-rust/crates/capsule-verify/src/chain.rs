@@ -248,6 +248,42 @@ mod tests {
         );
     }
 
+    /// The hash preimage must be rebuilt from the ORIGINAL stored line,
+    /// never from a re-serialization of the typed [`crate::schemas::ChainEvent`].
+    /// `untrusted_payload_fields` carries `#[serde(default)]` and no
+    /// `skip_serializing_if`, so a struct round-trip re-emits an event whose
+    /// stored bytes omit the key with `"untrusted_payload_fields":[]`
+    /// injected — different JCS bytes, and a spurious hash mismatch on a
+    /// chain that is intact (amendment M06: such events pass the JS, Python
+    /// and Swift lanes). Regression pin for F41; the recompute reads
+    /// `ParsedEvent::raw`.
+    #[test]
+    fn recomputes_hash_from_stored_line_not_typed_struct() {
+        // Stored event bytes: note the absence of `untrusted_payload_fields`.
+        let mut event = serde_json::json!({
+            "seq": 1,
+            "event_id": "evt_001",
+            "actor": "system:host",
+            "kind": "observation",
+            "action": "session_ended",
+            "target": "capsule",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "payload": {},
+            "prev_hash": "0".repeat(64)
+        });
+        let hash = bytes_to_hex(&hash_event_value(&event).expect("event is hashable"));
+        event["hash"] = serde_json::Value::String(hash);
+        let line = format!("{}\n", serde_json::to_string(&event).expect("serialize"));
+
+        let events = parse_chain_jsonl(line.as_bytes()).expect("chain parses");
+        let errors = verify_chain(&events);
+        assert!(
+            errors.is_empty(),
+            "an event whose stored bytes omit untrusted_payload_fields must still \
+             verify; got: {errors:?}"
+        );
+    }
+
     /// An unknown member added to an event's preserved tree changes the
     /// recomputed hash — proving unknown members are canonicalised, i.e.
     /// they sit inside the integrity envelope rather than being dropped.
