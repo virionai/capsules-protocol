@@ -98,10 +98,17 @@ function normalizeTrustRoots(trustRoots) {
   });
 }
 
+// `kid` selects the key (spec/profiles/clerk.md "Security notes"). A cached
+// trust-root set may hold several keys — possibly from several issuers — so
+// an unknown or ambiguous kid MUST fail closed. Falling back to "any cached
+// key whose alg matches" would accept an attestation signed by any key in
+// the set. A kid-less attestation resolves only when the set holds exactly
+// one key of the requested algorithm.
 function selectKey(roots, kid, alg) {
-  const byKid = roots.filter((k) => k.kid === kid);
-  const pool = byKid.length ? byKid : roots;
-  return pool.find((k) => k.alg === alg) ?? null;
+  const byAlg = roots.filter((k) => k.alg === alg);
+  if (kid == null || kid === "") return byAlg.length === 1 ? byAlg[0] : null;
+  const matches = byAlg.filter((k) => k.kid === kid);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 // Claim timestamps are RFC 3339 instants (spec/federation.md: "issued_at /

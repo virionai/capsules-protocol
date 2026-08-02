@@ -40,13 +40,13 @@ function b64u(buf) {
 
 // A mock Clerk instance: an EC P-256 signing key + JWKS, and an ES256 JWT
 // minter. Faithful to how Clerk signs session/template JWTs.
-function makeClerkInstance() {
+function makeClerkInstance(kid = "clerk-key-abc") {
   const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const kid = "clerk-key-abc";
   const jwk = { ...publicKey.export({ format: "jwk" }), kid, alg: "ES256", use: "sig" };
   const jwks = { keys: [jwk] };
-  function mintJwt(claims) {
-    const header = b64u(JSON.stringify({ alg: "ES256", typ: "JWT", kid }));
+  // `headerKid` lets a test claim a kid it did not sign with.
+  function mintJwt(claims, headerKid = kid) {
+    const header = b64u(JSON.stringify({ alg: "ES256", typ: "JWT", kid: headerKid }));
     const payload = b64u(JSON.stringify(claims));
     const sig = nodeSign("sha256", Buffer.from(`${header}.${payload}`), {
       key: privateKey,
@@ -627,4 +627,56 @@ test("a JWT attestation with a garbage exp is rejected, not crashed on", () => {
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("expires_at is not an RFC 3339 instant")));
+});
+
+// --------------------------------------------------------------------------
+// Key selection fails closed (spec/profiles/clerk.md "kid selects the key")
+// --------------------------------------------------------------------------
+
+test("an unknown kid fails closed instead of trying every cached key", () => {
+  const clerkA = makeClerkInstance("clerk-key-A");
+  const clerkB = makeClerkInstance("clerk-key-B");
+  // One cached JWKS holding two keys, as a host that refreshes a multi-key
+  // (or multi-issuer) set would have.
+  const cached = { keys: [...clerkA.jwks.keys, ...clerkB.jwks.keys] };
+  const signer = generateEd25519();
+  const capsuleId = "c".repeat(64);
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  const jwt = clerkA.mintJwt(
+    {
+      iss: "https://clerk.acme.example", sub: "user_42", org_role: "admin",
+      aud: AUD, iat: nowSec, exp: nowSec + 3600,
+      cap: { capsule_id: capsuleId, signer_public_key: signer.publicKeyHex, signer_role: "originator" },
+    },
+    "rotated-out-99", // a kid that is NOT in the cached set
+  );
+  const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: cached, now: new Date(TS), capsuleId,
+    signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
+  });
+  assert.equal(res.ok, false, "kid selects the key; an unknown kid resolves to nothing");
+  assert.ok(res.errors.some((e) => e.includes("no trust-root key for kid=rotated-out-99")));
+});
+
+test("ed25519-jcs: an unknown kid does not fall back to another issuer's key", () => {
+  const a = makeIssuer();
+  const b = makeIssuer();
+  const cached = { keys: [...a.trustRoots.keys, { ...b.trustRoots.keys[0], kid: "issuer-key-2" }] };
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer: a.issuer, kid: "issuer-key-retired", ed25519PrivateKeyHex: a.ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: cached, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: a.issuer,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("no trust-root key for kid=issuer-key-retired")));
 });
