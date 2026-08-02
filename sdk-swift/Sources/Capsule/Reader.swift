@@ -92,6 +92,13 @@ public enum CapsuleReader {
         }
         let manifest = try parseJSONFile(mfBytes, name: "manifest.json")
         let envelope = try parseJSONFile(envBytes, name: "provenance/envelope.json")
+        // Shape check at the parse boundary (mirrors the JS reference's
+        // validateManifestShape / validateEnvelopeShape): full integrity is
+        // the verifier's job, but a caller reading manifest fields without
+        // verifying first can rely on the basic shapes, and verification
+        // stays total over whatever the reader hands back.
+        try validateManifestShape(manifest)
+        try validateEnvelopeShape(envelope)
 
         // Detect encrypted-outer. The chain/program/agents files live
         // inside the encrypted blob, not the outer zip.
@@ -305,6 +312,106 @@ public enum CapsuleReader {
         }
         // The inner zip is itself a fully-formed plain capsule; re-parse.
         return try parse(innerZip)
+    }
+
+    /// Lowercase 64-hex predicate, per the spec's canonical-hex rule.
+    static func isHex64(_ s: String) -> Bool {
+        s.count == 64 && s.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) }
+    }
+
+    /// Lightweight shape check on the manifest (spec/manifest.md field
+    /// rules). Error messages carry the offending field path, prefixed
+    /// `manifest.`, mirroring the JS reference's validateManifestShape —
+    /// the registry's `invalid_manifest_shape` reason maps onto that
+    /// prefix in this lane.
+    static func validateManifestShape(_ manifest: JCSValue) throws {
+        guard case .object(let pairs) = manifest else {
+            throw CapsuleError.malformed("manifest.json is not a JSON object")
+        }
+        func member(_ key: String) -> JCSValue? { pairs.first(where: { $0.0 == key })?.1 }
+        var version: String? = nil
+        if case .object(let fmt)? = member("format"),
+           case .string(let v)? = fmt.first(where: { $0.0 == "version" })?.1 {
+            version = v
+        }
+        guard version == "0.6" else {
+            throw CapsuleError.malformed(
+                "manifest.format.version: expected '0.6', got \(Chain.debugQuoted(version))")
+        }
+        guard case .string(let id)? = member("id"), isHex64(id) else {
+            throw CapsuleError.malformed("manifest.id is not a 64-char lowercase hex string")
+        }
+        var origPub: String? = nil
+        if case .object(let orig)? = member("originator"),
+           case .string(let pk)? = orig.first(where: { $0.0 == "public_key" })?.1 {
+            origPub = pk
+        }
+        guard let op = origPub, isHex64(op) else {
+            throw CapsuleError.malformed(
+                "manifest.originator.public_key must be a 64-char lowercase hex string")
+        }
+        // null is the legal empty-chain shape (spec/chain.md "Empty
+        // chains"): a zero-event capsule has no first event to hash. The
+        // verifier enforces the null-anchor / event-count consistency; the
+        // reader only rejects values that are neither null nor hex.
+        switch member("first_event_hash") {
+        case nil, .some(.null):
+            break
+        case .some(.string(let s)) where isHex64(s):
+            break
+        default:
+            throw CapsuleError.malformed(
+                "manifest.first_event_hash must be a 64-char lowercase hex string or null")
+        }
+        try validateContentIndexShape(member("content_index"))
+    }
+
+    static func validateContentIndexShape(_ index: JCSValue?) throws {
+        guard case .object(let pairs)? = index else {
+            throw CapsuleError.malformed("manifest.content_index must be a JSON object")
+        }
+        guard case .string(let ih)? = pairs.first(where: { $0.0 == "index_hash" })?.1,
+              isHex64(ih)
+        else {
+            throw CapsuleError.malformed(
+                "manifest.content_index.index_hash must be a 64-char lowercase hex string")
+        }
+        guard case .array(let files)? = pairs.first(where: { $0.0 == "files" })?.1 else {
+            throw CapsuleError.malformed("manifest.content_index.files must be an array")
+        }
+        for (i, f) in files.enumerated() {
+            guard case .object(let cols) = f else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)] must be a JSON object")
+            }
+            guard case .string(let p)? = cols.first(where: { $0.0 == "path" })?.1, !p.isEmpty else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)].path must be a non-empty string")
+            }
+            guard case .string(let h)? = cols.first(where: { $0.0 == "sha256" })?.1, isHex64(h) else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)].sha256 must be a 64-char lowercase hex string")
+            }
+        }
+    }
+
+    static func validateEnvelopeShape(_ envelope: JCSValue) throws {
+        guard case .object(let pairs) = envelope else {
+            throw CapsuleError.malformed("envelope.json is not a JSON object")
+        }
+        guard case .string("0.6")? = pairs.first(where: { $0.0 == "version" })?.1 else {
+            throw CapsuleError.malformed("envelope.version: expected '0.6'")
+        }
+        guard case .string(let cid)? = pairs.first(where: { $0.0 == "capsule_id" })?.1,
+              isHex64(cid)
+        else {
+            throw CapsuleError.malformed("envelope.capsule_id must be a 64-char lowercase hex string")
+        }
+        guard case .array(let signers)? = pairs.first(where: { $0.0 == "signers" })?.1,
+              !signers.isEmpty
+        else {
+            throw CapsuleError.malformed("envelope.signers must be a non-empty array")
+        }
     }
 
     private static func lookupString(_ v: JCSValue, _ keys: String...) -> String? {

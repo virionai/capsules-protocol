@@ -199,12 +199,21 @@ public enum CapsuleVerifier {
         record("zip_parse", true, "\(parsed.files.count) files")
         record("json_parse", true)
 
-        // capsule_id derivation
+        // capsule_id derivation. A null (or absent) manifest.first_event_hash
+        // is the legal zero-event shape: capsule_id then derives with 32
+        // zero bytes standing in for first_event_hash_raw (spec/chain.md
+        // "Empty chains", spec/manifest.md "Capsule identity"). Whether the
+        // chain actually HAS zero events is the anchor check's job below.
+        let mfFirstHashValue = lookupValue(parsed.manifest, ["first_event_hash"])
         if let pubHex = lookupString(parsed.manifest, ["originator", "public_key"]),
-           let firstHash = lookupString(parsed.manifest, ["first_event_hash"]),
            let mfId = lookupString(parsed.manifest, ["id"]),
            let envId = lookupString(parsed.envelope, ["capsule_id"])
         {
+            let firstHash: String
+            switch mfFirstHashValue {
+            case .some(.string(let s)): firstHash = s
+            default: firstHash = String(repeating: "0", count: 64)  // null/absent
+            }
             // Untrusted hex from manifest — degrade gracefully on bad input
             // (originator pub must be 64 hex chars, first_event_hash 64).
             if let pubBytes = try? Bytes.fromHexThrowing(pubHex, label: "manifest.originator.public_key"),
@@ -234,7 +243,9 @@ public enum CapsuleVerifier {
                 record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
             }
         } catch {
-            record("manifest_hash", false, "\(error)")
+            // Same wording as the JS reference: a canonicalization refusal
+            // must read as a recompute failure, never as tampering.
+            record("manifest_hash", false, "manifest hash recompute failed: \(error)")
         }
 
         // content_index. `content.enc` drops out of the index only when the
@@ -319,10 +330,41 @@ public enum CapsuleVerifier {
                    mfCipher.isEmpty ? "missing" : mfCipher)
             // chain is deferred — content lives inside the ciphertext.
             record("chain", true, "deferred to L3 (encrypted outer)")
+        } else if parsed.events.isEmpty {
+            // Empty chain is LEGAL — the weakest honest shape (a template
+            // or draft capsule with no recorded work yet) — but the capsule
+            // must not claim chain anchors it does not have: with zero
+            // events all three anchor claims MUST be null, fail-closed. In
+            // a plain capsule those anchors are the ONLY envelope-to-chain
+            // binding, so a verifier that treats an empty chain as
+            // "nothing to check" verifies an unbound capsule
+            // (spec/chain.md "Empty chains").
+            let emptyNote = "empty chain: no events to walk; envelope anchors checked to be null instead"
+            record("chain", true, emptyNote)
+            notes.append(emptyNote)
+            func isNullAnchor(_ v: JCSValue?) -> Bool { v == nil || v == .null }
+            let envFirst = lookupValue(parsed.envelope, ["first_event_hash"])
+            record("first_event_hash", isNullAnchor(envFirst),
+                   isNullAnchor(envFirst)
+                       ? "null (empty chain)"
+                       : "envelope.first_event_hash must be null when the chain has no events")
+            let envEntry = lookupValue(parsed.envelope, ["entry_hash"])
+            record("entry_hash", isNullAnchor(envEntry),
+                   isNullAnchor(envEntry)
+                       ? "null (empty chain)"
+                       : "envelope.entry_hash must be null when the chain has no events")
+            record("manifest_first_event_hash", isNullAnchor(mfFirstHashValue),
+                   isNullAnchor(mfFirstHashValue)
+                       ? "null (empty chain)"
+                       : "manifest.first_event_hash must be null when the chain has no events")
+            let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
+            record("envelope_cipher", envCipher == "none",
+                   envCipher.isEmpty ? "missing" : envCipher)
         } else {
             // Plain-capsule checks: chain integrity (hash linkage plus the
             // spec/chain.md per-event actor and kind rules) + envelope
-            // anchors.
+            // anchors. A null (or missing) anchor over a non-empty chain
+            // fails the comparison like any other mismatch.
             let chainErrors = CapsuleReader.verifyChain(
                 parsed.events,
                 participants: CapsuleReader.participantActorIds(parsed.manifest)
@@ -331,14 +373,26 @@ public enum CapsuleVerifier {
                    chainErrors.isEmpty
                        ? "\(parsed.events.count) events"
                        : chainErrors.joined(separator: "; "))
-            if let firstEvHash = parsed.events.first.flatMap({ lookupString($0, ["hash"]) }),
-               let envFirst = lookupString(parsed.envelope, ["first_event_hash"]) {
-                record("first_event_hash", firstEvHash == envFirst)
-            }
-            if let lastEvHash = parsed.events.last.flatMap({ lookupString($0, ["hash"]) }),
-               let envEntry = lookupString(parsed.envelope, ["entry_hash"]) {
-                record("entry_hash", lastEvHash == envEntry)
-            }
+            let firstEvHash = parsed.events.first.flatMap { lookupString($0, ["hash"]) }
+            let envFirst = lookupString(parsed.envelope, ["first_event_hash"])
+            record("first_event_hash",
+                   firstEvHash != nil && firstEvHash == envFirst,
+                   firstEvHash != nil && firstEvHash == envFirst
+                       ? ""
+                       : "envelope.first_event_hash mismatch: \(envFirst ?? "null") vs \(firstEvHash ?? "null")")
+            let lastEvHash = parsed.events.last.flatMap { lookupString($0, ["hash"]) }
+            let envEntry = lookupString(parsed.envelope, ["entry_hash"])
+            record("entry_hash",
+                   lastEvHash != nil && lastEvHash == envEntry,
+                   lastEvHash != nil && lastEvHash == envEntry
+                       ? ""
+                       : "envelope.entry_hash mismatch: \(envEntry ?? "null") vs \(lastEvHash ?? "null")")
+            var mfFirstIsString = false
+            if case .some(.string) = mfFirstHashValue { mfFirstIsString = true }
+            record("manifest_first_event_hash", mfFirstIsString,
+                   mfFirstIsString
+                       ? ""
+                       : "manifest.first_event_hash must not be null when the chain has events")
             // Plain must declare cipher="none" and encrypted_blob_hash=null.
             let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
             record("envelope_cipher", envCipher == "none",

@@ -81,11 +81,22 @@ final class JCSRobustnessTests: XCTestCase {
     func testChainEventWithOutOfRangeIntegerFailsVerificationWithoutTrapping() {
         // prev_hash must be the genesis value so verifyChain reaches the
         // canonicalization step instead of bailing on the linkage check.
+        // The manifest and envelope must be SHAPE-valid (the reader now
+        // validates both at the parse boundary), so the refusal under test
+        // is attributable to the chain document.
         let genesis = String(repeating: "0", count: 64)
+        let hex64 = String(repeating: "a", count: 64)
         let event = #"{"seq":9007199254740993,"prev_hash":""# + genesis + #"","hash":"y"}"#
+        let manifest = #"{"format":{"version":"0.6"},"id":""# + hex64
+            + #"","originator":{"public_key":""# + hex64
+            + #""},"first_event_hash":null,"content_index":{"index_hash":""# + hex64
+            + #"","files":[]}}"#
+        let envelope = #"{"version":"0.6","capsule_id":""# + hex64
+            + #"","signers":[{"role":"originator","public_key":""# + hex64
+            + #"","signature":"00"}]}"#
         let bytes = CapsuleZip.pack([
-            (path: "manifest.json", data: Data(#"{"id":"x"}"#.utf8)),
-            (path: "provenance/envelope.json", data: Data("{}".utf8)),
+            (path: "manifest.json", data: Data(manifest.utf8)),
+            (path: "provenance/envelope.json", data: Data(envelope.utf8)),
             (path: "chain/events.jsonl", data: Data((event + "\n").utf8)),
             (path: "program.md", data: Data("# hi\n".utf8)),
         ])
