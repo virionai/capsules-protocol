@@ -7,7 +7,12 @@ from typing import TypedDict
 from zipfile import BadZipFile
 
 from .canonical import hex_to_bytes, sha256_hex
-from .chain import first_and_entry_hash, participant_actor_ids, verify_chain
+from .chain import (
+    first_and_entry_hash,
+    participant_actor_id_problems,
+    participant_actor_ids,
+    verify_chain,
+)
 from .envelope import verify_envelope_signatures
 from .keys import to_key_hex
 from .manifest import (
@@ -170,6 +175,13 @@ def _verify_capsule_impl(
             "manifest.participants empty: chain actors are not bound to a "
             "declared participant set"
         )
+    # spec/manifest.md field rules (A06): every DECLARED actor_id must sit
+    # in the closed namespace set (human/ai/system/capsule, non-empty id).
+    # Unlike an empty participants[], an uninterpretable declared entry is
+    # not a weaker claim — it is a malformed one, rejected fail-closed.
+    # Conformance vector: spec/vectors/chain-rules (invalid-actor-namespace).
+    for problem in participant_actor_id_problems(manifest.get("participants")):
+        errors.append(f"manifest.{problem}")
 
     # Format / version checks
     if manifest.get("format", {}).get("version") != "0.6":

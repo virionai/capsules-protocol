@@ -7,6 +7,7 @@ import {
   firstAndEntryHash,
   isValidEventKind,
   isValidUntrustedPayloadPath,
+  participantActorIdProblems,
   participantActorIds,
   EVENT_KINDS,
   HOST_ACTOR,
@@ -38,6 +39,12 @@ import { compressEventPayload } from "./pith.js";
 import { packZip } from "./zip.js";
 import { nowIso, toKeyHex, toRecipient, toSigner } from "./keys.js";
 
+/** Throw when a declared participants[] fails the actor-id grammar. */
+function assertValidParticipants(participants) {
+  const problems = participantActorIdProblems(participants);
+  if (problems.length > 0) throw new Error(problems.join("; "));
+}
+
 export class CapsuleBuilder {
   constructor({ originator, participants = [], createdAt, pith = true } = {}) {
     // `originator` accepts { publicKey, label? } with the key as a hex
@@ -51,6 +58,12 @@ export class CapsuleBuilder {
       public_key: toKeyHex(originatorKey, "originator.publicKey"),
       label: originator.label ?? "",
     };
+    // spec/manifest.md field rules: every declared actor_id must sit in
+    // the closed namespace set. Refuse the shape at the call site that
+    // introduced it — a capsule declaring an uninterpretable participant
+    // fails every conformant verifier. Re-checked at seal() because
+    // builder.participants is a mutable property.
+    assertValidParticipants(participants);
     this.participants = participants;
     this.createdAt = createdAt ?? nowIso();
     this.programMd = null;
@@ -214,6 +227,9 @@ export class CapsuleBuilder {
    *               an explicit value for reproducible builds.
    */
   async seal({ signers, recipients = [], signedAt } = {}) {
+    // builder.participants is mutable between construction and seal;
+    // never emit a manifest that fails the namespace grammar.
+    assertValidParticipants(this.participants);
     const signerList = (Array.isArray(signers) ? signers : signers ? [signers] : []).map(toSigner);
     if (signerList.length === 0) throw new Error("seal requires at least one signer");
     const recipientList = (Array.isArray(recipients) ? recipients : [recipients]).map(toRecipient);

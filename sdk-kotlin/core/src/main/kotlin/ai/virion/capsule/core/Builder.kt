@@ -55,7 +55,24 @@ class CapsuleBuilder(
 
     fun setProgram(md: String) = apply { this.programMd = md }
     fun setAgents(md: String) = apply { this.agentsMd = md }
-    fun setParticipants(ps: List<Participant>) = apply { this.participants = ps }
+
+    /**
+     * Declare the participant set. Throws [IllegalArgumentException]
+     * (spec/manifest.md field rules, finding A06) when any [Participant.actorId]
+     * falls outside the closed namespace grammar — `human:<id>`, `ai:<id>`,
+     * `system:<id>`, `capsule:<id>` with a non-empty `<id>` — because a
+     * capsule declaring an uninterpretable participant fails every
+     * conformant verifier.
+     */
+    fun setParticipants(ps: List<Participant>) = apply {
+        for ((i, p) in ps.withIndex()) {
+            require(Chain.isValidActorId(p.actorId)) {
+                "participants[$i].actor_id ${Chain.debugQuoted(p.actorId)} " +
+                    "does not match an allowed namespace (human:, ai:, system:, capsule:)"
+            }
+        }
+        this.participants = ps
+    }
 
     /**
      * Append a chain event. seq, event_id, prev_hash, and hash are

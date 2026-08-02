@@ -260,6 +260,14 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         );
     }
 
+    // Declared-participant grammar violations (manifest.md actor_id
+    // namespaces). Rendered only when present — a capsule with no
+    // participants makes no claim for this line to report on.
+    let actor_id_msgs = strings_of(errors_for(r, TopErrorCategory::ActorId));
+    if !actor_id_msgs.is_empty() {
+        print_check("participants", false, actor_id_msgs);
+    }
+
     let enc_msgs = strings_of(errors_for(r, TopErrorCategory::Encryption));
     print_check("encryption_state", enc_msgs.is_empty(), enc_msgs);
 

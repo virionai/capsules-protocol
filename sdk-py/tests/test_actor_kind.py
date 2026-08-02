@@ -235,3 +235,67 @@ def test_append_event_rejects_unknown_kind_even_with_empty_participants():
     builder = _builder(kp, participants=[])
     with pytest.raises(ValueError, match='event kind "gossip" is not one of'):
         builder.append_event({"actor": "human:anyone", "kind": "gossip", "action": "a"})
+
+
+# --- participants[].actor_id namespace grammar (manifest.md, finding A06) ---
+#
+# The namespace set is CLOSED: human:, ai:, system:, capsule:, each with
+# a non-empty <id>. Writers refuse to declare a participant outside the
+# grammar; verifiers reject it fail-closed (the chain-rules registry
+# vector invalid-actor-namespace pins the verifier side in every lane).
+
+
+def test_is_valid_actor_id_accepts_exactly_the_four_namespaces():
+    from capsule import is_valid_actor_id
+
+    for good in ("human:alice@acme.example", "ai:claude-opus-4-7", "system:host", "capsule:abc"):
+        assert is_valid_actor_id(good) is True, good
+    for bad in (
+        "robot:r2d2",  # unknown namespace
+        "human",  # no separator
+        "human:",  # empty id
+        ":alice",  # empty namespace
+        "",  # empty string
+        "Human:alice",  # case-sensitive
+        " human:alice",  # leading junk
+        42,  # not a string
+        None,
+    ):
+        assert is_valid_actor_id(bad) is False, repr(bad)
+
+
+def test_builder_rejects_out_of_namespace_participant_at_construction():
+    ed = generate_ed25519()
+    with pytest.raises(ValueError, match="does not match an allowed namespace"):
+        CapsuleBuilder(
+            originator={"public_key": ed.public_key_hex},
+            participants=[{"actor_id": "robot:origin", "role": "originator", "label": "R"}],
+        )
+
+
+def test_seal_rejects_participants_mutated_out_of_namespace():
+    ed = generate_ed25519()
+    builder = CapsuleBuilder(originator={"public_key": ed.public_key_hex}, participants=PARTICIPANTS)
+    builder.set_program("# Actor rule\n")
+    builder.append_event({"actor": "human:alice", "action": "a", "timestamp": TS})
+    builder.participants = [{"actor_id": "robot:origin", "role": "originator", "label": "R"}]
+    with pytest.raises(ValueError, match="does not match an allowed namespace"):
+        builder.seal(
+            signers=[{"role": "originator", "public_key": ed.public_key, "private_key": ed.private_key}],
+            signed_at=TS,
+        )
+
+
+def test_bare_string_participants_are_pattern_checked():
+    ed = generate_ed25519()
+    CapsuleBuilder(originator={"public_key": ed.public_key_hex}, participants=["human:alice"])
+    with pytest.raises(ValueError, match="does not match an allowed namespace"):
+        CapsuleBuilder(originator={"public_key": ed.public_key_hex}, participants=["robot:origin"])
+
+
+def test_participant_entry_without_string_actor_id_is_refused():
+    ed = generate_ed25519()
+    with pytest.raises(ValueError, match="actor_id"):
+        CapsuleBuilder(originator={"public_key": ed.public_key_hex}, participants=[{"role": "originator"}])
+    with pytest.raises(ValueError, match=r"participants\[0\]"):
+        CapsuleBuilder(originator={"public_key": ed.public_key_hex}, participants=[42])

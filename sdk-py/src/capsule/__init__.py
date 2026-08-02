@@ -14,6 +14,7 @@ from .canonical import (
     sha256_hex,
 )
 from .chain import (
+    ACTOR_NAMESPACES,
     EVENT_KINDS,
     HOST_ACTOR,
     build_chain_events,
@@ -21,7 +22,9 @@ from .chain import (
     events_to_jsonl,
     first_and_entry_hash,
     hash_event,
+    is_valid_actor_id,
     is_valid_event_kind,
+    participant_actor_id_problems,
     participant_actor_ids,
     verify_chain,
 )
@@ -66,6 +69,7 @@ __version__ = "0.6.0"
 SPEC_VERSION = "0.6"
 
 __all__ = [
+    "ACTOR_NAMESPACES",
     "CONTENT_INDEX_EXCLUDED",
     "EVENT_KINDS",
     "HOST_ACTOR",
@@ -104,11 +108,13 @@ __all__ = [
     "hash_event",
     "hex_to_bytes",
     "hkdf_sha256",
+    "is_valid_actor_id",
     "is_valid_event_kind",
     "jcs",
     "manifest_bytes",
     "manifest_hash",
     "pack_zip",
+    "participant_actor_id_problems",
     "participant_actor_ids",
     "random_key32",
     "random_nonce12",

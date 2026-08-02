@@ -78,7 +78,7 @@ legal, compliance, security, or operational guidance.
       payload: { summary: "Created generic data for static render." },
     },
     {
-      actor: "tool:renderer",
+      actor: "system:renderer",
       kind: "observation",
       action: "rendered_react_workproduct",
       target: "payload/workproduct/react-render.html",

@@ -25,7 +25,7 @@ import {
   verifyCapsule,
   generateEd25519,
 } from "../src/index.js";
-import { buildChainEvents, verifyChain, EVENT_KINDS } from "../src/chain.js";
+import { buildChainEvents, verifyChain, isValidActorId, EVENT_KINDS } from "../src/chain.js";
 
 const TS = "2026-05-07T12:00:00Z";
 
@@ -256,5 +256,97 @@ test("appendEvent rejects an unknown kind even with no declared participants", (
   assert.throws(
     () => builder.appendEvent({ actor: "human:anyone", kind: "gossip", action: "a" }),
     /event kind "gossip" is not one of/,
+  );
+});
+
+// --- participants[].actor_id namespace grammar (manifest.md, finding A06) ---
+//
+// The namespace set is CLOSED: human:, ai:, system:, capsule:, each with
+// a non-empty <id>. Writers refuse to declare a participant outside the
+// grammar; verifiers reject it fail-closed (the chain-rules registry
+// vector invalid-actor-namespace pins the verifier side in every lane).
+
+test("isValidActorId accepts exactly the four namespaces with non-empty ids", () => {
+  for (const good of ["human:alice@acme.example", "ai:claude-opus-4-7", "system:host", "capsule:abc123"]) {
+    assert.equal(isValidActorId(good), true, good);
+  }
+  for (const bad of [
+    "robot:r2d2",     // unknown namespace
+    "human",          // no separator
+    "human:",         // empty id
+    ":alice",         // empty namespace
+    "",               // empty string
+    "Human:alice",    // case-sensitive
+    " human:alice",   // leading junk
+    42,               // not a string
+    null,
+  ]) {
+    assert.equal(isValidActorId(bad), false, JSON.stringify(bad));
+  }
+});
+
+test("CapsuleBuilder rejects an out-of-namespace participant at construction", () => {
+  const ed = generateEd25519();
+  assert.throws(
+    () =>
+      new CapsuleBuilder({
+        originator: { publicKey: ed.publicKeyHex },
+        participants: [{ actor_id: "robot:origin", role: "originator", label: "R" }],
+      }),
+    /does not match an allowed namespace/,
+  );
+});
+
+test("seal() rejects participants mutated out of the namespace after construction", async () => {
+  const ed = generateEd25519();
+  const builder = seededBuilder(ed);
+  builder.appendEvent({ actor: "human:alice", action: "a", timestamp: TS });
+  builder.participants = [{ actor_id: "robot:origin", role: "originator", label: "R" }];
+  await assert.rejects(
+    () =>
+      builder.seal({
+        signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
+        signedAt: TS,
+      }),
+    /does not match an allowed namespace/,
+  );
+});
+
+test("bare-string participants are pattern-checked too", () => {
+  const ed = generateEd25519();
+  assert.doesNotThrow(
+    () =>
+      new CapsuleBuilder({
+        originator: { publicKey: ed.publicKeyHex },
+        participants: ["human:alice"],
+      }),
+  );
+  assert.throws(
+    () =>
+      new CapsuleBuilder({
+        originator: { publicKey: ed.publicKeyHex },
+        participants: ["robot:origin"],
+      }),
+    /does not match an allowed namespace/,
+  );
+});
+
+test("a participant entry without a string actor_id is refused", () => {
+  const ed = generateEd25519();
+  assert.throws(
+    () =>
+      new CapsuleBuilder({
+        originator: { publicKey: ed.publicKeyHex },
+        participants: [{ role: "originator" }],
+      }),
+    /actor_id/,
+  );
+  assert.throws(
+    () =>
+      new CapsuleBuilder({
+        originator: { publicKey: ed.publicKeyHex },
+        participants: [42],
+      }),
+    /participants\[0\]/,
   );
 });

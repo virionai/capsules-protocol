@@ -77,6 +77,10 @@ pub enum TopErrorCategory {
     /// `manifest.originator.public_key` has no valid envelope signature
     /// with role "originator"
     OriginatorBinding,
+    /// a declared `manifest.participants[].actor_id` outside the closed
+    /// namespace grammar (`human:`/`ai:`/`system:`/`capsule:` with a
+    /// non-empty id — manifest.md field rules, finding A06)
+    ActorId,
     /// cipher / encrypted-blob inconsistencies: unsupported cipher,
     /// `envelope.encrypted_blob_hash` mismatch with the recomputed
     /// `sha256(content.enc)`, or encrypted blob present with cipher='none'
@@ -904,6 +908,24 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
             "manifest.participants empty: chain actors are not bound to a declared participant set"
                 .to_string(),
         );
+    }
+    // manifest.md field rules (A06): every DECLARED actor_id must sit in
+    // the closed namespace set (human/ai/system/capsule, non-empty id).
+    // Unlike an empty participants[], an uninterpretable declared entry
+    // is not a weaker claim — it is a malformed one, rejected fail-closed.
+    // Conformance vector: chain-rules/invalid-actor-namespace. (A bare
+    // non-object participants entry already fails this lane's typed
+    // manifest parse before reaching here.)
+    for (i, p) in manifest.participants.iter().enumerate() {
+        if !crate::chain::is_valid_actor_id(&p.actor_id) {
+            errors.push(TopError::outer(
+                TopErrorCategory::ActorId,
+                format!(
+                    "manifest.participants[{i}].actor_id {:?} does not match an allowed namespace (human:, ai:, system:, capsule:)",
+                    p.actor_id
+                ),
+            ));
+        }
     }
 
     // ---- (10c) originator binding (invariant) ---------------------------

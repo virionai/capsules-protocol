@@ -25,7 +25,10 @@ export {
   hashEvent,
   verifyChain,
   isValidEventKind,
+  isValidActorId,
   participantActorIds,
+  participantActorIdProblems,
+  ACTOR_NAMESPACES,
   EVENT_KINDS,
   HOST_ACTOR,
 } from "./chain.js";

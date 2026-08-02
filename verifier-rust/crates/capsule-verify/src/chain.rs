@@ -35,6 +35,21 @@ pub fn is_valid_event_kind(kind: &str) -> bool {
     EVENT_KINDS.contains(&kind)
 }
 
+/// The CLOSED actor-id namespace set from `manifest.md` "Field rules":
+/// `participants[].actor_id` must match `human:<id>`, `ai:<id>`,
+/// `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+pub const ACTOR_NAMESPACES: [&str; 4] = ["human", "ai", "system", "capsule"];
+
+/// True when `actor_id` is `<namespace>:<id>` with a known namespace and
+/// non-empty id. Case-sensitive; no surrounding whitespace allowed.
+/// Pinned by the `chain-rules/invalid-actor-namespace` vector.
+pub fn is_valid_actor_id(actor_id: &str) -> bool {
+    match actor_id.split_once(':') {
+        Some((namespace, id)) => ACTOR_NAMESPACES.contains(&namespace) && !id.is_empty(),
+        None => false,
+    }
+}
+
 /// The normative `untrusted_payload_fields` path grammar from `chain.md`
 /// "Untrusted content":
 ///

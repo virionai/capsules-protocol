@@ -78,6 +78,21 @@ public enum Chain {
         EVENT_KINDS.contains(kind)
     }
 
+    /// The CLOSED actor-id namespace set from spec/manifest.md "Field
+    /// rules": `participants[].actor_id` must match `human:<id>`,
+    /// `ai:<id>`, `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+    public static let ACTOR_NAMESPACES = ["human", "ai", "system", "capsule"]
+
+    /// True when `actorId` is `<namespace>:<id>` with a known namespace
+    /// and non-empty id. Case-sensitive; no surrounding whitespace.
+    /// Pinned by the chain-rules/invalid-actor-namespace vector.
+    public static func isValidActorId(_ actorId: String) -> Bool {
+        guard let sep = actorId.firstIndex(of: ":") else { return false }
+        let namespace = String(actorId[..<sep])
+        let id = actorId[actorId.index(after: sep)...]
+        return ACTOR_NAMESPACES.contains(namespace) && !id.isEmpty
+    }
+
     /// The normative `untrusted_payload_fields` path grammar from
     /// spec/chain.md "Untrusted content":
     ///

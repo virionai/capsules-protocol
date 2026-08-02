@@ -585,6 +585,39 @@ public enum CapsuleReader {
         return out
     }
 
+    /// Validate `manifest.participants[]` against the actor-id namespace
+    /// grammar (spec/manifest.md field rules, finding A06). Returns
+    /// problem strings prefixed `participants[i]` ([] = well-formed).
+    /// Unlike `participantActorIds`, entries that cannot be interpreted
+    /// are FLAGGED, not skipped: a declared set that cannot be
+    /// interpreted is not a weaker claim, it is a malformed one.
+    public static func participantActorIdProblems(_ manifest: JCSValue) -> [String] {
+        guard case .object(let pairs) = manifest,
+              let ps = pairs.first(where: { $0.0 == "participants" })?.1,
+              case .array(let items) = ps
+        else { return [] }
+        let grammar = "(human:, ai:, system:, capsule:)"
+        var problems: [String] = []
+        for (i, item) in items.enumerated() {
+            var id: String?
+            if case .string(let s) = item { id = s }
+            else if case .object(let fields) = item { id = stringField(fields, "actor_id") }
+            guard let actorId = id else {
+                problems.append(
+                    "participants[\(i)].actor_id must be a string in an allowed namespace \(grammar)"
+                )
+                continue
+            }
+            if !Chain.isValidActorId(actorId) {
+                problems.append(
+                    "participants[\(i)].actor_id \(Chain.debugQuoted(actorId)) "
+                        + "does not match an allowed namespace \(grammar)"
+                )
+            }
+        }
+        return problems
+    }
+
 
     /// Reject JSON text carrying duplicate object member names, at any
     /// depth (spec/canonicalization.md "Objects"; RFC 7493 §2.3). Names

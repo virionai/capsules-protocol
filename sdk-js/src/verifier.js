@@ -6,7 +6,12 @@
 // verifies.
 
 import { sha256Hex, jcs } from "./canonical.js";
-import { verifyChain, firstAndEntryHash, participantActorIds } from "./chain.js";
+import {
+  verifyChain,
+  firstAndEntryHash,
+  participantActorIdProblems,
+  participantActorIds,
+} from "./chain.js";
 import {
   buildContentIndex,
   compareCommitmentMembers,
@@ -196,6 +201,14 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     notes.push(
       "manifest.participants empty: chain actors are not bound to a declared participant set",
     );
+  }
+  // spec/manifest.md field rules (A06): every DECLARED actor_id must sit
+  // in the closed namespace set (human/ai/system/capsule, non-empty id).
+  // Unlike an empty participants[], an uninterpretable declared entry is
+  // not a weaker claim — it is a malformed one, rejected fail-closed.
+  // Conformance vector: spec/vectors/chain-rules (invalid-actor-namespace).
+  for (const problem of participantActorIdProblems(manifest.participants)) {
+    errors.push(`manifest.${problem}`);
   }
 
   // Format / version checks

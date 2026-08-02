@@ -74,9 +74,21 @@ public final class CapsuleBuilder {
         self.agentsMd = md; return self
     }
 
+    /// Declare the participant set. Throws (spec/manifest.md field rules,
+    /// finding A06) when any `actorId` falls outside the closed namespace
+    /// grammar — `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>`
+    /// with a non-empty `<id>` — because a capsule declaring an
+    /// uninterpretable participant fails every conformant verifier.
     @discardableResult
-    public func setParticipants(_ ps: [Participant]) -> CapsuleBuilder {
-        self.participants = ps; return self
+    public func setParticipants(_ ps: [Participant]) throws -> CapsuleBuilder {
+        for (i, p) in ps.enumerated() where !Chain.isValidActorId(p.actorId) {
+            throw CapsuleError.malformed(
+                "participants[\(i)].actor_id \(Chain.debugQuoted(p.actorId)) "
+                    + "does not match an allowed namespace (human:, ai:, system:, capsule:)"
+            )
+        }
+        self.participants = ps
+        return self
     }
 
     /// Append a chain event. The seq, event_id, prev_hash, and hash are

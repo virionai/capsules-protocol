@@ -67,8 +67,17 @@ here.
 - `originator.label`: free-text, advisory only. Auditors verify the
   public key, not the label.
 - `participants[].actor_id`: must match one of the patterns
-  `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>`. Not
-  cryptographically bound to a key by default — only `originator` is.
+  `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>` — the
+  namespace set is CLOSED and `<id>` is any non-empty string
+  (case-sensitive; nothing before the namespace, one `:` separates it
+  from `<id>`). Writers refuse to declare a participant outside the
+  grammar; verifiers reject one fail-closed. This is not an assurance
+  tier: an EMPTY `participants[]` is a weaker claim made honestly
+  (reported as an unbound actor set), but a DECLARED entry no reader
+  can interpret is the manifest asserting something meaningless about
+  who acted. Not cryptographically bound to a key by default — only
+  `originator` is. Conformance vector: `spec/vectors/chain-rules/`
+  (`invalid-actor-namespace`).
 - `first_event_hash`: 32 bytes of SHA-256, lowercase hex; equals the
   hash of the first event in `chain/events.jsonl`. When the chain has
   ZERO events (see [chain.md](chain.md) "Empty chains") this member
