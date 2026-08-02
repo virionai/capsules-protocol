@@ -11,6 +11,45 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **The semantic-binding layer: manifest claims are now tied to the
+  signed envelope, the chain, and the files in every lane.**
+  `capsule_id` is derived from `manifest.first_event_hash`, but no lane
+  ever compared that value to `envelope.first_event_hash` or the chain —
+  only the envelope value was checked against the recomputed anchor — so
+  a correctly-signed capsule could carry a `capsule_id` (the identity
+  federation attestations bind to) naming a chain it does not contain.
+  All five verifiers now require
+  `manifest.first_event_hash == envelope.first_event_hash == hash(chain
+  event 1)`, the third term deferred to L3 on an encrypted outer.
+  `manifest.encryption` was never checked against the SIGNED
+  `envelope.cipher` (amendment M05 measured a plain capsule declaring
+  encryption producing four different outcomes across four lanes); it
+  must now be null when the cipher is `none`, agree with the cipher
+  otherwise, and name a `metadata_path` that is present AND covered by
+  the content index. sdk-py's `is_encrypted()` used OR-semantics
+  (manifest claim OR cipher OR blob presence), so an attacker who merely
+  APPENDED a `content.enc` to a plain capsule flipped the reader into
+  encrypted mode and chain verification was silently skipped ("deferred
+  to L3") — `chain.ok` reported True for a broken chain; verifier-rust
+  keyed the same decision off file presence alone. Both now require the
+  signed cipher AND the blob, matching the reference. verifier-rust's
+  decryptor hardcoded `skills/decryption/decryption.json`, rejecting
+  spec-conformant capsules the reference reader decrypts through
+  `manifest.encryption.metadata_path`; it now resolves the declared
+  path. sdk-swift and sdk-kotlin keyed encrypted-mode detection off the
+  manifest's own claim and wrote their envelope-to-chain anchor checks
+  as optional bindings, so a MISSING mandatory anchor became silent
+  success and an empty chain was accepted with claimed anchors
+  unchecked; both now follow the empty-chain null-anchor rule (zero
+  events verify only with all three anchors null, reported honestly via
+  the shared note) and fail closed on missing or null anchors over a
+  non-empty chain. New `spec/vectors/semantic-binding/` registry
+  (7 vectors: manifest/envelope drift, agreed-decoy chain mismatch,
+  false encryption claim, dangling and relocated metadata_path,
+  smuggled blob over a broken chain, plain positive control) consumed
+  by all five lanes; sdk-swift and sdk-kotlin now also consume
+  `spec/vectors/chain-binding/`.
+
 - **The chain.md step-6 actor rule and the closed `kind` enum are now
   enforced in all five lanes — with the actor rule conditioned on the
   manifest's own claim.** Only verifier-rust implemented step 6
