@@ -580,6 +580,128 @@ public enum CapsuleReader {
         return out
     }
 
+
+    /// Reject JSON text carrying duplicate object member names, at any
+    /// depth (spec/canonicalization.md "Objects"; RFC 7493 §2.3). Names
+    /// compare AFTER escape processing ("a" and "\u0061" are the same
+    /// name), as sequences of UTF-16 code units.
+    ///
+    /// This is a rule about the TEXT: JSONSerialization silently keeps the
+    /// last duplicate, so the parsed tree cannot show it. The scanner
+    /// assumes syntactically valid JSON — callers run JSONSerialization
+    /// first, so syntax errors surface as parse errors.
+    static func assertNoDuplicateMembers(_ text: String, name: String) throws {
+        let chars = Array(text.unicodeScalars)
+        let n = chars.count
+        var i = 0
+        func fail(_ message: String) throws -> Never {
+            throw CapsuleError.malformed("\(name): \(message)")
+        }
+        func skipWs() {
+            while i < n, chars[i] == " " || chars[i] == "\t"
+                || chars[i] == "\n" || chars[i] == "\r" { i += 1 }
+        }
+        func parseString() throws -> String {
+            i += 1  // opening quote
+            var units: [UInt16] = []
+            while i < n {
+                let c = chars[i]
+                if c == "\"" {
+                    i += 1
+                    return String(decoding: units, as: UTF16.self)
+                }
+                if c == "\\" {
+                    guard i + 1 < n else { try fail("unterminated escape") }
+                    let e = chars[i + 1]
+                    i += 2
+                    switch e {
+                    case "\"": units.append(0x22)
+                    case "\\": units.append(0x5C)
+                    case "/": units.append(0x2F)
+                    case "b": units.append(0x08)
+                    case "f": units.append(0x0C)
+                    case "n": units.append(0x0A)
+                    case "r": units.append(0x0D)
+                    case "t": units.append(0x09)
+                    case "u":
+                        guard i + 4 <= n else { try fail("truncated unicode escape") }
+                        var v: UInt16 = 0
+                        for k in 0..<4 {
+                            let s = chars[i + k]
+                            let d: UInt16
+                            switch s {
+                            case "0"..."9": d = UInt16(s.value - 0x30)
+                            case "a"..."f": d = UInt16(s.value - 0x61 + 10)
+                            case "A"..."F": d = UInt16(s.value - 0x41 + 10)
+                            default: try fail("invalid unicode escape")
+                            }
+                            v = v << 4 | d
+                        }
+                        i += 4
+                        units.append(v)
+                    default:
+                        try fail("invalid escape in string")
+                    }
+                } else {
+                    units.append(contentsOf: Array(String(c).utf16))
+                    i += 1
+                }
+            }
+            try fail("unterminated string")
+        }
+        func parseValue() throws {
+            skipWs()
+            guard i < n else { return }
+            switch chars[i] {
+            case "{": try parseObject()
+            case "[": try parseArray()
+            case "\"": _ = try parseString()
+            default:
+                while i < n, chars[i] != ",", chars[i] != "}", chars[i] != "]",
+                      chars[i] != " ", chars[i] != "\t", chars[i] != "\n", chars[i] != "\r" {
+                    i += 1
+                }
+            }
+        }
+        func parseObject() throws {
+            i += 1  // {
+            var seen = Set<String>()
+            skipWs()
+            if i < n, chars[i] == "}" { i += 1; return }
+            while true {
+                skipWs()
+                guard i < n, chars[i] == "\"" else { try fail("expected member name") }
+                let member = try parseString()
+                if !seen.insert(member).inserted {
+                    try fail("duplicate object member \(Chain.debugQuoted(member))")
+                }
+                skipWs()
+                guard i < n, chars[i] == ":" else { try fail("expected ':' after member name") }
+                i += 1
+                try parseValue()
+                skipWs()
+                guard i < n else { try fail("unterminated object") }
+                if chars[i] == "," { i += 1; continue }
+                if chars[i] == "}" { i += 1; return }
+                try fail("expected ',' or '}' in object")
+            }
+        }
+        func parseArray() throws {
+            i += 1  // [
+            skipWs()
+            if i < n, chars[i] == "]" { i += 1; return }
+            while true {
+                try parseValue()
+                skipWs()
+                guard i < n else { try fail("unterminated array") }
+                if chars[i] == "," { i += 1; continue }
+                if chars[i] == "]" { i += 1; return }
+                try fail("expected ',' or ']' in array")
+            }
+        }
+        try parseValue()
+    }
+
     /// `parseJSON` with the offending file named in the error, so a reader
     /// rejection can be attributed to a specific document (mirrors the Rust
     /// verifier's "failed to parse manifest.json").
@@ -587,6 +709,11 @@ public enum CapsuleReader {
         let any: Any
         do { any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) }
         catch { throw CapsuleError.malformed("failed to parse \(name)") }
+        // Duplicate-member gate over the raw text (spec/canonicalization.md
+        // "Objects"): JSONSerialization silently keeps the last duplicate,
+        // so the rule must be checked on the text, before the value is
+        // handed to anything that hashes.
+        try assertNoDuplicateMembers(String(decoding: data, as: UTF8.self), name: name)
         let value = convert(any)
         // I-JSON acceptance boundary (spec/canonicalization.md). Reported in
         // its own words, NOT as "failed to parse": the JSON is syntactically
@@ -602,6 +729,8 @@ public enum CapsuleReader {
 
     static func parseJSON(_ data: Data) throws -> JCSValue {
         let any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+        // Duplicate-member gate over the raw text; see parseJSONFile.
+        try assertNoDuplicateMembers(String(decoding: data, as: UTF8.self), name: "JSON")
         let value = convert(any)
         // I-JSON acceptance boundary (spec/canonicalization.md). Rejecting
         // here means an unacceptable value never reaches a hash comparison,

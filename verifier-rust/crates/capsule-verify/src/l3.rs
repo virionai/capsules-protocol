@@ -110,7 +110,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // trees are the hashing inputs (unknown members included); the typed
     // structs are field-access views projected from the same parse.
     let inner_manifest_value: serde_json::Value = match inner_files.get("manifest.json") {
-        Some(b) => match serde_json::from_slice(b) {
+        Some(b) => match crate::jcs::parse_json_strict(b) {
             Ok(v) => v,
             Err(e) => {
                 errors.push(TopError::inner(
@@ -140,7 +140,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     };
     let inner_envelope_value: serde_json::Value =
         match inner_files.get("provenance/envelope.json") {
-            Some(b) => match serde_json::from_slice(b) {
+            Some(b) => match crate::jcs::parse_json_strict(b) {
                 Ok(v) => v,
                 Err(e) => {
                     errors.push(TopError::inner(

@@ -25,7 +25,7 @@ pub use crypto::{
     bytes_to_hex, ed25519_verify, hex_to_bytes, sha256, sha256_hex, CryptoError,
 };
 pub use decrypt::{decrypt_inner_zip, DecryptError, DecryptionMetadata, KeyBundle};
-pub use jcs::{check_ijson, jcs};
+pub use jcs::{check_ijson, jcs, parse_json_strict};
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
     Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,

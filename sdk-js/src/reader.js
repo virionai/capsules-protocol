@@ -1,6 +1,6 @@
 // CapsuleReader: opens a .capsule, exposes the inner pieces, decrypts.
 
-import { jcs } from "./canonical.js";
+import { jcs, parseJsonStrict } from "./canonical.js";
 import { eventsFromJsonl } from "./chain.js";
 import {
   chacha20Poly1305Decrypt,
@@ -97,11 +97,11 @@ export class CapsuleReader {
     this.files = files; // Map<path, Uint8Array>
     const manifestBytes = files.get("manifest.json");
     if (!manifestBytes) throw new Error("missing manifest.json");
-    this._manifest = JSON.parse(dec.decode(manifestBytes));
+    this._manifest = parseJsonStrict(manifestBytes, "manifest.json");
     validateManifestShape(this._manifest);
     const envBytes = files.get("provenance/envelope.json");
     if (!envBytes) throw new Error("missing provenance/envelope.json");
-    this._envelope = JSON.parse(dec.decode(envBytes));
+    this._envelope = parseJsonStrict(envBytes, "provenance/envelope.json");
     validateEnvelopeShape(this._envelope);
   }
 
@@ -155,7 +155,7 @@ export class CapsuleReader {
       if (id === "decryption") continue;
       if (!out.has(id)) out.set(id, { json: null, markdown: null, trust: trust[id] ?? "unsigned" });
       const slot = out.get(id);
-      if (m[2] === "skill.json") slot.json = JSON.parse(dec.decode(bytes));
+      if (m[2] === "skill.json") slot.json = parseJsonStrict(bytes, path);
       else slot.markdown = dec.decode(bytes);
     }
     return out;
@@ -167,7 +167,7 @@ export class CapsuleReader {
     const path = this._manifest.encryption?.metadata_path ?? "skills/decryption/decryption.json";
     const b = this.files.get(path);
     if (!b) return null;
-    return JSON.parse(dec.decode(b));
+    return parseJsonStrict(b, path);
   }
 
   /**

@@ -452,7 +452,7 @@ final class SpecRegistryTests: XCTestCase {
     // MARK: - ijson-acceptance.json
 
     /// Normative reject-reason vocabulary from `ijson-acceptance.json`.
-    private static let ijsonReasons: Set<String> = ["integer_out_of_range", "unpaired_surrogate"]
+    private static let ijsonReasons: Set<String> = ["integer_out_of_range", "unpaired_surrogate", "duplicate_member"]
 
     /// spec/canonicalization.md: the acceptance boundary is identical in
     /// every lane. A reject vector is satisfied by refusal at parse time OR

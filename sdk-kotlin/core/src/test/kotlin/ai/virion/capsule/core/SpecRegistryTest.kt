@@ -305,7 +305,7 @@ class SpecRegistryTest {
      */
     @Test
     fun ijsonAcceptanceRegistry() {
-        val reasons = setOf("integer_out_of_range", "unpaired_surrogate")
+        val reasons = setOf("integer_out_of_range", "unpaired_surrogate", "duplicate_member")
         val file = File(vectorsDir(), "ijson-acceptance.json")
         val doc = JsonParser.parseString(file.readText()).asJsonObject
         val vectors = doc.getAsJsonArray("vectors")

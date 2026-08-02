@@ -1,6 +1,6 @@
 // Event chain: hashing with raw bytes, no hex strings as inputs.
 
-import { bytesToHex, concatBytes, hexToBytes, jcs, sha256 } from "./canonical.js";
+import { bytesToHex, concatBytes, hexToBytes, jcs, parseJsonStrict, sha256 } from "./canonical.js";
 
 const GENESIS_PREV = Buffer.alloc(32, 0);
 
@@ -127,7 +127,10 @@ export function eventsFromJsonl(bytes) {
   const lines = text.split("\n").filter((l) => l.length > 0);
   return lines.map((line, i) => {
     try {
-      return JSON.parse(line);
+      // Strict parse: the duplicate-member gate runs over the raw line
+      // (spec/canonicalization.md "Objects") before the value can reach
+      // a hash comparison.
+      return parseJsonStrict(line, "event");
     } catch (err) {
       throw new Error(`chain line ${i + 1}: invalid JSON: ${err.message}`);
     }

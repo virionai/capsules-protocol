@@ -290,7 +290,7 @@ fn unicode_boundary_registry_outcomes() {
 }
 
 /// Normative reject-reason vocabulary from `ijson-acceptance.json`.
-const IJSON_REASONS: &[&str] = &["integer_out_of_range", "unpaired_surrogate"];
+const IJSON_REASONS: &[&str] = &["integer_out_of_range", "unpaired_surrogate", "duplicate_member"];
 
 /// `spec/canonicalization.md`: the acceptance boundary is identical in every
 /// lane. A reject vector is satisfied by refusal at parse time OR at the
@@ -307,7 +307,10 @@ fn ijson_acceptance_boundary() {
         let name = v["name"].as_str().expect("name");
         let text = v["input_json"].as_str().expect("input_json");
         let expect = v["expect"].as_str().expect("expect");
-        let parsed: Value = match serde_json::from_str(text) {
+        // The lane's strict document parse: serde_json plus the
+        // duplicate-member gate. Rejection here IS the parse-time refusal
+        // the vector contract allows.
+        let parsed: Value = match capsule_verify::parse_json_strict(text.as_bytes()) {
             Ok(value) => value,
             Err(e) => {
                 assert_eq!(expect, "reject", "{name}: an accept vector must parse ({e})");

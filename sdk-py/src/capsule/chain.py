@@ -6,7 +6,7 @@ import json
 import re
 from typing import TypedDict
 
-from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256
+from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, loads_strict, sha256
 
 GENESIS_PREV_BYTES: bytes = b"\x00" * 32
 GENESIS_PREV_HEX: str = "0" * 64
@@ -146,7 +146,10 @@ def events_from_jsonl(data: bytes) -> list[dict]:
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            # Strict parse: the duplicate-member gate runs during parsing
+            # (spec/canonicalization.md "Objects") before the value can
+            # reach a hash comparison.
+            out.append(loads_strict(line))
         except json.JSONDecodeError as ex:
             raise ValueError(f"chain line {i + 1}: invalid JSON: {ex.msg}") from ex
     return out

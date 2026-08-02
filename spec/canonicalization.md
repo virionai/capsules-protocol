@@ -13,8 +13,8 @@ the envelope canonical payload and the encryption AAD
 
 ## The acceptance boundary
 
-A value is **acceptable** when both rules below hold, recursively, for
-every number, string, and object key it contains.
+A value is **acceptable** when the rules below hold, recursively, for
+every number, string, object key, and object it contains.
 
 ### Numbers
 
@@ -69,6 +69,30 @@ encoding. `\uD83D` alone in a JSON string is representable in UTF-16-based
 languages and unrepresentable everywhere else; the byte sequence JCS is
 defined over cannot exist.
 
+### Objects
+
+- No object, at any depth, may have two members with the same name.
+  Names compare **after** escape processing: `"a"` and `"a"` are
+  the same name.
+
+I-JSON (RFC 7493 §2.3) requires this, and the hashing pipeline cannot
+survive without it. RFC 8259 leaves duplicate-member behavior undefined;
+every mainstream parser silently keeps the last value, so the text
+`{"a":1,"a":2}` and the text `{"a":2}` parse to the same value and hash
+to the same bytes — two different byte sequences with one canonical
+form. That is a smuggling primitive: a writer can show one member to a
+human reviewing the raw bytes and a different value to every verifier,
+and a future parser that keeps the *first* value (or errors) splits the
+ecosystem on which bytes verify. A duplicate member never has a
+legitimate producer; the reference builders cannot emit one.
+
+This rule is about the **text**, not the parsed value, so unlike the
+number and string rules it cannot be checked on the value tree after a
+lossy parse: implementations whose JSON parser does not itself reject
+duplicates MUST check the raw text (or a streaming parse) of every
+capsule document they hash — manifest.json, provenance/envelope.json,
+each chain event line, and any other JSON fed to JCS.
+
 ## Where the boundary is enforced
 
 - **Builders MUST reject at build time.** A builder that seals a capsule
@@ -97,7 +121,8 @@ portable — and the report must say so.
 
 - `spec/vectors/ijson-acceptance.json` — raw JSON texts that MUST be
   accepted (with the canonical form pinned) or rejected, with a normative
-  `reason` vocabulary.
+  `reason` vocabulary (`integer_out_of_range`, `unpaired_surrogate`,
+  `duplicate_member`).
 - `spec/vectors/jcs-numbers.json` — bit patterns marked `"accepted": false`
   are outside the boundary. Their `expected` field records the
   `Number::toString` layout for reference, but canonicalization MUST refuse

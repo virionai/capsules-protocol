@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from .canonical import bytes_to_hex, hex_to_bytes, jcs
+from .canonical import bytes_to_hex, hex_to_bytes, jcs, loads_strict
 from .chain import events_from_jsonl
 from .crypto import chacha20_poly1305_decrypt, hkdf_sha256, x25519_dh
 from .envelope import EncryptedCapsulesNotSupportedError
@@ -113,8 +113,8 @@ class CapsuleReader:
         if "provenance/envelope.json" not in files:
             raise MalformedCapsuleError("missing provenance/envelope.json")
         try:
-            manifest = json.loads(files["manifest.json"].decode("utf-8"))
-            envelope = json.loads(files["provenance/envelope.json"].decode("utf-8"))
+            manifest = loads_strict(files["manifest.json"].decode("utf-8"))
+            envelope = loads_strict(files["provenance/envelope.json"].decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"manifest/envelope parse: {e}") from e
         _validate_manifest_shape(manifest)
@@ -155,7 +155,7 @@ class CapsuleReader:
         if raw is None:
             return None
         try:
-            return json.loads(raw.decode("utf-8"))
+            return loads_strict(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"decryption metadata parse: {e}") from e
 
@@ -239,8 +239,8 @@ class CapsuleReader:
         if "manifest.json" not in inner_files or "provenance/envelope.json" not in inner_files:
             raise MalformedCapsuleError("decrypted inner capsule missing manifest or envelope")
         try:
-            inner_manifest = json.loads(inner_files["manifest.json"].decode("utf-8"))
-            inner_envelope = json.loads(inner_files["provenance/envelope.json"].decode("utf-8"))
+            inner_manifest = loads_strict(inner_files["manifest.json"].decode("utf-8"))
+            inner_envelope = loads_strict(inner_files["provenance/envelope.json"].decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"decrypted manifest/envelope parse: {e}") from e
         _validate_manifest_shape(inner_manifest)

@@ -68,6 +68,7 @@ import {
   concatBytes,
   hexToBytes,
   jcs,
+  parseJsonStrict,
   sha256,
 } from "../sdk-js/src/canonical.js";
 import { envelopeCanonicalPayload, envelopeSigningInput } from "../sdk-js/src/envelope.js";
@@ -540,7 +541,7 @@ function isIJsonAcceptanceSet(doc) {
 // parsers refuse lone-surrogate escapes outright, others accept them and the
 // canonicalizer refuses. What is normative is that the value never reaches a
 // hash.
-const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate"]);
+const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate", "duplicate_member"]);
 
 function checkIJsonAcceptance(path, doc) {
   if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
@@ -557,7 +558,10 @@ function checkIJsonAcceptance(path, doc) {
     let parsed;
     let parseFailed = false;
     try {
-      parsed = JSON.parse(v.input_json);
+      // The SDK's strict document parse: JSON.parse plus the raw-text
+      // duplicate-member gate. Rejection here IS the parse-time refusal
+      // the vector contract allows.
+      parsed = parseJsonStrict(v.input_json);
     } catch {
       parseFailed = true;
     }

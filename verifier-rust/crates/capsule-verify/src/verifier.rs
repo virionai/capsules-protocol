@@ -397,7 +397,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // members included), then project the typed view from it. Both products
     // therefore come from the same bytes; the view fails fast on a missing
     // or mistyped known field, and the tree is what gets canonicalised.
-    let manifest_value: serde_json::Value = match serde_json::from_slice(manifest_bytes) {
+    let manifest_value: serde_json::Value = match crate::jcs::parse_json_strict(manifest_bytes) {
         Ok(v) => v,
         Err(e) => {
             errors.push(TopError::outer(
@@ -467,7 +467,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // Same preserved-tree-then-view parse as the manifest above: the tree
     // is the input to the signed canonical payload, so unknown envelope
     // members stay inside the signature.
-    let envelope_value: serde_json::Value = match serde_json::from_slice(envelope_bytes) {
+    let envelope_value: serde_json::Value = match crate::jcs::parse_json_strict(envelope_bytes) {
         Ok(v) => v,
         Err(e) => {
             errors.push(TopError::outer(

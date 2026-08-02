@@ -286,7 +286,10 @@ pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ParsedEvent>, ChainParseErr
             // line numbering.
             continue;
         }
-        let value: serde_json::Value = serde_json::from_str(raw)
+        // Strict parse: the duplicate-member gate runs during
+        // deserialization (spec/canonicalization.md "Objects") before the
+        // value can reach a hash comparison.
+        let value: serde_json::Value = crate::jcs::parse_json_strict(raw.as_bytes())
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
         // A line that parses but is not an object gets the JS reference's
         // per-event wording rather than a serde type error, so the pinned

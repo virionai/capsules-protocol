@@ -29,7 +29,14 @@ import pathlib
 import pytest
 
 from capsule import CapsuleReader, verify_capsule
-from capsule.canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256_hex
+from capsule.canonical import (
+    bytes_to_hex,
+    concat_bytes,
+    hex_to_bytes,
+    jcs,
+    loads_strict,
+    sha256_hex,
+)
 from capsule.crypto import ed25519_verify
 from capsule.envelope import envelope_canonical_payload, envelope_signing_input
 
@@ -48,7 +55,7 @@ IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
-IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate"}
+IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate", "duplicate_member"}
 
 # Per-lane mapping of the registry's normative open-stage reason
 # categories onto this SDK's error messages. Every reader error here is a
@@ -280,7 +287,10 @@ def test_ijson_acceptance_boundary(vector: dict):
     """
     name = vector["name"]
     try:
-        parsed = json.loads(vector["input_json"])
+        # The SDK's strict document parse: json.loads plus the
+        # duplicate-member gate. Rejection here IS the parse-time refusal
+        # the vector contract allows.
+        parsed = loads_strict(vector["input_json"])
     except ValueError:
         assert vector["expect"] == "reject", f"{name}: an accept vector must parse"
         return
