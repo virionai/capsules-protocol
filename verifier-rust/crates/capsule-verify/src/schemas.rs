@@ -244,6 +244,11 @@ pub enum ChainParseError {
         #[source]
         source: serde_json::Error,
     },
+    /// A line parsed as JSON but is not an object. Reported with the JS
+    /// reference's per-event wording ("event is not a JSON object") so the
+    /// registry's pinned `error_includes` reads identically across lanes.
+    #[error("chain line {line}: event is not a JSON object")]
+    NotAnObject { line: usize },
     /// The bytes were not valid UTF-8.
     #[error("chain bytes are not valid UTF-8: {0}")]
     Utf8(#[from] std::str::Utf8Error),
@@ -274,6 +279,12 @@ pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ParsedEvent>, ChainParseErr
         }
         let value: serde_json::Value = serde_json::from_str(raw)
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
+        // A line that parses but is not an object gets the JS reference's
+        // per-event wording rather than a serde type error, so the pinned
+        // cross-lane message ("event is not a JSON object") holds here too.
+        if !value.is_object() {
+            return Err(ChainParseError::NotAnObject { line: i + 1 });
+        }
         let event: ChainEvent = serde_json::from_value(value.clone())
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
         events.push(ParsedEvent { event, raw: value });

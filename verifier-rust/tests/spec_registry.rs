@@ -7,6 +7,7 @@
 //!
 //!   - tamper-detection/vectors.json   (verify-stage outcomes)
 //!   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//!   - malformed-shape/vectors.json    (manifest/chain document shape rules)
 //!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //!   - signer-set/vectors.json         (signer-set binding outcomes)
 //!   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
@@ -370,6 +371,57 @@ fn malformed_registry_outcomes() {
         if expected["stage"].as_str() == Some("open") {
             let reason = expected["reason"].as_str().expect("reason");
             let needles = open_reason_needles(reason);
+            assert!(!result.ok, "{name}: open-stage fixture must not verify");
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                needles.iter().any(|n| haystack.contains(n)),
+                "{name}: expected an error matching reason {reason:?} (any of {needles:?}); got {haystack:?}"
+            );
+        } else {
+            assert_verify_outcome(name, expected, &result);
+        }
+    }
+}
+
+#[test]
+fn malformed_shape_registry_outcomes() {
+    let path = vectors_dir().join("malformed-shape/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let expected = &v["expected"];
+        let result = verify_fixture(&base, &allowlist, v);
+        // Verify-stage vectors THIS lane legitimately refuses at parse:
+        // serde_json rejects the hostile number literal (1e999) before a
+        // manifest hash can be recomputed, which spec/canonicalization.md
+        // blesses explicitly ("rejection may happen at JSON parse time or
+        // at the canonicalization gate; both are conforming"). The pinned
+        // error_includes ("manifest hash recompute failed") is the
+        // canonicalization-gate wording, so assert the parse-time refusal
+        // instead. Pinned by name so a lane that starts ACCEPTING the
+        // value fails here.
+        if name == "manifest-hostile-number" {
+            assert!(!result.ok, "{name}: hostile number must not verify");
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                haystack.contains("failed to parse manifest.json"),
+                "{name}: expected a manifest parse refusal; got {haystack:?}"
+            );
+            continue;
+        }
+        if expected["stage"].as_str() == Some("open") {
+            let reason = expected["reason"].as_str().expect("reason");
+            let needles: &[&str] = match reason {
+                // This lane's typed manifest view refuses the shapes the
+                // registry names, so the reader-level refusal surfaces as
+                // a manifest parse failure rather than a per-field path.
+                "invalid_manifest_shape" => &["failed to parse manifest.json"],
+                other => open_reason_needles(other),
+            };
             assert!(!result.ok, "{name}: open-stage fixture must not verify");
             let haystack = all_error_messages(&result).join(" ");
             assert!(
