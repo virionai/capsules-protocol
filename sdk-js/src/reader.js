@@ -23,7 +23,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
  * on the field being a 64-hex lowercase string per spec.
  */
 function validateManifestShape(manifest) {
-  if (manifest == null || typeof manifest !== "object") {
+  if (manifest == null || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("manifest.json is not a JSON object");
   }
   if (manifest.format?.version !== "0.6") {
@@ -38,6 +38,38 @@ function validateManifestShape(manifest) {
   if (!HEX64.test(manifest.first_event_hash ?? "")) {
     throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string");
   }
+  validateContentIndexShape(manifest.content_index);
+}
+
+/**
+ * verifyCapsule reads content_index.index_hash and iterates
+ * content_index.files unconditionally. Checking the shape at the parse
+ * boundary is what keeps verification a total function over whatever the
+ * reader hands back, instead of a TypeError on a hand-edited manifest.
+ */
+function validateContentIndexShape(index) {
+  if (index == null || typeof index !== "object" || Array.isArray(index)) {
+    throw new Error("manifest.content_index must be a JSON object");
+  }
+  if (!HEX64.test(index.index_hash ?? "")) {
+    throw new Error("manifest.content_index.index_hash must be a 64-char lowercase hex string");
+  }
+  if (!Array.isArray(index.files)) {
+    throw new Error("manifest.content_index.files must be an array");
+  }
+  index.files.forEach((f, i) => {
+    if (f == null || typeof f !== "object" || Array.isArray(f)) {
+      throw new Error(`manifest.content_index.files[${i}] must be a JSON object`);
+    }
+    if (typeof f.path !== "string" || f.path.length === 0) {
+      throw new Error(`manifest.content_index.files[${i}].path must be a non-empty string`);
+    }
+    if (!HEX64.test(f.sha256 ?? "")) {
+      throw new Error(
+        `manifest.content_index.files[${i}].sha256 must be a 64-char lowercase hex string`,
+      );
+    }
+  });
 }
 
 function validateEnvelopeShape(envelope) {
