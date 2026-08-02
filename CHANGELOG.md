@@ -11,6 +11,26 @@ incompatible wire changes ship as `0.7`).
 
 ### Added
 
+- **Unknown-member preservation is normative.** `spec/manifest.md`,
+  `spec/envelope.md`, and `spec/chain.md` now state that unknown members
+  in `manifest.json`, `provenance/envelope.json`, and chain events MUST
+  be preserved verbatim and included in canonicalization/hashing —
+  readers MUST NOT recompute a hash (or reconstruct the signed envelope
+  payload) from a re-serialized typed projection of the document. The
+  reserved vendor namespace is `x-<vendor>-<name>` (future spec versions
+  will never define `x-`-prefixed members), which gives organisations
+  collision-free manifest/envelope/event extensions that are covered by
+  the seal: a signer signs over their own extensions, an attacker cannot
+  inject or mutate one without breaking `manifest_hash`, the envelope
+  signature, or the event hash, and capsules stay verifiable across
+  future spec versions that add members. New conformance collection
+  `spec/vectors/unknown-fields/` (deterministic generator
+  `sdk-js/tools/generate-unknown-fields-fixtures.mjs`) pins a positive
+  capsule carrying `x-` members plus three post-seal tamper negatives,
+  consumed by the JS (`tools/check-spec-vectors.mjs`), Python
+  (`test_spec_registry.py`), Rust (`spec_registry.rs`), Kotlin
+  (`ParityTest.kt`), and Swift (`ParityTests.swift`) lanes.
+
 - **sdk-py onboarding surface.** The Python SDK mirrors the sdk-js
   ergonomics: every key input accepts hex strings (any case) or 32 raw
   bytes, `Ed25519KeyPair`/`X25519KeyPair` objects work as-is as
@@ -48,6 +68,24 @@ incompatible wire changes ship as `0.7`).
   (`spec_registry.rs`) now consume the tamper-detection and
   malformed-layout outcome registries and the signing-input pins
   directly, instead of hand-copied per-fixture assertions.
+
+### Fixed
+
+- **verifier-rust silently dropped unknown manifest/envelope/event
+  members, rejecting legitimately extended capsules.** The Rust verifier
+  deserialized `manifest.json`, `provenance/envelope.json`, and chain
+  events into fixed structs and re-serialized those structs to recompute
+  `manifest_hash`, the signed envelope payload, and per-event chain
+  hashes — silently dropping any member the v0.6 structs did not know
+  (and re-inventing defaults for absent optional fields), so a capsule
+  carrying signed-over extension members failed all three checks. The
+  verifier now parses each document once into a preserved
+  `serde_json::Value` tree, canonicalises THAT for every hash and
+  signature input (outer and L3 inner paths), and keeps the typed
+  structs purely as field-access views (`ParsedEvent` pairs each chain
+  event with its preserved tree; `manifest_hash`,
+  `envelope::canonical_payload`/`signing_input`/`verify_signatures`
+  now take the preserved tree).
 
 ### Changed
 

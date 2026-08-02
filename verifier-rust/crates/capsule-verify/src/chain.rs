@@ -13,7 +13,7 @@
 
 use crate::crypto::{bytes_to_hex, hex_to_bytes, sha256};
 use crate::jcs::jcs;
-use crate::schemas::ChainEvent;
+use crate::schemas::ParsedEvent;
 
 /// Genesis previous-hash: 32 zero bytes.
 const GENESIS_PREV: [u8; 32] = [0u8; 32];
@@ -68,11 +68,17 @@ pub fn hash_event_value(event_minus_hash: &serde_json::Value) -> Option<[u8; 32]
 /// Mirrors `verifyChain` in `sdk-js/src/chain.js`. The error messages here are
 /// kept verbatim with the JS strings except for substitution syntax (Rust
 /// `{}` vs JS template literal).
-pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
+///
+/// Structural checks (seq, prev_hash linkage, hash shape) read the typed
+/// view; the hash recompute canonicalises the PRESERVED raw tree minus
+/// `hash`, so unknown members an event carries are included exactly as the
+/// signer hashed them — never a struct round-trip, which would drop them.
+pub fn verify_chain(events: &[ParsedEvent]) -> Vec<ChainErr> {
     let mut errors: Vec<ChainErr> = Vec::new();
     let mut prev: [u8; 32] = GENESIS_PREV;
 
-    for (i, event) in events.iter().enumerate() {
+    for (i, parsed) in events.iter().enumerate() {
+        let event = &parsed.event;
         let expected_seq = (i as u64) + 1;
         let seq_for_msg = if event.seq == 0 { expected_seq } else { event.seq };
 
@@ -110,18 +116,11 @@ pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
             continue;
         }
 
-        // Recompute the hash. Strip `hash` from the serialized form, then
-        // hash `prev_raw || JCS(rest)`.
-        let mut event_value = match serde_json::to_value(event) {
-            Ok(v) => v,
-            Err(e) => {
-                errors.push(ChainErr {
-                    seq: seq_for_msg,
-                    message: format!("recompute failed: {e}"),
-                });
-                continue;
-            }
-        };
+        // Recompute the hash. Strip `hash` from the PRESERVED raw tree,
+        // then hash `prev_raw || JCS(rest)`. The raw tree (not the typed
+        // struct) is the canonicalization input so unknown members and
+        // absent optional fields round-trip exactly as sealed.
+        let mut event_value = parsed.raw.clone();
         if let Some(map) = event_value.as_object_mut() {
             map.remove("hash");
         }
@@ -168,10 +167,10 @@ pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
 /// `None` when empty. Mirrors `firstAndEntryHash` in the JS SDK except that
 /// emptiness is reported via `Option` rather than a thrown error — the
 /// top-level verifier already special-cases empty chains.
-pub fn first_and_entry_hash(events: &[ChainEvent]) -> Option<(&str, &str)> {
+pub fn first_and_entry_hash(events: &[ParsedEvent]) -> Option<(&str, &str)> {
     let first = events.first()?;
     let last = events.last()?;
-    Some((first.hash.as_str(), last.hash.as_str()))
+    Some((first.event.hash.as_str(), last.event.hash.as_str()))
 }
 
 #[cfg(test)]
@@ -203,13 +202,13 @@ mod tests {
         let events = parse_chain_jsonl(jsonl).unwrap();
 
         let (first, last) = first_and_entry_hash(&events).expect("non-empty chain");
-        assert_eq!(first, events[0].hash);
-        assert_eq!(last, events.last().unwrap().hash);
+        assert_eq!(first, events[0].event.hash);
+        assert_eq!(last, events.last().unwrap().event.hash);
     }
 
     #[test]
     fn first_and_entry_hash_empty() {
-        let events: Vec<ChainEvent> = Vec::new();
+        let events: Vec<ParsedEvent> = Vec::new();
         assert!(first_and_entry_hash(&events).is_none());
     }
 
@@ -219,13 +218,17 @@ mod tests {
         let map = unpack_zip(&bytes).unwrap();
         let jsonl = map.get("chain/events.jsonl").unwrap();
         let mut events = parse_chain_jsonl(jsonl).unwrap();
-        // Bump first event's seq from 1 → 99. The hash recompute will also
-        // fail (the canonical bytes change), so we expect AT LEAST a seq
-        // error; matching JS, both "seq" and "hash mismatch" lines show up.
-        events[0].seq = 99;
+        // Bump first event's seq from 1 → 99 in both the typed view and the
+        // preserved tree (as an on-disk mutation would). The hash recompute
+        // will also fail (the canonical bytes change), so we expect AT LEAST
+        // a seq error; matching JS, both "seq" and "hash mismatch" lines
+        // show up.
+        events[0].event.seq = 99;
+        events[0].raw["seq"] = serde_json::json!(99);
         let errors = verify_chain(&events);
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e.message.starts_with("seq 99 expected 1")));
+        assert!(errors.iter().any(|e| e.message.starts_with("hash mismatch")));
     }
 
     #[test]
@@ -234,14 +237,33 @@ mod tests {
         let map = unpack_zip(&bytes).unwrap();
         let jsonl = map.get("chain/events.jsonl").unwrap();
         let mut events = parse_chain_jsonl(jsonl).unwrap();
-        // Mutate one byte of the first event's payload by replacing the
-        // payload entirely with an empty object. The chain hash MUST then
-        // fail to recompute.
-        events[0].payload = serde_json::json!({});
+        // Replace the first event's payload with an empty object in the
+        // PRESERVED tree — the tree is the hash recompute's input, matching
+        // an on-disk mutation. The chain hash MUST then fail to recompute.
+        events[0].raw["payload"] = serde_json::json!({});
         let errors = verify_chain(&events);
         assert!(
             errors.iter().any(|e| e.message.starts_with("hash mismatch")),
             "expected a hash-mismatch error, got: {errors:?}"
+        );
+    }
+
+    /// An unknown member added to an event's preserved tree changes the
+    /// recomputed hash — proving unknown members are canonicalised, i.e.
+    /// they sit inside the integrity envelope rather than being dropped.
+    #[test]
+    fn unknown_member_mutation_breaks_hash() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let jsonl = map.get("chain/events.jsonl").unwrap();
+        let mut events = parse_chain_jsonl(jsonl).unwrap();
+        assert!(verify_chain(&events).is_empty(), "clean chain must walk");
+
+        events[0].raw["x-acme-review-ticket"] = serde_json::json!("ACME-9999");
+        let errors = verify_chain(&events);
+        assert!(
+            errors.iter().any(|e| e.message.starts_with("hash mismatch")),
+            "post-seal unknown-member injection must break the event hash; got: {errors:?}"
         );
     }
 }

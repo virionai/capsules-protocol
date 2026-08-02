@@ -81,6 +81,55 @@ class ParityTest {
         assertJsTamperedCapsuleFails("tampered-blob.capsule")
     }
 
+    // ---- unknown-member preservation (spec/vectors/unknown-fields) ----
+    //
+    // spec/manifest.md, spec/envelope.md, and spec/chain.md require unknown
+    // members in the hashed documents to be preserved verbatim and included
+    // in canonicalization. The Kotlin verifier operates on preserved
+    // JCSValue trees, so a capsule carrying x- extension members must
+    // verify, and a post-seal mutation of an unknown member must fail.
+
+    @Test
+    fun jsUnknownFieldsCapsuleVerifiesUnderKotlin() {
+        val bytes = File(unknownFieldsDir(), "unknown-fields.capsule").readBytes()
+        val pub = unknownFieldsOriginatorPubkey()
+
+        val v = CapsuleVerifier.verify(bytes = bytes, allowlist = setOf(pub))
+
+        assertTrue(
+            v.ok,
+            "capsule with x- extension members failed Kotlin verification: " +
+                v.checks.filter { !it.ok }.joinToString { "${it.name}: ${it.detail}" },
+        )
+        assertEquals(1, v.trustedSignerCount, "expected one trusted signer")
+    }
+
+    @Test
+    fun jsTamperedUnknownManifestFieldFailsUnderKotlin() {
+        assertUnknownFieldsCapsuleFails("tampered-unknown-manifest-field.capsule")
+    }
+
+    @Test
+    fun jsTamperedUnknownEnvelopeFieldFailsUnderKotlin() {
+        assertUnknownFieldsCapsuleFails("tampered-unknown-envelope-field.capsule")
+    }
+
+    @Test
+    fun jsTamperedUnknownEventFieldFailsUnderKotlin() {
+        assertUnknownFieldsCapsuleFails("tampered-unknown-event-field.capsule")
+    }
+
+    private fun assertUnknownFieldsCapsuleFails(fixture: String) {
+        val bytes = File(unknownFieldsDir(), fixture).readBytes()
+        val pub = unknownFieldsOriginatorPubkey()
+        val verifiedOk = try {
+            CapsuleVerifier.verify(bytes = bytes, allowlist = setOf(pub)).ok
+        } catch (_: Throwable) {
+            false
+        }
+        assertFalse(verifiedOk, "$fixture unexpectedly verified ok under Kotlin")
+    }
+
     private fun assertJsTamperedCapsuleFails(fixture: String) {
         val bytes = File(fixturesDir(), fixture).readBytes()
         val pub = originatorPubkey()
@@ -116,8 +165,16 @@ class ParityTest {
 
         private fun fixturesDir(): File = File(repoRoot(), "spec/vectors/tamper-detection/output")
 
+        private fun unknownFieldsDir(): File = File(repoRoot(), "spec/vectors/unknown-fields/output")
+
         private fun originatorPubkey(): String {
             val keysJson = File(fixturesDir(), "keys.json").readText(Charsets.UTF_8)
+            val root = JsonParser.parseString(keysJson).asJsonObject
+            return root.getAsJsonObject("originator").get("publicKey").asString
+        }
+
+        private fun unknownFieldsOriginatorPubkey(): String {
+            val keysJson = File(unknownFieldsDir(), "keys.json").readText(Charsets.UTF_8)
             val root = JsonParser.parseString(keysJson).asJsonObject
             return root.getAsJsonObject("originator").get("publicKey").asString
         }

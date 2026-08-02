@@ -1,0 +1,7 @@
+{
+  "comment": "FIXED throwaway TEST keypair for deterministic conformance fixtures; never a production key.",
+  "originator": {
+    "publicKey": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "privateKey": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+  }
+}

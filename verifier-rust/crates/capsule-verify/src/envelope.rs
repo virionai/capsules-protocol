@@ -26,20 +26,15 @@ pub struct VerifiedSigner {
 
 /// JCS-canonical bytes of `envelope` with the `signers` field removed.
 ///
-/// Matches `envelopeCanonicalPayload` in `sdk-js/src/envelope.js`. We go through
-/// `serde_json::to_value` (rather than constructing a parallel
-/// "EnvelopeMinusSigners" struct) so that any future field added to
-/// `Envelope` is automatically picked up — and so the JCS canonicalization
-/// runs over the same shape as the JS reference.
-pub fn canonical_payload(envelope: &Envelope) -> Vec<u8> {
-    // serde_json::to_value cannot fail on a struct that derives Serialize and
-    // contains only JSON-representable types, but we still match on the
-    // result rather than unwrapping to keep the verifier panic-free even if
-    // schema evolution introduces a non-finite-number field by accident.
-    let mut value = match serde_json::to_value(envelope) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+/// Matches `envelopeCanonicalPayload` in `sdk-js/src/envelope.js`. Takes the
+/// PRESERVED `serde_json::Value` tree parsed from the on-disk
+/// `provenance/envelope.json` bytes — never the typed `Envelope` struct. A
+/// struct projection silently drops members it does not know, so signing
+/// over a struct round-trip would diverge from what the signer actually
+/// signed whenever the envelope carries extension members
+/// (spec/envelope.md "Unknown members"). The preserved tree keeps them.
+pub fn canonical_payload(envelope_value: &serde_json::Value) -> Vec<u8> {
+    let mut value = envelope_value.clone();
     if let Some(map) = value.as_object_mut() {
         map.remove("signers");
     }
@@ -48,12 +43,13 @@ pub fn canonical_payload(envelope: &Envelope) -> Vec<u8> {
 
 /// Build the per-role signing input: `utf8("capsule-provenance-v0.6:" + role
 /// + "\x00") || JCS(envelope minus signers)`. Mirrors `envelopeSigningInput`.
-pub fn signing_input(envelope: &Envelope, role: &str) -> Vec<u8> {
+/// `envelope_value` is the preserved envelope tree (see [`canonical_payload`]).
+pub fn signing_input(envelope_value: &serde_json::Value, role: &str) -> Vec<u8> {
     let mut domain = Vec::with_capacity(ENVELOPE_DOMAIN_PREFIX.len() + role.len() + 1);
     domain.extend_from_slice(ENVELOPE_DOMAIN_PREFIX.as_bytes());
     domain.extend_from_slice(role.as_bytes());
     domain.push(0u8); // NUL terminator
-    let canonical = canonical_payload(envelope);
+    let canonical = canonical_payload(envelope_value);
     let mut out = Vec::with_capacity(domain.len() + canonical.len());
     out.extend_from_slice(&domain);
     out.extend_from_slice(&canonical);
@@ -65,12 +61,20 @@ pub fn signing_input(envelope: &Envelope, role: &str) -> Vec<u8> {
 /// preserving order. Mirrors `verifyEnvelopeSignatures` minus the version /
 /// cipher pre-checks (those live at the top-level verifier).
 ///
+/// `envelope` is the typed view (source of the signer list);
+/// `envelope_value` is the preserved tree the signed payload is
+/// canonicalised from. Both must come from the same on-disk bytes — the
+/// top-level verifier parses the tree once and projects the view from it.
+///
 /// On any per-signer error (bad hex, wrong length, signature failure), the
 /// signer's `valid` is `false`. The function never panics.
-pub fn verify_signatures(envelope: &Envelope) -> Vec<VerifiedSigner> {
+pub fn verify_signatures(
+    envelope: &Envelope,
+    envelope_value: &serde_json::Value,
+) -> Vec<VerifiedSigner> {
     let mut out = Vec::with_capacity(envelope.signers.len());
     for s in &envelope.signers {
-        let valid = verify_one(envelope, &s.role, &s.public_key, &s.signature);
+        let valid = verify_one(envelope_value, &s.role, &s.public_key, &s.signature);
         out.push(VerifiedSigner {
             role: s.role.clone(),
             public_key: s.public_key.clone(),
@@ -81,7 +85,12 @@ pub fn verify_signatures(envelope: &Envelope) -> Vec<VerifiedSigner> {
 }
 
 /// Verify a single signer. Hex/length errors degrade gracefully to `false`.
-fn verify_one(envelope: &Envelope, role: &str, public_key_hex: &str, signature_hex: &str) -> bool {
+fn verify_one(
+    envelope_value: &serde_json::Value,
+    role: &str,
+    public_key_hex: &str,
+    signature_hex: &str,
+) -> bool {
     let pk = match hex_to_bytes(public_key_hex) {
         Ok(b) if b.len() == 32 => b,
         _ => return false,
@@ -90,7 +99,7 @@ fn verify_one(envelope: &Envelope, role: &str, public_key_hex: &str, signature_h
         Ok(b) if b.len() == 64 => b,
         _ => return false,
     };
-    let input = signing_input(envelope, role);
+    let input = signing_input(envelope_value, role);
     ed25519_verify(&pk, &input, &sig)
 }
 
@@ -100,17 +109,21 @@ mod tests {
     use crate::test_support::clean_capsule_bytes;
     use crate::unpack_zip;
 
-    fn parse_clean_envelope() -> Envelope {
+    /// Parse the clean fixture's envelope as (typed view, preserved tree) —
+    /// the same pairing the top-level verifier produces from one parse.
+    fn parse_clean_envelope() -> (Envelope, serde_json::Value) {
         let bytes = clean_capsule_bytes();
         let map = unpack_zip(&bytes).unwrap();
         let env_bytes = map.get("provenance/envelope.json").unwrap();
-        serde_json::from_slice(env_bytes).unwrap()
+        let value: serde_json::Value = serde_json::from_slice(env_bytes).unwrap();
+        let envelope: Envelope = serde_json::from_value(value.clone()).unwrap();
+        (envelope, value)
     }
 
     #[test]
     fn canonical_payload_excludes_signers() {
-        let env = parse_clean_envelope();
-        let bytes = canonical_payload(&env);
+        let (_, env_value) = parse_clean_envelope();
+        let bytes = canonical_payload(&env_value);
         let s = std::str::from_utf8(&bytes).unwrap();
         // The JCS string starts with `{"capsule_id":...}` (object keys
         // sorted, no `signers` field present).
@@ -123,20 +136,20 @@ mod tests {
 
     #[test]
     fn signing_input_starts_with_domain_separator() {
-        let env = parse_clean_envelope();
+        let (_, env_value) = parse_clean_envelope();
         let role = "originator";
-        let input = signing_input(&env, role);
+        let input = signing_input(&env_value, role);
         let prefix = format!("{ENVELOPE_DOMAIN_PREFIX}{role}\0");
         assert!(input.starts_with(prefix.as_bytes()));
         // After the NUL the rest must equal the canonical payload bytes.
-        let canon = canonical_payload(&env);
+        let canon = canonical_payload(&env_value);
         assert_eq!(&input[prefix.len()..], canon.as_slice());
     }
 
     #[test]
     fn clean_envelope_signatures_verify() {
-        let env = parse_clean_envelope();
-        let outcomes = verify_signatures(&env);
+        let (env, env_value) = parse_clean_envelope();
+        let outcomes = verify_signatures(&env, &env_value);
         assert_eq!(outcomes.len(), env.signers.len());
         assert!(outcomes.iter().all(|s| s.valid),
                 "all clean signers must verify, got {outcomes:?}");
@@ -144,22 +157,38 @@ mod tests {
 
     #[test]
     fn tampered_signature_does_not_verify() {
-        let mut env = parse_clean_envelope();
+        let (mut env, env_value) = parse_clean_envelope();
         // Flip one hex nibble of the first signer's signature. The function
         // must yield `valid = false` rather than panicking.
         let sig = &mut env.signers[0].signature;
         let mut chars: Vec<char> = sig.chars().collect();
         chars[0] = if chars[0] == '0' { '1' } else { '0' };
         *sig = chars.into_iter().collect();
-        let outcomes = verify_signatures(&env);
+        let outcomes = verify_signatures(&env, &env_value);
         assert!(!outcomes[0].valid);
     }
 
     #[test]
     fn non_hex_signature_yields_invalid_not_panic() {
-        let mut env = parse_clean_envelope();
+        let (mut env, env_value) = parse_clean_envelope();
         env.signers[0].signature = "not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-hex".to_string();
-        let outcomes = verify_signatures(&env);
+        let outcomes = verify_signatures(&env, &env_value);
         assert!(!outcomes[0].valid);
+    }
+
+    /// A post-seal mutation of an UNKNOWN envelope member must invalidate
+    /// the signature: the canonical payload is built from the preserved
+    /// tree, so the member sits inside the signed bytes. (A struct
+    /// round-trip would drop it and the signature would keep verifying —
+    /// the exact bug class the preserved-Value contract prevents.)
+    #[test]
+    fn unknown_member_mutation_invalidates_signature() {
+        let (env, mut env_value) = parse_clean_envelope();
+        env_value["x-acme-attestation"] = serde_json::json!("urn:acme:attest:43");
+        let outcomes = verify_signatures(&env, &env_value);
+        assert!(
+            !outcomes[0].valid,
+            "injected unknown member must change the signed payload; got {outcomes:?}"
+        );
     }
 }

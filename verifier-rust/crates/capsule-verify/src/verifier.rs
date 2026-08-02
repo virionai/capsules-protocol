@@ -43,7 +43,7 @@ use crate::l3::l3_attempt_decrypt_and_verify;
 use crate::manifest::{
     build_content_index, compute_capsule_id, content_index_exclusions, manifest_hash,
 };
-use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
+use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::zip_reader::unpack_zip;
 
 /// Ciphers this verifier accepts in `envelope.cipher`.
@@ -323,7 +323,33 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
             );
         }
     };
-    let manifest: Manifest = match serde_json::from_slice(manifest_bytes) {
+    // Parse ONCE into a preserved Value tree (the hashing input — unknown
+    // members included), then project the typed view from it. Both products
+    // therefore come from the same bytes; the view fails fast on a missing
+    // or mistyped known field, and the tree is what gets canonicalised.
+    let manifest_value: serde_json::Value = match serde_json::from_slice(manifest_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Malformed,
+                format!("failed to parse manifest.json: {e}"),
+            ));
+            return assemble_result(
+                errors,
+                notes,
+                chain_check,
+                content_index_check,
+                envelope_check,
+                None,
+                None,
+                options.allowlist.is_empty(),
+                String::new(),
+                String::new(),
+                level,
+            );
+        }
+    };
+    let manifest: Manifest = match serde_json::from_value(manifest_value.clone()) {
         Ok(m) => m,
         Err(e) => {
             errors.push(TopError::outer(
@@ -368,7 +394,32 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
             );
         }
     };
-    let envelope: Envelope = match serde_json::from_slice(envelope_bytes) {
+    // Same preserved-tree-then-view parse as the manifest above: the tree
+    // is the input to the signed canonical payload, so unknown envelope
+    // members stay inside the signature.
+    let envelope_value: serde_json::Value = match serde_json::from_slice(envelope_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Malformed,
+                format!("failed to parse provenance/envelope.json: {e}"),
+            ));
+            return assemble_result(
+                errors,
+                notes,
+                chain_check,
+                content_index_check,
+                envelope_check,
+                None,
+                None,
+                options.allowlist.is_empty(),
+                manifest.id.clone(),
+                String::new(),
+                level,
+            );
+        }
+    };
+    let envelope: Envelope = match serde_json::from_value(envelope_value.clone()) {
         Ok(e) => e,
         Err(e) => {
             errors.push(TopError::outer(
@@ -469,7 +520,9 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (6) manifest_hash check ----------------------------------------
-    let expected_mfhash = manifest_hash(&manifest);
+    // Hash the PRESERVED manifest tree, not the typed view: unknown members
+    // are part of the signed document and must be canonicalised.
+    let expected_mfhash = manifest_hash(&manifest_value);
     if expected_mfhash != envelope.manifest_hash {
         errors.push(TopError::outer(
             TopErrorCategory::ManifestHash,
@@ -617,7 +670,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (10) envelope signature verification ---------------------------
-    envelope_check = verify_envelope_signatures(&envelope, &options.allowlist);
+    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &options.allowlist);
 
     // ---- (11) trusted_signer_count --------------------------------------
     let trusted_signer_count = envelope_check.signers.iter().filter(|s| s.trusted).count();
@@ -759,7 +812,7 @@ pub(crate) fn verify_content_index(
 /// pushes the same logical mismatches against the *inner* envelope and
 /// therefore passes `TopErrorScope::Inner`.
 pub(crate) fn chain_walk_into(
-    events: &[ChainEvent],
+    events: &[ParsedEvent],
     manifest: &Manifest,
     envelope: &Envelope,
     chain_check: &mut ChainCheck,
@@ -780,7 +833,7 @@ pub(crate) fn chain_walk_into(
         .iter()
         .map(|p| p.actor_id.as_str())
         .collect();
-    for e in events {
+    for e in events.iter().map(|p| &p.event) {
         if e.actor != "system:host" && !participant_ids.contains(e.actor.as_str()) {
             chain_check.errors.push(format!(
                 "seq {}: actor {:?} not in manifest.participants and not system:host",
@@ -821,6 +874,10 @@ pub(crate) fn chain_walk_into(
 /// the outer envelope (top-level pipeline step 10) and for the inner
 /// envelope (L3, when decryption + inner parsing succeeded).
 ///
+/// `envelope` is the typed view (signer list); `envelope_value` is the
+/// PRESERVED tree from the same bytes — the canonical payload is built from
+/// the tree so unknown envelope members stay inside the signature.
+///
 /// `allowlist` is a list of trusted Ed25519 public keys (hex). Comparison is
 /// case-insensitive: keys are lowercased on both sides before lookup. A
 /// signer is marked `trusted` only when its signature verifies AND its key
@@ -830,9 +887,13 @@ pub(crate) fn chain_walk_into(
 /// `EnvelopeCheck::ok` is `true` only when there is at least one signer AND
 /// every signer's signature verified. An envelope with zero signers is
 /// reported as `ok=false` with a `note` of `"envelope has no signers"`.
-pub(crate) fn verify_envelope_signatures(envelope: &Envelope, allowlist: &[String]) -> EnvelopeCheck {
+pub(crate) fn verify_envelope_signatures(
+    envelope: &Envelope,
+    envelope_value: &serde_json::Value,
+    allowlist: &[String],
+) -> EnvelopeCheck {
     let mut envelope_check = EnvelopeCheck::default();
-    let signer_outcomes = verify_signatures(envelope);
+    let signer_outcomes = verify_signatures(envelope, envelope_value);
     let mut all_valid = !signer_outcomes.is_empty();
     let allowlist_lower: std::collections::BTreeSet<String> =
         allowlist.iter().map(|k| k.to_lowercase()).collect();
@@ -1875,15 +1936,18 @@ mod tests {
         )
         .expect("decryption must succeed for clean-encrypted");
         let inner_files = unpack_zip(&inner_zip_bytes).expect("inner zip must unpack");
-        let mut inner_envelope: Envelope = serde_json::from_slice(
+        let inner_envelope_value: serde_json::Value = serde_json::from_slice(
             inner_files
                 .get("provenance/envelope.json")
                 .expect("inner envelope must be present"),
         )
         .expect("inner envelope JSON must parse");
+        let mut inner_envelope: Envelope =
+            serde_json::from_value(inner_envelope_value.clone())
+                .expect("inner envelope must project to the typed view");
 
         // Sanity check: the unmutated inner envelope verifies cleanly.
-        let pre = verify_envelope_signatures(&inner_envelope, &[]);
+        let pre = verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &[]);
         assert!(
             pre.ok,
             "inner envelope must verify before mutation; got: {pre:?}"
@@ -1901,8 +1965,11 @@ mod tests {
         *sig = chars.into_iter().collect();
 
         // Step 4: re-run the helper. The mutated signer must be invalid,
-        // and `EnvelopeCheck.ok` must be false.
-        let post = verify_envelope_signatures(&inner_envelope, &[]);
+        // and `EnvelopeCheck.ok` must be false. (The canonical payload from
+        // the preserved tree is unchanged — only the stored signature hex
+        // moved — so this exercises the signature comparison, not the
+        // payload.)
+        let post = verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &[]);
         assert!(
             !post.ok,
             "mutated inner envelope must not verify; got: {post:?}"
@@ -2279,7 +2346,7 @@ mod tests {
         )
         .expect("decryption must succeed for clean-encrypted");
         let inner_files = unpack_zip(&inner_zip_bytes).expect("inner zip must unpack");
-        let mut inner_manifest: Manifest = serde_json::from_slice(
+        let mut inner_manifest_value: serde_json::Value = serde_json::from_slice(
             inner_files
                 .get("manifest.json")
                 .expect("inner manifest must be present"),
@@ -2294,20 +2361,21 @@ mod tests {
 
         // Sanity check: the unmutated inner manifest_hash matches the inner
         // envelope's claim.
-        let pre = manifest_hash(&inner_manifest);
+        let pre = manifest_hash(&inner_manifest_value);
         assert_eq!(
             pre, inner_envelope.manifest_hash,
             "inner manifest_hash must verify before mutation"
         );
 
-        // Step 3: mutate `created_at` to a value that differs from the
-        // original. Picking a fixed past date keeps the test deterministic
-        // regardless of when the fixture was generated.
-        inner_manifest.created_at = "1999-01-01T00:00:00Z".to_string();
+        // Step 3: mutate `created_at` in the preserved tree to a value that
+        // differs from the original. Picking a fixed past date keeps the
+        // test deterministic regardless of when the fixture was generated.
+        inner_manifest_value["created_at"] =
+            serde_json::Value::String("1999-01-01T00:00:00Z".to_string());
 
         // Step 4: re-run the helper. The recomputed manifest_hash must
         // differ from the inner envelope's stored claim.
-        let post = manifest_hash(&inner_manifest);
+        let post = manifest_hash(&inner_manifest_value);
         assert_ne!(
             post, inner_envelope.manifest_hash,
             "mutated inner manifest_hash must differ from the inner envelope's claim"

@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use crate::crypto::hex_to_bytes;
 use crate::decrypt::decrypt_inner_zip;
 use crate::manifest::{compute_capsule_id, content_index_exclusions, manifest_hash};
-use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
+use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::verifier::{
     chain_walk_into, verify_content_index, verify_envelope_signatures, ChainCheck,
     ContentIndexCheck, EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions,
@@ -103,9 +103,13 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // Step 3: parse inner manifest, envelope, chain. All three are required;
     // any missing or unparseable one is a single Encryption error so the user
     // sees a concise root cause.
-    let inner_manifest: Manifest = match inner_files.get("manifest.json") {
+    //
+    // Same preserved-tree-then-view parse as the outer pipeline: the Value
+    // trees are the hashing inputs (unknown members included); the typed
+    // structs are field-access views projected from the same parse.
+    let inner_manifest_value: serde_json::Value = match inner_files.get("manifest.json") {
         Some(b) => match serde_json::from_slice(b) {
-            Ok(m) => m,
+            Ok(v) => v,
             Err(e) => {
                 errors.push(TopError::inner(
                     TopErrorCategory::Encryption,
@@ -122,26 +126,47 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             return;
         }
     };
-    let inner_envelope: Envelope = match inner_files.get("provenance/envelope.json") {
-        Some(b) => match serde_json::from_slice(b) {
-            Ok(e) => e,
-            Err(e) => {
-                errors.push(TopError::inner(
-                    TopErrorCategory::Encryption,
-                    format!("L3: inner provenance/envelope.json parse failed: {e}"),
-                ));
-                return;
-            }
-        },
-        None => {
+    let inner_manifest: Manifest = match serde_json::from_value(inner_manifest_value.clone()) {
+        Ok(m) => m,
+        Err(e) => {
             errors.push(TopError::inner(
                 TopErrorCategory::Encryption,
-                "L3: inner ZIP missing provenance/envelope.json",
+                format!("L3: inner manifest.json parse failed: {e}"),
             ));
             return;
         }
     };
-    let inner_events: Vec<ChainEvent> = match inner_files.get("chain/events.jsonl") {
+    let inner_envelope_value: serde_json::Value =
+        match inner_files.get("provenance/envelope.json") {
+            Some(b) => match serde_json::from_slice(b) {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(TopError::inner(
+                        TopErrorCategory::Encryption,
+                        format!("L3: inner provenance/envelope.json parse failed: {e}"),
+                    ));
+                    return;
+                }
+            },
+            None => {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Encryption,
+                    "L3: inner ZIP missing provenance/envelope.json",
+                ));
+                return;
+            }
+        };
+    let inner_envelope: Envelope = match serde_json::from_value(inner_envelope_value.clone()) {
+        Ok(e) => e,
+        Err(e) => {
+            errors.push(TopError::inner(
+                TopErrorCategory::Encryption,
+                format!("L3: inner provenance/envelope.json parse failed: {e}"),
+            ));
+            return;
+        }
+    };
+    let inner_events: Vec<ParsedEvent> = match inner_files.get("chain/events.jsonl") {
         Some(b) => match parse_chain_jsonl(b) {
             Ok(events) => events,
             Err(e) => {
@@ -240,7 +265,8 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // as the outer envelope. We set `inner_envelope_check` BEFORE Step 4 so
     // that even if the chain walk or cross-checks push errors, the
     // inner-envelope verification still surfaces in `result.inner_envelope`.
-    let inner_check = verify_envelope_signatures(&inner_envelope, &options.allowlist);
+    let inner_check =
+        verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &options.allowlist);
     *inner_envelope_check = Some(inner_check);
 
     // Step 3c (v0.5): recompute the inner manifest_hash and compare to the
@@ -249,7 +275,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // `category: ManifestHash`, and we mirror that for inner with the
     // `"L3 inner: "` message prefix so the renderer can disambiguate via
     // substring match on the message.
-    let recomputed_inner_manifest_hash = manifest_hash(&inner_manifest);
+    let recomputed_inner_manifest_hash = manifest_hash(&inner_manifest_value);
     if recomputed_inner_manifest_hash != inner_envelope.manifest_hash {
         errors.push(TopError::inner(
             TopErrorCategory::ManifestHash,
@@ -325,21 +351,21 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // anchors — guards against an inner envelope whose anchors disagree with
     // its own chain.
     if let (Some(first), Some(last)) = (inner_events.first(), inner_events.last()) {
-        if first.hash != inner_envelope.first_event_hash {
+        if first.event.hash != inner_envelope.first_event_hash {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner first event hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    first.hash, inner_envelope.first_event_hash
+                    first.event.hash, inner_envelope.first_event_hash
                 ),
             ));
         }
-        if last.hash != inner_envelope.entry_hash {
+        if last.event.hash != inner_envelope.entry_hash {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner entry hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    last.hash, inner_envelope.entry_hash
+                    last.event.hash, inner_envelope.entry_hash
                 ),
             ));
         }

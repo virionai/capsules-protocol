@@ -163,6 +163,101 @@ final class ParityTests: XCTestCase {
         XCTAssertEqual(v.trustedSignerCount, 0, "no signer should be trusted")
     }
 
+    // MARK: - Unknown-member preservation (spec/vectors/unknown-fields)
+
+    /// Resolves the shared `spec/vectors/unknown-fields/output/` directory
+    /// the same way `fixturesURL` resolves the tamper-detection one.
+    private static let unknownFieldsURL: URL = {
+        let testFile = URL(fileURLWithPath: #file)
+        let repoRoot = testFile
+            .deletingLastPathComponent()  // CapsuleTests/
+            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent()  // sdk-swift/
+            .deletingLastPathComponent()  // <repo-root>/
+        return repoRoot.appendingPathComponent("spec/vectors/unknown-fields/output")
+    }()
+
+    private func loadUnknownFieldsFixture(_ name: String) throws -> Data {
+        let url = Self.unknownFieldsURL.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            XCTFail(
+                "unknown-fields fixture missing at \(url.path). " +
+                "Populate spec/vectors before running parity tests."
+            )
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        return try Data(contentsOf: url)
+    }
+
+    private func unknownFieldsOriginatorPubkey() throws -> String {
+        let data = try loadUnknownFieldsFixture("keys.json")
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let originator = obj?["originator"] as? [String: Any]
+        guard let pub = originator?["publicKey"] as? String else {
+            XCTFail("unknown-fields keys.json missing originator.publicKey")
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return pub
+    }
+
+    /// spec/manifest.md, spec/envelope.md, and spec/chain.md require
+    /// unknown members in the hashed documents to be preserved verbatim
+    /// and included in canonicalization. The Swift verifier operates on
+    /// preserved JCSValue trees, so a capsule carrying `x-` extension
+    /// members in the manifest, envelope, and a chain event must verify.
+    func testUnknownFieldsCapsuleVerifies() throws {
+        let bytes = try loadUnknownFieldsFixture("unknown-fields.capsule")
+        let pub = try unknownFieldsOriginatorPubkey()
+
+        let v = CapsuleVerifier.verify(bytes, allowlist: [pub])
+        XCTAssertTrue(
+            v.ok,
+            "capsule with x- extension members failed Swift verification: " +
+            v.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" }.joined(separator: ", ")
+        )
+        XCTAssertEqual(v.trustedSignerCount, 1, "expected one trusted signer")
+    }
+
+    /// Post-seal mutation of the manifest's unknown member must fail at
+    /// manifest_hash — the member is inside the hashed document.
+    func testTamperedUnknownManifestFieldFails() throws {
+        let bytes = try loadUnknownFieldsFixture("tampered-unknown-manifest-field.capsule")
+        let pub = try unknownFieldsOriginatorPubkey()
+
+        let v = CapsuleVerifier.verify(bytes, allowlist: [pub])
+        XCTAssertFalse(v.ok, "tampered-unknown-manifest-field.capsule unexpectedly verified")
+        XCTAssertEqual(check(v, "manifest_hash")?.ok, false,
+                       "manifest_hash should have failed for a mutated unknown manifest member")
+    }
+
+    /// Post-seal mutation of the envelope's unknown member must invalidate
+    /// the signature — the member is inside the signed canonical payload.
+    func testTamperedUnknownEnvelopeFieldFails() throws {
+        let bytes = try loadUnknownFieldsFixture("tampered-unknown-envelope-field.capsule")
+        let pub = try unknownFieldsOriginatorPubkey()
+
+        let v = CapsuleVerifier.verify(bytes, allowlist: [pub])
+        XCTAssertFalse(v.ok, "tampered-unknown-envelope-field.capsule unexpectedly verified")
+        XCTAssertEqual(check(v, "envelope_signature")?.ok, false,
+                       "envelope_signature should have failed for a mutated unknown envelope member")
+    }
+
+    /// Post-seal mutation of a chain event's unknown member must break the
+    /// event hash (and the content index covering chain/events.jsonl).
+    func testTamperedUnknownEventFieldFails() throws {
+        let bytes = try loadUnknownFieldsFixture("tampered-unknown-event-field.capsule")
+        let pub = try unknownFieldsOriginatorPubkey()
+
+        let v = CapsuleVerifier.verify(bytes, allowlist: [pub])
+        XCTAssertFalse(v.ok, "tampered-unknown-event-field.capsule unexpectedly verified")
+        let chain = check(v, "chain")
+        let ci = check(v, "content_index_hash")
+        XCTAssertTrue(
+            (chain?.ok == false) || (ci?.ok == false),
+            "expected chain or content_index_hash to fail; got chain=\(String(describing: chain)) ci=\(String(describing: ci))"
+        )
+    }
+
     // MARK: - Encrypted fixtures: v0.2 verify + decrypt
 
     /// The JS-built encrypted clean capsule passes Swift's L2 verifier
