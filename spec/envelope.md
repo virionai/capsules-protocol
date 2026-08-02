@@ -102,6 +102,35 @@ For each signer:
 6. `Ed25519.verify(public_key, signing_input, signature)`.
 7. Record per-signer `valid: true | false`.
 
+### Key and signature validation
+
+Before step 6, a verifier MUST reject the signer outright — recording
+`valid: false`, never calling into the signature primitive — when either:
+
+- the 32-byte public key is **non-canonically encoded**: with the x-sign
+  bit (the high bit of byte 31) masked off, the little-endian value is
+  `>= 2^255 - 19`; or
+- the public key is one of the **8 points whose order divides 8**. With the
+  sign bit masked off, the rejected y encodings are:
+  `0000…0000` (y = 0), `0100…0000` (y = 1),
+  `26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05`,
+  `c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a`, and
+  `ecff…ff7f` (y = p - 1).
+
+A verifier MUST also reject a signature whose `S` component (bytes 32..64,
+little-endian) is not reduced mod
+`L = 2^252 + 27742317777372353535851937790883648493` (RFC 8032 §5.1.7).
+
+A small-order public key is a forgery primitive that needs no private key:
+the attacker picks the key, sends a 64-byte all-zero signature, and varies
+any signed field until the cofactored verification equation happens to
+hold. Several widely used Ed25519 backends (OpenSSL, CryptoKit,
+`ed25519-dalek`'s non-strict `verify`) accept such keys, so the check
+belongs in the protocol implementation, not the backend.
+
+Negative conformance vectors for every case above are checked in at
+`spec/vectors/ed25519-key-validation.json`.
+
 Then:
 
 1. Recompute `manifest_hash` from the manifest as actually stored.
