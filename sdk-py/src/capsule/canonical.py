@@ -56,6 +56,12 @@ def _jcs_value(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(_jcs_value(x) for x in v) + "]"
     if isinstance(v, dict):
+        # Check keys BEFORE sorting: utf16_sort_key encodes to UTF-16-BE and
+        # would raise UnicodeEncodeError first, naming the codec rather than
+        # the acceptance rule the key actually broke.
+        for k in v:
+            if isinstance(k, str):
+                _assert_well_formed_unicode(k)
         keys = sorted(v.keys(), key=utf16_sort_key)
         parts = [_jcs_string(k) + ":" + _jcs_value(v[k]) for k in keys]
         return "{" + ",".join(parts) + "}"
@@ -63,6 +69,25 @@ def _jcs_value(v: Any) -> str:
 
 
 _MAX_SAFE_INTEGER = 2**53 - 1
+
+
+def _assert_well_formed_unicode(s: str) -> None:
+    """Raise unless every surrogate code point in *s* is absent.
+
+    A Python ``str`` is a sequence of code points and can hold a lone
+    surrogate (``"\\ud83d"``), which is not a Unicode scalar value and has
+    no UTF-8 encoding. The I-JSON acceptance boundary
+    (spec/canonicalization.md) forbids it: raise a named canonicalization
+    refusal here rather than letting the encoder fail three frames later
+    with a message that reads like tampering.
+    """
+    for ch in s:
+        c = ord(ch)
+        if 0xD800 <= c <= 0xDFFF:
+            raise ValueError(
+                f"JCS: unpaired surrogate U+{c:04X}; "
+                "strings must be well-formed Unicode"
+            )
 
 
 def _jcs_number(v: float) -> str:
@@ -107,11 +132,27 @@ def _jcs_number(v: float) -> str:
         head = digits[0] + ("." + digits[1:] if k > 1 else "")
         out = f"{head}e{'+' if e >= 0 else '-'}{abs(e)}"
 
+    # I-JSON acceptance boundary (spec/canonicalization.md): a plain integer
+    # literal — no "." and no "e" — must be exactly representable, or the
+    # token does not survive a round-trip through parsers that use native
+    # integers. Exponent-form tokens round-trip through every lane's double
+    # path and are accepted.
+    if "." not in out and "e" not in out and abs(v) > _MAX_SAFE_INTEGER:
+        raise ValueError(
+            "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1); "
+            "not representable identically across implementations"
+        )
+
     return ("-" + out) if negative else out
 
 
 def _jcs_string(s: str) -> str:
     out = ['"']
+    # I-JSON acceptance boundary (spec/canonicalization.md). Without this,
+    # the surrogate survives until .encode("utf-8") and the verifier reports
+    # an opaque "recompute failed: 'utf-8' codec can't encode character"
+    # that reads like tampering rather than an encoder fault.
+    _assert_well_formed_unicode(s)
     for ch in s:
         c = ord(ch)
         if c == 0x22:
