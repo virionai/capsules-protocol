@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Six vector shapes are recognized under spec/vectors/ (plus the
+// Seven vector shapes are recognized under spec/vectors/ (plus the
 // signing-input doc, documented at checkSigningInput below):
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
@@ -44,6 +44,13 @@
 //      each key to its index in `keys`, canonicalize, and reproduce the
 //      pinned bytes. RFC 8785 3.2.3 sorts members on UTF-16 code units,
 //      which is neither code-point order nor a collation-aware order.
+//
+//   7. An I-JSON acceptance set (meta.kind === "ijson-acceptance"): a
+//      `vectors` array of `{ name, input_json, expect, canonical?, reason? }`
+//      entries carrying raw JSON text that must be accepted (with its
+//      canonical form pinned) or refused, per spec/canonicalization.md. A
+//      `reject` vector is satisfied by refusal at parse time OR at
+//      canonicalization time; both are conforming.
 //
 // keys.json (the tamper-detection fixture keypair, consumed by the
 // Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
@@ -506,6 +513,75 @@ function isSigningInputVector(doc) {
   return doc && typeof doc === "object" && doc.meta?.kind === "signing-input";
 }
 
+function isIJsonAcceptanceSet(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "ijson-acceptance";
+}
+
+// I-JSON acceptance vectors (spec/canonicalization.md). `input_json` is raw
+// JSON text: each lane feeds it to its own parser, then canonicalizes. A
+// `reject` vector is satisfied by refusal at EITHER stage — some lanes' JSON
+// parsers refuse lone-surrogate escapes outright, others accept them and the
+// canonicalizer refuses. What is normative is that the value never reaches a
+// hash.
+const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate"]);
+
+function checkIJsonAcceptance(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (typeof v.input_json !== "string") {
+      fail(`${label}: input_json must be a string of raw JSON text`);
+      continue;
+    }
+    let parsed;
+    let parseFailed = false;
+    try {
+      parsed = JSON.parse(v.input_json);
+    } catch {
+      parseFailed = true;
+    }
+    if (v.expect === "accept") {
+      if (parseFailed) {
+        fail(`${label}: expected accept, but the JSON text does not parse`);
+        continue;
+      }
+      let got;
+      try {
+        got = Buffer.from(jcs(parsed)).toString("utf8");
+      } catch (err) {
+        fail(`${label}: expected accept, but canonicalization threw: ${err.message}`);
+        continue;
+      }
+      if (got !== v.canonical) {
+        fail(`${label}: canonical mismatch: got ${got}, vector says ${v.canonical}`);
+      }
+      continue;
+    }
+    if (v.expect !== "reject") {
+      fail(`${label}: expect must be "accept" or "reject"`);
+      continue;
+    }
+    if (!IJSON_REASONS.has(v.reason)) {
+      fail(`${label}: unknown reject reason '${v.reason}'`);
+      continue;
+    }
+    if (parseFailed) continue; // parse-stage refusal is conforming
+    let threw = false;
+    try {
+      jcs(parsed);
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      fail(`${label}: expected canonicalization to reject (${v.reason}), but it succeeded`);
+    }
+  }
+}
+
 function isKeyValidationVector(doc) {
   return doc && typeof doc === "object" && doc.meta?.kind === "ed25519-verify";
 }
@@ -609,6 +685,7 @@ async function checkFile(path) {
   // Must sit before isCollection, which would otherwise swallow the file
   // (it also carries a `vectors` array).
   else if (doc?.meta?.kind === "jcs-key-order") checkKeyOrderVectors(path, doc);
+  else if (isIJsonAcceptanceSet(doc)) checkIJsonAcceptance(path, doc);
   else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
   else if (isKeyValidationVector(doc)) checkKeyValidationVectors(path, doc);
   else if (isAttestationVectorSet(doc)) checkAttestationVectors(path, doc);
@@ -618,7 +695,8 @@ async function checkFile(path) {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
         `an outcome-vector collection, a signing-input doc, an ed25519-verify doc, ` +
-        `an identity-attestation set, a jcs number set, or a jcs key-order set)`
+        `an identity-attestation set, an ijson-acceptance set, a jcs number set, ` +
+        `or a jcs key-order set)`
     );
   }
 }

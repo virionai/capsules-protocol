@@ -8,6 +8,7 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -257,6 +258,45 @@ final class SpecRegistryTests: XCTestCase {
                 Hash.sha256Hex(canonical),
                 try XCTUnwrap(vector["sha256_hex"] as? String),
                 name
+            )
+        }
+    }
+
+    // MARK: - ijson-acceptance.json
+
+    /// Normative reject-reason vocabulary from `ijson-acceptance.json`.
+    private static let ijsonReasons: Set<String> = ["integer_out_of_range", "unpaired_surrogate"]
+
+    /// spec/canonicalization.md: the acceptance boundary is identical in
+    /// every lane. A reject vector is satisfied by refusal at parse time OR
+    /// at the canonicalization gate — whichever this lane reaches first.
+    /// Foundation refuses lone-surrogate escapes at parse; `assertAcceptable`
+    /// (applied inside `parseJSON`) refuses out-of-range integer literals.
+    func testIJsonAcceptanceRegistry() throws {
+        let path = Self.vectorsDir.appendingPathComponent("ijson-acceptance.json")
+        let doc = try loadJSON(path)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "ijson-acceptance registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let text = try XCTUnwrap(vector["input_json"] as? String, "\(name): input_json")
+            let expect = try XCTUnwrap(vector["expect"] as? String, "\(name): expect")
+            let data = Data(text.utf8)
+            if expect == "accept" {
+                let value = try CapsuleReader.parseJSON(data)
+                XCTAssertEqual(
+                    try JCS.canonical(value),
+                    try XCTUnwrap(vector["canonical"] as? String),
+                    name
+                )
+                continue
+            }
+            XCTAssertEqual(expect, "reject", "\(name): expect must be accept or reject")
+            let reason = try XCTUnwrap(vector["reason"] as? String, "\(name): reason")
+            XCTAssertTrue(Self.ijsonReasons.contains(reason), "\(name): unknown reason \(reason)")
+            XCTAssertThrowsError(
+                try CapsuleReader.parseJSON(data),
+                "\(name): the value must never reach a hash"
             )
         }
     }

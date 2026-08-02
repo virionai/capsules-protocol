@@ -9,6 +9,7 @@
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
+//   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -21,6 +22,7 @@ import com.google.gson.JsonParser
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -135,6 +137,40 @@ class SpecRegistryTest {
             val canon = JCS.bytes(JCSValue.Obj(pairs))
             assertEquals(v.get("canonical_utf8_hex").asString, CapsuleCrypto.bytesToHex(canon), name)
             assertEquals(v.get("sha256_hex").asString, CapsuleCrypto.sha256Hex(canon), name)
+        }
+    }
+
+    /**
+     * spec/canonicalization.md: the acceptance boundary is identical in
+     * every lane. A reject vector is satisfied by refusal at parse time OR
+     * at the canonicalization gate — whichever this lane reaches first.
+     * Gson accepts lone-surrogate escapes, so in this lane both halves are
+     * enforced by `JCS.assertAcceptable` inside `CapsuleReader.parseJson`.
+     */
+    @Test
+    fun ijsonAcceptanceRegistry() {
+        val reasons = setOf("integer_out_of_range", "unpaired_surrogate")
+        val file = File(vectorsDir(), "ijson-acceptance.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "ijson-acceptance registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = v.get("input_json").asString.toByteArray(Charsets.UTF_8)
+            if (v.get("expect").asString == "accept") {
+                assertEquals(
+                    v.get("canonical").asString,
+                    JCS.canonical(CapsuleReader.parseJson(bytes)),
+                    name,
+                )
+                continue
+            }
+            val reason = v.get("reason").asString
+            assertTrue(reasons.contains(reason), "$name: unknown reason $reason")
+            assertFailsWith<IllegalArgumentException>(
+                "$name: the value must never reach a hash"
+            ) { CapsuleReader.parseJson(bytes) }
         }
     }
 

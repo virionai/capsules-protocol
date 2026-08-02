@@ -12,6 +12,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - chain-binding/vectors.json      (empty-chain anchor + stored-line hashing)
   - signing-input.json              (byte-level signing/hashing pins)
   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
+  - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -40,6 +41,10 @@ CHAIN_BINDING = VECTORS / "chain-binding" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
+IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
+
+# Normative reject-reason vocabulary from ijson-acceptance.json.
+IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate"}
 
 # Per-lane mapping of the registry's normative open-stage reason
 # categories onto this SDK's error messages. Every reader error here is a
@@ -206,6 +211,34 @@ def test_malformed_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path
 @pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED_SHAPE))
 def test_malformed_shape_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
     _assert_registry_vector(doc, vector, base)
+
+
+def _ijson_params():
+    if not IJSON_ACCEPTANCE.exists():
+        return []
+    doc = _load(IJSON_ACCEPTANCE)
+    return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
+
+
+@pytest.mark.parametrize("vector", _ijson_params())
+def test_ijson_acceptance_boundary(vector: dict):
+    """spec/canonicalization.md: identical accept/reject boundary in every lane.
+
+    A reject vector is satisfied by refusal at parse time OR at
+    canonicalization time — whichever this lane reaches first.
+    """
+    name = vector["name"]
+    try:
+        parsed = json.loads(vector["input_json"])
+    except ValueError:
+        assert vector["expect"] == "reject", f"{name}: an accept vector must parse"
+        return
+    if vector["expect"] == "accept":
+        assert jcs(parsed).decode("utf-8") == vector["canonical"], name
+        return
+    assert vector["reason"] in IJSON_REASONS, f"{name}: unknown reason {vector['reason']!r}"
+    with pytest.raises(ValueError):
+        jcs(parsed)
 
 
 def test_signing_input_pins():
