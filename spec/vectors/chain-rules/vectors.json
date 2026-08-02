@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "name": "chain-rules",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected verifier outcomes for the per-event field rules in chain.md (verification steps 6 and 7). The step-6 actor rule is CONDITIONAL on the manifest's own claim: a NON-EMPTY participants[] binds every event actor to the declared set (or the literal system:host), fail-closed; an EMPTY participants[] is the manifest making no claim about who acted — a weaker claim made honestly — so verification succeeds and the verifier MUST report the unbound actor set machine-readably (expected.actor_set_bound) and in notes. Conditioning on the list is safe because participants is covered by manifest_hash inside the signed payload. The kind enum is closed in EVERY tier. All three capsules are cryptographically well-formed — real signatures, correct manifest hash, correct content index — so a verifier that skips the rule under test reports the wrong outcome and fails this registry.",
+    "generator": "sdk-js/tools/generate-chain-rule-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "notes": [
+    "chain.md verification step 6: when manifest.participants[] is non-empty, confirm actor appears in it or is system:host; when empty, report the unbound actor set instead of rejecting.",
+    "chain.md verification step 7: kind is one of decision | observation | mutation | session | checkpoint; readers reject unknown kinds unconditionally.",
+    "Both rules are per-event: a conformant reader reports which seq failed which check and does not stop at the first error."
+  ],
+  "vectors": [
+    {
+      "name": "actor-not-participant",
+      "capsule_file": "output/actor-not-participant.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["chain"],
+        "actor_set_bound": true,
+        "error_includes": "not in manifest.participants and not system:host"
+      },
+      "note": "manifest.participants declares human:origin; the single event's actor is human:mallory. The audit-spoofing shape the rule exists to catch: every hash and signature verifies, only the actor rule can fail it."
+    },
+    {
+      "name": "unknown-kind",
+      "capsule_file": "output/unknown-kind.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["chain"],
+        "error_includes": "is not one of decision, observation, mutation, session, checkpoint"
+      },
+      "note": "The single event declares kind \"gossip\". Closed enum in every tier: a custom kind is not a weaker claim, it is unreadable to the foreign LLM reader."
+    },
+    {
+      "name": "unbound-actors",
+      "capsule_file": "output/unbound-actors.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": false,
+        "notes_includes": "chain actors are not bound to a declared participant set"
+      },
+      "note": "Positive control: participants[] is EMPTY and the single event names human:origin anyway. Absence is a weaker claim made honestly — the verifier MUST verify this capsule and MUST report the unbound actor set, never an unqualified pass and never a rejection."
+    }
+  ]
+}

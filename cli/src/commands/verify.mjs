@@ -51,6 +51,7 @@ export async function verifyCmd(argv) {
         content_index: result.contentIndex,
         envelope: result.envelope,
         signer_set: result.signerSet,
+        actor_set: result.actorSet,
         notes: result.notes,
         trusted_signer_count: result.trustedSignerCount,
       },
@@ -78,6 +79,14 @@ export async function verifyCmd(argv) {
   out(`  [${check(result.envelope.ok)}] envelope_signature`);
   out(`  [${check(result.signerSet.ok)}] signer_set` +
       (result.signerSet.bound ? "" : "  — unbound (manifest.signer_commitment absent)"));
+  // Actor-set binding: violations surface as chain errors; the line
+  // fails when any chain error is an actor-rule error, and bound/unbound
+  // is the honest-assurance report (mirrors signer_set).
+  const actorErrors = (result.chain.errors ?? []).filter((ce) =>
+    String(ce.message ?? "").includes("not in manifest.participants"));
+  out(`  [${check(actorErrors.length === 0)}] actor_set` +
+      (actorErrors.length ? `  (${actorErrors.length} error(s))` : "") +
+      (result.actorSet.bound ? "" : "  — unbound (manifest.participants empty)"));
   out("");
   out("Signers:");
   if (result.envelope.signers?.length) {

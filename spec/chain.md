@@ -26,10 +26,23 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
 - `seq`: 1-based integer, strictly monotonic per chain.
 - `event_id`: free-form, conventionally `evt_NNN`. Not cryptographically
   bound; for human reference only.
-- `actor`: `human:`, `ai:`, `system:`, or `capsule:` prefix. Must appear
-  in the manifest's `participants[]` *or* be the literal `system:host`
-  for backstop events emitted by the host runtime.
-- `kind`: one of the listed values. Readers reject unknown kinds.
+- `actor`: `human:`, `ai:`, `system:`, or `capsule:` prefix. When the
+  manifest declares a non-empty `participants[]`, the actor must appear
+  there *or* be the literal `system:host` for backstop events emitted by
+  the host runtime — fail-closed. When `participants[]` is empty, the
+  manifest has made no claim about who acted: readers accept any actor
+  and report the reduced assurance instead (see "Verification"). The
+  conditional is safe because `participants[]` lives in the manifest,
+  covered by `manifest_hash` inside the signed payload — an attacker
+  cannot empty the list to escape the check without breaking every
+  envelope signature. Writers reject an undeclared actor at append time
+  rather than registering it implicitly — declaring who may act is the
+  host's decision, not the SDK's.
+- `kind`: one of the listed values, in EVERY profile. Readers reject
+  unknown kinds and writers refuse to append them. Unlike the actor
+  rule this is not an assurance tier: a capsule with a custom event
+  kind is not making a weaker claim, it is unreadable to the foreign
+  LLM reader the format exists to serve.
 - `timestamp`: ISO 8601 UTC, no fractional seconds. Advisory only;
   authoritative time-binding is the envelope's `signed_at`.
 - `payload`: free-form JSON object. May contain LLM-authored text.
@@ -155,10 +168,34 @@ The reader walks the chain in order:
 3. Confirm `prev_hash` of event N equals `hash` of event N-1.
 4. Confirm event 1's `prev_hash` is 32 zero bytes (hex `000...0`).
 5. Confirm `seq` is strictly monotonic from 1.
-6. Confirm `actor` appears in manifest participants or is `system:host`.
+6. When the manifest declares a non-empty `participants[]`, confirm
+   `actor` appears in it or is `system:host`. When `participants[]` is
+   empty the manifest binds no actor set: the reader MUST NOT reject,
+   and MUST report — machine-readably and in human output — that the
+   chain's actors are not bound to a declared participant set. This
+   mirrors the signer-set rule: presence binds, absence reports.
+7. Confirm `kind` is one of the five values in the enum above —
+   unconditionally.
 
 A mismatch at any step fails verification. The reader reports which
 event failed which check; it does not stop at the first error.
+
+Steps 6 and 7 are per-event field rules, not chain-integrity rules: a
+capsule can have a perfectly linked, correctly signed chain and still
+fail them. Conformance fixtures for both — plus the empty-participants
+positive control, which MUST verify with the unbound-actor-set report —
+live in `spec/vectors/chain-rules/`.
+
+## Writer obligations
+
+A writer MUST NOT emit an event that a reader would reject at steps 6
+or 7. In practice that means the builder validates `actor` and `kind`
+when the event is appended, so the failure surfaces at the call site
+that introduced it rather than at some future reader. A builder that
+auto-registers an undeclared actor into `participants[]` is
+non-conformant: it converts an authorization question into a silent
+side effect. A builder with an empty `participants[]` may append any
+actor — the resulting capsule makes the visibly weaker claim above.
 
 When the chain has zero events, steps 1-6 are vacuous; the reader
 instead enforces the null-anchor rule of "Empty chains" (all three

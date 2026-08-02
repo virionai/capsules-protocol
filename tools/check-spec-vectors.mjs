@@ -250,6 +250,15 @@ async function checkCollection(path, doc) {
         `${label}: expected signerSet.bound=${v.expected.signer_set_bound}, got ${result.signerSet.bound}`,
       );
     }
+    // Actor-set binding (chain.md step 6) follows the same contract: a
+    // non-empty manifest.participants[] binds the chain's actors; an
+    // empty one must be REPORTED as unbound, never rejected.
+    if (typeof v.expected.actor_set_bound === "boolean" &&
+        result.actorSet.bound !== v.expected.actor_set_bound) {
+      fail(
+        `${label}: expected actorSet.bound=${v.expected.actor_set_bound}, got ${result.actorSet.bound}`,
+      );
+    }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];
       if (!pred) {

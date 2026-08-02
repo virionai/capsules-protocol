@@ -10,6 +10,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
   - signer-set/vectors.json         (signer-set binding outcomes)
   - chain-binding/vectors.json      (empty-chain anchor + stored-line hashing)
+  - chain-rules/vectors.json        (per-event actor + kind field rules)
   - signing-input.json              (byte-level signing/hashing pins)
   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 
@@ -37,6 +38,7 @@ MALFORMED_SHAPE = VECTORS / "malformed-shape" / "vectors.json"
 UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 CHAIN_BINDING = VECTORS / "chain-binding" / "vectors.json"
+CHAIN_RULES = VECTORS / "chain-rules" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
@@ -111,6 +113,14 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
             f"{name}: expected signer_set.bound={expected['signer_set_bound']}, "
             f"got {result['signer_set']}"
         )
+    if "actor_set_bound" in expected:
+        # Actor-set binding (chain.md step 6) follows the signer-set
+        # contract: a non-empty manifest.participants[] binds the chain's
+        # actors; an empty one must be REPORTED as unbound, never rejected.
+        assert result["actor_set"]["bound"] is expected["actor_set_bound"], (
+            f"{name}: expected actor_set.bound={expected['actor_set_bound']}, "
+            f"got {result['actor_set']}"
+        )
     if expected.get("notes_includes"):
         # Honest-reporting pin: the verifier must REPORT the weaker claim
         # machine-readably (e.g. a zero-event chain that was not walked).
@@ -178,6 +188,23 @@ def test_chain_binding_registry_outcomes(doc: dict, vector: dict, base: pathlib.
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
     _assert_verify_outcome(vector["name"], vector["expected"], result)
 
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(CHAIN_RULES))
+def test_chain_rule_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """chain.md per-event field rules (verification steps 6 and 7).
+
+    The actor rule is conditional on the manifest's own claim: a
+    non-empty participants[] binds every event actor to the declared set
+    or system:host (fail-closed); an empty one verifies with
+    actor_set.bound=False plus a note — absence is a weaker claim made
+    honestly. The kind enum is closed in every tier. All three fixtures
+    are cryptographically well-formed, so only these rules decide them.
+    """
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(vector["name"], vector["expected"], result)
 
 
 def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None:

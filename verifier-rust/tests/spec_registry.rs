@@ -10,6 +10,7 @@
 //!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //!   - signer-set/vectors.json         (signer-set binding outcomes)
 //!   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
+//!   - chain-rules/vectors.json        (per-event actor + kind field rules)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!
@@ -123,6 +124,16 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
             result.signer_set
         );
     }
+    // Actor-set binding (chain.md step 6) follows the signer-set
+    // contract: a non-empty manifest.participants[] binds the chain's
+    // actors; an empty one must be REPORTED as unbound, never rejected.
+    if let Some(bound) = expected["actor_set_bound"].as_bool() {
+        assert_eq!(
+            result.actor_set.bound, bound,
+            "{name}: expected actor_set.bound={bound}; got {:?}",
+            result.actor_set
+        );
+    }
     // Honest-reporting pin: some rules require the verifier to REPORT a
     // weaker claim machine-readably (e.g. a zero-event chain that was not
     // walked), not just to pass/fail.
@@ -222,6 +233,28 @@ fn signer_set_registry_outcomes() {
 #[test]
 fn chain_binding_registry_outcomes() {
     let path = vectors_dir().join("chain-binding/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// chain.md per-event field rules (verification steps 6 and 7). The
+/// actor rule is conditional on the manifest's own claim: a non-empty
+/// participants[] binds every event actor to the declared set or
+/// `system:host` (fail-closed); an empty one verifies with
+/// `actor_set.bound=false` plus a note — absence is a weaker claim made
+/// honestly. The kind enum is closed in every tier. All three fixtures
+/// are cryptographically well-formed, so only these rules decide them.
+#[test]
+fn chain_rule_registry_outcomes() {
+    let path = vectors_dir().join("chain-rules/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);
