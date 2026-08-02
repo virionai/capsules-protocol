@@ -20,6 +20,7 @@ pub mod zip_reader;
 #[cfg(test)]
 mod test_support;
 
+pub use chain::{is_valid_event_kind, EVENT_KINDS};
 pub use crypto::{
     bytes_to_hex, ed25519_verify, hex_to_bytes, sha256, sha256_hex, CryptoError,
 };
@@ -31,7 +32,7 @@ pub use schemas::{
     SignerCommitmentEntry,
 };
 pub use verifier::{
-    verify_capsule, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome, SignerSetCheck,
-    TopError, TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
+    verify_capsule, ActorSetCheck, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome,
+    SignerSetCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
 };
 pub use zip_reader::{unpack_zip, PathReason, ZipError, MAX_ENTRIES, MAX_TOTAL_BYTES};

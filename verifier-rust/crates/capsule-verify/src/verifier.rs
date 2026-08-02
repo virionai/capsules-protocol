@@ -34,7 +34,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chain::{first_and_entry_hash, verify_chain};
+use crate::chain::{first_and_entry_hash, is_valid_event_kind, verify_chain, EVENT_KINDS};
 use crate::crypto::{hex_to_bytes, sha256_hex};
 #[cfg(test)]
 use crate::decrypt::decrypt_inner_zip;
@@ -216,6 +216,18 @@ pub struct VerifyResult {
     /// reading).
     #[serde(default)]
     pub signer_set: SignerSetCheck,
+    /// Actor-set binding (chain.md step 6): the same claim shape as
+    /// `signer_set`. `bound=true` means `manifest.participants[]` is
+    /// non-empty and every chain event actor must be a member or the
+    /// literal `system:host` — failures surface in `chain.errors`,
+    /// fail-closed. `bound=false` means the manifest declares no
+    /// participants, i.e. no claim about who acted: verification can
+    /// still succeed at a visibly lower assurance, reported in `notes`.
+    /// Safe to condition on because `participants` is covered by
+    /// `manifest_hash` inside the signed payload — an attacker cannot
+    /// empty the list without breaking every envelope signature.
+    #[serde(default)]
+    pub actor_set: ActorSetCheck,
     /// Inner envelope signature check, populated when L3 verification ran
     /// and the inner envelope was successfully parsed. None for plain
     /// capsules, L2-only paths (no recipient key), or when L3 failed
@@ -270,6 +282,14 @@ pub struct SignerSetCheck {
     pub bound: bool,
     pub ok: bool,
     pub errors: Vec<String>,
+}
+
+/// Actor-set binding results (see [`VerifyResult::actor_set`]). The
+/// derived `Default` is `bound: false` — the honest shape for every
+/// early-return path (the capsule never reached the check).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ActorSetCheck {
+    pub bound: bool,
 }
 
 /// Aggregate envelope-signature results.
@@ -755,6 +775,21 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         errors.push(TopError::outer(TopErrorCategory::SignerSet, e.clone()));
     }
 
+    // ---- (10b') actor-set binding: PRESENCE BINDS, ABSENCE REPORTS ------
+    // Same claim shape as the signer set. A non-empty
+    // manifest.participants[] bound the chain walk above (fail-closed);
+    // an empty one is the manifest declining to name who acted, which
+    // verifies at a visibly lower assurance.
+    let actor_set_check = ActorSetCheck {
+        bound: !manifest.participants.is_empty(),
+    };
+    if !actor_set_check.bound {
+        notes.push(
+            "manifest.participants empty: chain actors are not bound to a declared participant set"
+                .to_string(),
+        );
+    }
+
     // ---- (10c) originator binding (invariant) ---------------------------
     // The manifest names an originator key — that key must actually have
     // sealed the capsule with a valid envelope signature under role
@@ -819,6 +854,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         content_index: content_index_check,
         envelope: envelope_check,
         signer_set: signer_set_check,
+        actor_set: actor_set_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -1174,19 +1210,41 @@ pub(crate) fn chain_walk_into(
         .errors
         .extend(walk_errors.into_iter().map(|e| e.into_string()));
 
-    // Per-event actor whitelist. Each event's actor must appear in
-    // manifest.participants[].actor_id OR equal "system:host" (matching the
-    // JS reference's `chain.md` rule).
+    // Per-event field rules (chain.md step 6 + the kind enum).
+    //
+    // The actor rule is CONDITIONAL on the manifest's own claim: a
+    // NON-EMPTY participants[] binds every event actor to the declared set
+    // (or the literal "system:host"), fail-closed. An EMPTY participants[]
+    // is the manifest making no claim about who acted — a weaker claim
+    // made honestly (template / open-publication tiers) — so the walk
+    // accepts any actor and the pipeline reports the reduced assurance
+    // (`actor_set.bound=false` plus a note) instead of rejecting. This is
+    // safe because participants is covered by manifest_hash inside the
+    // signed payload: an attacker cannot empty the list to escape the
+    // check without breaking every envelope signature.
     let participant_ids: std::collections::BTreeSet<&str> = manifest
         .participants
         .iter()
         .map(|p| p.actor_id.as_str())
         .collect();
     for e in events.iter().map(|p| &p.event) {
-        if e.actor != "system:host" && !participant_ids.contains(e.actor.as_str()) {
+        if !participant_ids.is_empty()
+            && e.actor != "system:host"
+            && !participant_ids.contains(e.actor.as_str())
+        {
             chain_check.errors.push(format!(
                 "seq {}: actor {:?} not in manifest.participants and not system:host",
                 e.seq, e.actor
+            ));
+        }
+        // The `kind` enum is closed in every tier: chain.md declares the
+        // set and says "Readers reject unknown kinds."
+        if !is_valid_event_kind(&e.kind) {
+            chain_check.errors.push(format!(
+                "seq {}: kind {:?} is not one of {}",
+                e.seq,
+                e.kind,
+                EVENT_KINDS.join(", ")
             ));
         }
     }
@@ -1358,8 +1416,9 @@ fn assemble_result(
         content_index: content_index_check,
         envelope: envelope_check,
         // Early-return shape: fail-closed (bound=false, ok=false) — the
-        // capsule never reached the signer-set check.
+        // capsule never reached the signer-set or actor-set checks.
         signer_set: SignerSetCheck::default(),
+        actor_set: ActorSetCheck::default(),
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -1374,6 +1433,135 @@ mod tests {
         chain_binding_capsule_bytes, clean_capsule_bytes, recipient_x25519_private_key,
         synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes,
     };
+
+    /// Shared plumbing for the chain-walk field-rule tests below: unpack
+    /// the clean fixture and hand back (manifest, envelope, events).
+    fn clean_walk_inputs() -> (Manifest, Envelope, Vec<crate::schemas::ParsedEvent>) {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let envelope: Envelope =
+            serde_json::from_slice(map.get("provenance/envelope.json").unwrap()).unwrap();
+        let events =
+            crate::schemas::parse_chain_jsonl(map.get("chain/events.jsonl").unwrap()).unwrap();
+        (manifest, envelope, events)
+    }
+
+    fn walk(
+        events: &[crate::schemas::ParsedEvent],
+        manifest: &Manifest,
+        envelope: &Envelope,
+    ) -> ChainCheck {
+        let mut chain_check = ChainCheck::default();
+        let mut errors: Vec<TopError> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        chain_walk_into(
+            events,
+            manifest,
+            envelope,
+            &mut chain_check,
+            &mut errors,
+            &mut notes,
+            TopErrorScope::Outer,
+        );
+        chain_check
+    }
+
+    /// chain.md step 6: when the manifest declares a non-empty
+    /// participants[], an actor that is neither a declared participant nor
+    /// `system:host` must surface a per-event chain error. Pins the exact
+    /// message shape — the JS, Python, Swift, and Kotlin lanes reproduce
+    /// this string verbatim (minus the `seq N: ` prefix where a lane
+    /// carries `{seq, message}` instead).
+    #[test]
+    fn actor_not_in_participants_surfaces_as_chain_error() {
+        let (manifest, envelope, mut events) = clean_walk_inputs();
+        assert!(
+            !manifest.participants.is_empty(),
+            "fixture must declare participants for this test to bind"
+        );
+        events[0].event.actor = "human:mallory".to_string();
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(!chain_check.ok, "undeclared actor must fail the chain check");
+        assert!(
+            chain_check.errors.iter().any(|e| e
+                == "seq 1: actor \"human:mallory\" not in manifest.participants and not system:host"),
+            "expected the step-6 actor error; got: {:?}",
+            chain_check.errors
+        );
+    }
+
+    /// chain.md step 6, the other half: an EMPTY participants[] is the
+    /// manifest making no claim about who acted — a weaker claim made
+    /// honestly. The walk must NOT reject any actor then; the reduced
+    /// assurance is reported by the pipeline (actor_set.bound=false plus a
+    /// note), not enforced. Safe because participants is covered by
+    /// manifest_hash inside the signed payload: an attacker cannot empty
+    /// the list without breaking the signature.
+    #[test]
+    fn empty_participants_skips_actor_rule() {
+        let (mut manifest, envelope, mut events) = clean_walk_inputs();
+        manifest.participants.clear();
+        // Mutate the typed view only (the raw tree feeds the hash
+        // recompute); the assertion below is about the ABSENCE of the
+        // actor error, not the hash.
+        events[0].event.actor = "human:anyone".to_string();
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(
+            !chain_check
+                .errors
+                .iter()
+                .any(|e| e.contains("not in manifest.participants")),
+            "empty participants must not reject any actor; got: {:?}",
+            chain_check.errors
+        );
+    }
+
+    /// chain.md "Field rules": `kind` is a closed enum and readers reject
+    /// unknown kinds — unconditionally, in every tier (unlike the actor
+    /// rule, a custom kind is not a weaker claim; it is unreadable to the
+    /// foreign LLM reader).
+    #[test]
+    fn unknown_event_kind_surfaces_as_chain_error() {
+        let (mut manifest, envelope, mut events) = clean_walk_inputs();
+        events[0].event.kind = "gossip".to_string();
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(!chain_check.ok, "unknown kind must fail the chain check");
+        assert!(
+            chain_check.errors.iter().any(|e| e
+                == "seq 1: kind \"gossip\" is not one of decision, observation, mutation, session, checkpoint"),
+            "expected the kind-enum error; got: {:?}",
+            chain_check.errors
+        );
+
+        // And the enum stays closed with empty participants too.
+        manifest.participants.clear();
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(
+            !chain_check.ok,
+            "unknown kind must fail even when participants is empty"
+        );
+    }
+
+    /// Every kind in the enum passes the same walk.
+    #[test]
+    fn all_enum_kinds_accepted() {
+        let (manifest, envelope, base) = clean_walk_inputs();
+        for kind in EVENT_KINDS {
+            let mut events = base.clone();
+            events[0].event.kind = kind.to_string();
+            let chain_check = walk(&events, &manifest, &envelope);
+            assert!(
+                !chain_check.errors.iter().any(|e| e.contains("is not one of")),
+                "kind {kind:?} must be accepted; got: {:?}",
+                chain_check.errors
+            );
+        }
+    }
 
     /// L2 happy path. The clean fixture must verify cleanly with no errors,
     /// no chain or content_index issues, and every signature valid. With no

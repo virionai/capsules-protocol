@@ -18,6 +18,23 @@ use crate::schemas::ParsedEvent;
 /// Genesis previous-hash: 32 zero bytes.
 const GENESIS_PREV: [u8; 32] = [0u8; 32];
 
+/// The closed `kind` enum from `chain.md` "Field rules". Readers reject
+/// unknown kinds and the reference builders refuse to append them — in
+/// every tier, because a custom kind is not a weaker claim, it is
+/// unreadable to the foreign LLM reader the format serves.
+pub const EVENT_KINDS: [&str; 5] = [
+    "decision",
+    "observation",
+    "mutation",
+    "session",
+    "checkpoint",
+];
+
+/// True when `kind` is one of the five values `chain.md` allows.
+pub fn is_valid_event_kind(kind: &str) -> bool {
+    EVENT_KINDS.contains(&kind)
+}
+
 /// One human-readable error from a chain walk. The message is prefixed with
 /// the event sequence number to match the JS reference's error shape, which
 /// reports `{ seq, message }` per error. Top-level callers concatenate as
