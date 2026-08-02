@@ -30,6 +30,9 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 
+// Keys the trust-policy tests need; populated by buildFixtures().
+const KEYS = { originatorPublicKeyHex: "", strangerPublicKeyHex: "" };
+
 function run(args, opts = {}) {
   const res = spawnSync("node", [BIN, ...args], {
     encoding: "utf8",
@@ -60,6 +63,9 @@ async function buildFixtures() {
   mkdirSync(FIXTURES, { recursive: true });
 
   const originator = generateEd25519();
+  KEYS.originatorPublicKeyHex = originator.publicKeyHex;
+  // A perfectly valid key that signed nothing — the "wrong signer" case.
+  KEYS.strangerPublicKeyHex = generateEd25519().publicKeyHex;
   const builder = new CapsuleBuilder({
     originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke" },
     participants: [
@@ -293,6 +299,92 @@ section("keygen");
   check("keygen --json output parses", parsedK && parsedK.algorithm === "Ed25519");
   check("keygen produces 64-hex public key", parsedK && /^[0-9a-f]{64}$/.test(parsedK.public_key_hex ?? ""));
   check("keygen produces 64-hex private key", parsedK && /^[0-9a-f]{64}$/.test(parsedK.private_key_hex ?? ""));
+}
+
+// ----------------------------------------------------------------------
+
+section("verify - trust policy drives the verdict (F04)");
+
+{
+  const okKey = KEYS.originatorPublicKeyHex;
+  const wrongKey = KEYS.strangerPublicKeyHex;
+
+  // Allowlisted signer: integrity AND policy hold.
+  const match = run(["verify", CLEAN, "--allowlist", okKey]);
+  check("allowlisted signer exits 0", match.code === 0);
+  check("allowlisted signer prints qualified PASS",
+    /Result: PASS \(integrity verified; trust policy satisfied\)/.test(match.stdout));
+  check("allowlisted signer shows trusted=true", /trusted=true/.test(match.stdout));
+
+  // Supplied-but-unmatched allowlist: the capsule is signed by someone
+  // the operator did not trust. That must FAIL loudly, not PASS quietly.
+  const miss = run(["verify", CLEAN, "--allowlist", wrongKey]);
+  check("unmatched allowlist exits 1", miss.code === 1);
+  check("unmatched allowlist prints FAIL", /Result: FAIL/.test(miss.stdout));
+  check("unmatched allowlist is loud about why",
+    /no signer matches the supplied allowlist/.test(miss.stdout));
+
+  const missJson = run(["verify", CLEAN, "--allowlist", wrongKey, "--json"]);
+  check("unmatched allowlist --json exits 1", missJson.code === 1);
+  let missParsed;
+  try { missParsed = JSON.parse(missJson.stdout); } catch { /* noop */ }
+  check("unmatched --json ok=false but integrity_ok=true",
+    missParsed && missParsed.ok === false && missParsed.integrity_ok === true);
+  check("unmatched --json trust block says unsatisfied",
+    missParsed && missParsed.trust
+      && missParsed.trust.policy === "allowlist"
+      && missParsed.trust.satisfied === false
+      && missParsed.trust.trusted_signer_count === 0);
+
+  const matchJson = run(["verify", CLEAN, "--allowlist", okKey, "--json"]);
+  let matchParsed;
+  try { matchParsed = JSON.parse(matchJson.stdout); } catch { /* noop */ }
+  check("matched --json ok=true and trust satisfied",
+    matchParsed && matchParsed.ok === true && matchParsed.trust
+      && matchParsed.trust.satisfied === true
+      && matchParsed.trust.trusted_signer_count === 1);
+
+  // No allowlist: no policy. PASS, but the verdict must say what it covers.
+  const none = run(["verify", CLEAN]);
+  check("no allowlist still exits 0", none.code === 0);
+  check("no-allowlist PASS is qualified as integrity-only",
+    /Result: PASS \(integrity only/.test(none.stdout));
+  check("no-allowlist report says signer identity not checked",
+    /signer identity not checked/.test(none.stdout));
+
+  const noneJson = run(["verify", CLEAN, "--json"]);
+  let noneParsed;
+  try { noneParsed = JSON.parse(noneJson.stdout); } catch { /* noop */ }
+  check("no-allowlist --json trust: policy none, satisfied null",
+    noneParsed && noneParsed.ok === true && noneParsed.trust
+      && noneParsed.trust.policy === "none"
+      && noneParsed.trust.satisfied === null);
+
+  // Integrity still gates: a tampered capsule fails even when the trust
+  // policy would be satisfied.
+  const tm = run(["verify", TAMPERED, "--allowlist", okKey]);
+  check("tampered capsule fails even with satisfied policy", tm.code === 1);
+
+  // A trust-config value that can never match a signer is a usage error
+  // (parity with the Rust CLI's --allowlist validation), not a quiet
+  // trusted=false.
+  const badKey = run(["verify", CLEAN, "--allowlist", "not-a-key"]);
+  check("malformed allowlist entry exits 2", badKey.code === 2);
+  check("malformed allowlist message states the expected shape",
+    /64 hex/.test(badKey.stderr));
+}
+
+// ----------------------------------------------------------------------
+
+section("verify/inspect - self-attested time is labelled (F48)");
+
+{
+  const r = run(["verify", CLEAN]);
+  check("verify labels sealed-at as attested", /Sealed at \(attested\):/.test(r.stdout));
+  check("verify attested label carries the caveat", /signer-supplied/.test(r.stdout));
+
+  const i = run(["inspect", CLEAN]);
+  check("inspect labels sealed-at as attested", /Sealed at \(attested\):/.test(i.stdout));
 }
 
 // ----------------------------------------------------------------------

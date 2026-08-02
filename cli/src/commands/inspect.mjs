@@ -76,7 +76,7 @@ export async function inspectCmd(argv) {
   out(`Capsule ID:             ${m.id}`);
   out(`Originator:             ${m.originator.label || "(no label)"}`);
   out(`  pubkey (Ed25519):     ${m.originator.public_key}`);
-  out(`Sealed at:              ${env.signed_at}`);
+  out(`Sealed at (attested):   ${env.signed_at}`);
   out(`Encryption:             ${encrypted ? `${env.cipher} (encrypted)` : "none (plain)"}`);
   out(`Content-index entries:  ${m.content_index?.files?.length ?? 0}`);
   out(`Chain length:           ${encrypted ? "(encrypted — run verify --decryption-key to inspect)" : chainLen}`);
