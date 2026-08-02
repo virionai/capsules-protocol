@@ -6,6 +6,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
 
   - tamper-detection/vectors.json   (verify-stage outcomes)
   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+  - unknown-fields/vectors.json     (unknown-member preservation outcomes)
   - signing-input.json              (byte-level signing/hashing pins)
 
 The `reason` categories are normative; the regexes below map each
@@ -28,6 +29,7 @@ from capsule.envelope import envelope_canonical_payload, envelope_signing_input
 VECTORS = pathlib.Path(__file__).resolve().parents[2] / "spec" / "vectors"
 TAMPER = VECTORS / "tamper-detection" / "vectors.json"
 MALFORMED = VECTORS / "malformed-layout" / "vectors.json"
+UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 
 # Per-lane mapping of the registry's normative open-stage reason
@@ -92,6 +94,22 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(TAMPER))
 def test_tamper_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(vector["name"], vector["expected"], result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(UNKNOWN_FIELDS))
+def test_unknown_fields_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Unknown members in the hashed documents MUST be preserved and hashed.
+
+    The positive vector carries x- extension members in manifest.json,
+    provenance/envelope.json, and a chain event, all covered by the seal;
+    it must verify ok=true. The tampered variants mutate an unknown member
+    post-seal and must fail in the pinned area — proving the members are
+    inside the integrity envelope, not decoration.
+    """
     data = (base / vector["capsule_file"]).read_bytes()
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))

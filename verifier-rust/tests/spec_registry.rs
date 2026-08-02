@@ -7,6 +7,7 @@
 //!
 //!   - tamper-detection/vectors.json   (verify-stage outcomes)
 //!   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!
 //! The registry's `reason` categories are normative; the substring tables
@@ -117,6 +118,30 @@ fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyRe
 #[test]
 fn tamper_registry_outcomes() {
     let path = vectors_dir().join("tamper-detection/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Unknown members in the hashed documents MUST be preserved and hashed
+/// (spec/manifest.md "Unknown members", spec/envelope.md, spec/chain.md).
+/// The positive vector carries `x-` extension members in manifest.json,
+/// provenance/envelope.json, and a chain event, all covered by the seal;
+/// it must verify ok=true. The tampered variants mutate an unknown member
+/// post-seal and must fail in the pinned area — proving the members are
+/// inside the integrity envelope, not decoration. A verifier that projects
+/// the documents onto a fixed schema and re-serializes the projection for
+/// hashing drops the members and fails the positive vector.
+#[test]
+fn unknown_fields_registry_outcomes() {
+    let path = vectors_dir().join("unknown-fields/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);

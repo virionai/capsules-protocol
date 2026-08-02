@@ -18,7 +18,11 @@ lane):
    - *Verify stage* (default): `{ ok, failing?, error_includes? }`, where
      `failing` names the result areas that must fail (`content_index`,
      `chain`, `envelope`, `encrypted_blob`). See
-     `tamper-detection/vectors.json`.
+     `tamper-detection/vectors.json` and `unknown-fields/vectors.json`
+     (the latter pins the unknown-member preservation rule of
+     `spec/manifest.md` / `spec/envelope.md` / `spec/chain.md`: a capsule
+     carrying `x-` extension members must verify, and a post-seal
+     mutation of an unknown member must fail).
    - *Open stage*: `{ ok: false, stage: "open", reason, detail? }` — the
      reader must refuse the container before verification, for the named
      `reason` category (by error, exception, or fail-closed result, per the
@@ -30,7 +34,7 @@ lane):
 
    Independent implementations SHOULD reproduce these outcomes; the Python
    (`sdk-py/tests/test_spec_registry.py`) and Rust
-   (`verifier-rust/tests/spec_registry.rs`) lanes consume both collections
+   (`verifier-rust/tests/spec_registry.rs`) lanes consume these collections
    directly.
 
 3. **Byte-level signing-input vector** (`signing-input.json`, detected by
@@ -49,8 +53,9 @@ lane):
    RFC 8785 serialization. Implementations must parse the bit pattern (not
    the expected string) and serialize it.
 
-Other JSON here (e.g. `tamper-detection/output/keys.json`) is supporting
-material, not a vector, and is ignored by the checker.
+Other JSON here (e.g. `tamper-detection/output/keys.json` and
+`unknown-fields/output/keys.json`) is supporting material, not a vector,
+and is ignored by the checker.
 
 Generators (deterministic; regeneration is an intentional spec change and
 should be reviewed with the byte-level diff):
@@ -58,6 +63,8 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-tamper-fixtures.mjs` → `tamper-detection/output/`
 - `sdk-js/tools/generate-malformed-fixtures.mjs` → `malformed-layout/output/`
   (derived from the tamper-detection clean fixture)
+- `sdk-js/tools/generate-unknown-fields-fixtures.mjs` → `unknown-fields/output/`
+  (fixed throwaway TEST keypair; byte-stable, supports `--check`)
 - `sdk-js/tools/generate-signing-input-vector.mjs` → `signing-input.json`
   (derived from `plain-basic.json`)
 

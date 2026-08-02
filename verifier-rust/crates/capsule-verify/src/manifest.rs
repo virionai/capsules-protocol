@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::crypto::{bytes_to_hex, hex_to_bytes, sha256, sha256_hex, CryptoError};
 use crate::jcs::jcs;
-use crate::schemas::{ContentIndex, ContentIndexEntry, Manifest};
+use crate::schemas::{ContentIndex, ContentIndexEntry};
 
 /// Domain separator for capsule_id derivation. Mirrors the JS SDK's
 /// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant.
@@ -126,24 +126,22 @@ pub fn build_content_index(
 
 /// JCS-canonical bytes of a manifest, then SHA-256, lowercase hex.
 ///
-/// Mirrors `manifestHash` in `sdk-js/src/manifest.js`. Goes through
-/// `serde_json::to_value` so the canonicalization runs over the same shape
-/// the JS reference's `JSON.stringify` would produce.
-pub fn manifest_hash(manifest: &Manifest) -> String {
-    let value = match serde_json::to_value(manifest) {
-        Ok(v) => v,
-        // Manifest contains only JSON-representable types; this branch is
-        // unreachable in practice. We surface a clearly-wrong sentinel hash
-        // rather than panicking so that the verifier stays panic-free for
-        // any conceivable input.
-        Err(_) => return "0".repeat(64),
-    };
-    sha256_hex(&jcs(&value))
+/// Mirrors `manifestHash` in `sdk-js/src/manifest.js`. Takes the PRESERVED
+/// `serde_json::Value` tree parsed from the on-disk `manifest.json` bytes —
+/// never the typed `Manifest` struct. A struct projection silently drops
+/// members it does not know, so hashing a struct round-trip would diverge
+/// from what the signer signed whenever the manifest carries extension
+/// members (spec/manifest.md "Unknown members"). The preserved tree keeps
+/// them, so a legitimate signer's extensions verify and a post-seal
+/// mutation of any member — known or unknown — breaks the hash.
+pub fn manifest_hash(manifest: &Value) -> String {
+    sha256_hex(&jcs(manifest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schemas::Manifest;
     use crate::test_support::clean_capsule_bytes;
     use crate::unpack_zip;
 
@@ -153,6 +151,12 @@ mod tests {
         let manifest_bytes = map.get("manifest.json").unwrap();
         let manifest: Manifest = serde_json::from_slice(manifest_bytes).unwrap();
         (manifest, map)
+    }
+
+    fn load_clean_manifest_value() -> Value {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap()
     }
 
     #[test]
@@ -199,13 +203,35 @@ mod tests {
 
     #[test]
     fn manifest_hash_is_deterministic() {
-        let (manifest, _) = load_clean();
+        let manifest = load_clean_manifest_value();
         let h1 = manifest_hash(&manifest);
         let h2 = manifest_hash(&manifest);
         assert_eq!(h1, h2);
         // 64 lowercase hex chars.
         assert_eq!(h1.len(), 64);
         assert!(h1.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+    }
+
+    /// Unknown members are part of the hashed document: adding one to the
+    /// preserved tree MUST change the manifest hash. (A struct round-trip
+    /// would drop it and leave the hash unchanged — the exact bug class
+    /// the preserved-Value contract exists to prevent.)
+    #[test]
+    fn manifest_hash_covers_unknown_members() {
+        let clean = load_clean_manifest_value();
+        let h_clean = manifest_hash(&clean);
+
+        let mut extended = clean.clone();
+        extended["x-acme-policy"] = serde_json::json!({ "tier": "gold" });
+        let h_extended = manifest_hash(&extended);
+
+        assert_ne!(
+            h_clean, h_extended,
+            "an unknown member must be canonicalised into the manifest hash"
+        );
+        // And the hash over the extended tree is stable — the member is
+        // preserved, not re-projected away.
+        assert_eq!(h_extended, manifest_hash(&extended));
     }
 
     #[test]

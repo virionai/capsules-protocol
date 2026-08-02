@@ -93,6 +93,37 @@ here.
 - `created_at`: ISO 8601 UTC; advisory only. Authoritative time-binding
   is the envelope's `signed_at`.
 
+## Unknown members
+
+Organisations building on Capsules extend the manifest with their own
+members — auth metadata, policy tags, deployment identifiers. The format
+supports this without a registry, because `manifest_hash` covers the
+whole document:
+
+- Writers MAY include members beyond the schema above. An extension
+  member MUST use a key prefixed `x-`, vendor-scoped as
+  `x-<vendor>-<name>` (e.g. `x-acme-policy`). Future spec versions will
+  never define a member whose key begins with `x-`, so extensions cannot
+  collide with the spec.
+- Readers MUST preserve unknown members verbatim — recognised or not —
+  and MUST include them in the JCS canonicalization when recomputing
+  `manifest_hash`. Dropping or rewriting an unknown member is a
+  conformance violation: the recomputed hash diverges from what the
+  signer signed, and a valid capsule fails verification. In particular,
+  a reader MUST NOT recompute the hash from a re-serialized typed
+  projection of the manifest; it hashes the document as stored.
+- Preservation is an integrity invariant, enforced identically at every
+  deployment profile. Whether a given extension member is *meaningful*
+  is host policy; that it is *covered by the seal* is not.
+
+This one rule buys extensibility and archival durability together: a
+legitimate signer signs over their own extensions; an attacker cannot
+inject or mutate a member without breaking `manifest_hash` (and with it
+the envelope signature); and a capsule sealed today stays verifiable by
+readers built against future spec versions that add members.
+
+Conformance vectors: `spec/vectors/unknown-fields/`.
+
 ## Capsule identity
 
 ```

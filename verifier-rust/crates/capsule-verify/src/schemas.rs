@@ -7,6 +7,16 @@
 //! name or type mismatch fails fast at deserialization rather than silently
 //! later in the pipeline.
 //!
+//! **These structs are VIEWS, never hashing inputs.** Unknown members in the
+//! hashed documents (manifest, envelope, chain events) MUST be preserved
+//! verbatim and included in canonicalization (spec/manifest.md "Unknown
+//! members", spec/envelope.md, spec/chain.md). A typed struct silently drops
+//! members it does not know, so anything that is canonicalised and hashed —
+//! `manifest_hash`, the envelope canonical payload, the per-event chain hash
+//! — is computed from the *preserved* `serde_json::Value` tree parsed from
+//! the on-disk bytes, never from a struct round-trip. See [`ParsedEvent`],
+//! `manifest::manifest_hash`, and `envelope::canonical_payload`.
+//!
 //! Notes that are easy to get wrong:
 //!
 //! - **Field names are snake_case across the board.** The JS SDK writes
@@ -179,6 +189,21 @@ pub struct ChainEvent {
     pub hash: String,
 }
 
+/// One chain event paired with its preserved JSON tree.
+///
+/// `event` is the typed view used for field access (seq/prev_hash structure
+/// checks, the actor rule, anchor extraction). `raw` is the event exactly as
+/// read from disk, unknown members included, and is the ONLY input to the
+/// hash recompute: the chain hash commits to `JCS(event minus "hash")` over
+/// the preserved tree, so an extension member a v0.6 struct does not know
+/// still round-trips into the hash — and tampering with it still breaks the
+/// chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedEvent {
+    pub event: ChainEvent,
+    pub raw: serde_json::Value,
+}
+
 /// Errors returned by [`parse_chain_jsonl`].
 #[derive(Debug, Error)]
 pub enum ChainParseError {
@@ -196,15 +221,18 @@ pub enum ChainParseError {
     Utf8(#[from] std::str::Utf8Error),
 }
 
-/// Parse `chain/events.jsonl` bytes into an event vector.
+/// Parse `chain/events.jsonl` bytes into a vector of [`ParsedEvent`]s.
 ///
 /// Splits on `\n`, skips empty lines (so a trailing newline — or two — is
-/// fine), and deserializes each non-empty line as a [`ChainEvent`]. The line
-/// number reported on parse failure is the 1-based index in the original
-/// input, which matches `nl`/editor numbering for the underlying file.
+/// fine), and parses each non-empty line ONCE into a preserved
+/// `serde_json::Value`, then projects the typed [`ChainEvent`] view from
+/// that value. The preserved tree keeps unknown members; the typed view
+/// still fails fast on a missing or mistyped known field. The line number
+/// reported on parse failure is the 1-based index in the original input,
+/// which matches `nl`/editor numbering for the underlying file.
 ///
 /// Mirrors `eventsFromJsonl` in `sdk-js/src/chain.js`.
-pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ChainEvent>, ChainParseError> {
+pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ParsedEvent>, ChainParseError> {
     let text = std::str::from_utf8(bytes)?;
     let mut events = Vec::new();
     for (i, raw) in text.split('\n').enumerate() {
@@ -216,9 +244,11 @@ pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ChainEvent>, ChainParseErro
             // line numbering.
             continue;
         }
-        let event: ChainEvent = serde_json::from_str(raw)
+        let value: serde_json::Value = serde_json::from_str(raw)
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
-        events.push(event);
+        let event: ChainEvent = serde_json::from_value(value.clone())
+            .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
+        events.push(ParsedEvent { event, raw: value });
     }
     Ok(events)
 }
@@ -339,33 +369,33 @@ mod tests {
         let events = parse_chain_jsonl(jsonl).expect("chain parses");
 
         assert!(!events.is_empty(), "chain must have at least one event");
-        assert_eq!(events[0].seq, 1, "first event seq must be 1");
+        assert_eq!(events[0].event.seq, 1, "first event seq must be 1");
         assert_eq!(
-            events[0].prev_hash,
+            events[0].event.prev_hash,
             "0".repeat(64),
             "first event prev_hash must be the genesis (32 zero bytes hex)"
         );
         assert!(
-            is_hex_of_len(&events[0].hash, 64),
+            is_hex_of_len(&events[0].event.hash, 64),
             "events[0].hash must be 64 hex"
         );
 
         // For each subsequent event, prev_hash chains correctly and seq is 1-based.
         for (i, e) in events.iter().enumerate().skip(1) {
             assert_eq!(
-                e.prev_hash,
-                events[i - 1].hash,
+                e.event.prev_hash,
+                events[i - 1].event.hash,
                 "events[{i}].prev_hash must equal events[{}].hash",
                 i - 1
             );
             assert_eq!(
-                e.seq,
+                e.event.seq,
                 (i as u64) + 1,
                 "events[{i}].seq must be {} (1-based)",
                 i + 1
             );
             assert!(
-                is_hex_of_len(&e.hash, 64),
+                is_hex_of_len(&e.event.hash, 64),
                 "events[{i}].hash must be 64 hex"
             );
         }
@@ -408,9 +438,36 @@ mod tests {
         let events = parse_chain_jsonl(jsonl).expect("parse");
         let event = events.first().cloned().expect("at least one event");
 
-        let serialized = serde_json::to_string(&event).expect("serialize");
+        let serialized = serde_json::to_string(&event.event).expect("serialize");
         let reparsed: ChainEvent = serde_json::from_str(&serialized).expect("second parse");
-        assert_eq!(event, reparsed, "chain event round-trip must be lossless");
+        assert_eq!(event.event, reparsed, "chain event round-trip must be lossless");
+    }
+
+    /// Unknown members in a chain event line MUST survive into the
+    /// preserved `raw` tree — that tree is what the hash recompute
+    /// canonicalises, so dropping the member would diverge from the
+    /// signed-over event hash.
+    #[test]
+    fn parse_chain_jsonl_preserves_unknown_members() {
+        let line = concat!(
+            r#"{"seq":1,"event_id":"evt_001","actor":"human:alice","kind":"decision","#,
+            r#""action":"submitted","target":"program.md","timestamp":"2026-01-01T00:00:00Z","#,
+            r#""payload":{},"x-acme-review-ticket":"ACME-1234","#,
+            r#""prev_hash":"0000000000000000000000000000000000000000000000000000000000000000","#,
+            r#""untrusted_payload_fields":[],"#,
+            r#""hash":"0000000000000000000000000000000000000000000000000000000000000001"}"#,
+            "\n",
+        );
+        let events = parse_chain_jsonl(line.as_bytes()).expect("parse with unknown member");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].raw.get("x-acme-review-ticket").and_then(|v| v.as_str()),
+            Some("ACME-1234"),
+            "unknown member must be preserved verbatim in the raw tree"
+        );
+        // The typed view still parses the known fields alongside.
+        assert_eq!(events[0].event.seq, 1);
+        assert_eq!(events[0].event.actor, "human:alice");
     }
 
     #[test]
@@ -431,9 +488,16 @@ mod tests {
             .expect("parse must succeed without untrusted_payload_fields");
         assert_eq!(events.len(), 1);
         assert!(
-            events[0].untrusted_payload_fields.is_empty(),
+            events[0].event.untrusted_payload_fields.is_empty(),
             "default for missing field must be empty Vec, got {:?}",
-            events[0].untrusted_payload_fields
+            events[0].event.untrusted_payload_fields
+        );
+        // The preserved tree must NOT invent the field: the hash recompute
+        // canonicalises `raw`, and an event sealed without the field was
+        // hashed without it.
+        assert!(
+            events[0].raw.get("untrusted_payload_fields").is_none(),
+            "absent field must stay absent in the preserved tree"
         );
     }
 
@@ -462,8 +526,8 @@ mod tests {
             2,
             "blank trailing line must not produce an extra event"
         );
-        assert_eq!(events[0].seq, 1);
-        assert_eq!(events[1].seq, 2);
-        assert_eq!(events[1].prev_hash, h1);
+        assert_eq!(events[0].event.seq, 1);
+        assert_eq!(events[1].event.seq, 2);
+        assert_eq!(events[1].event.prev_hash, h1);
     }
 }

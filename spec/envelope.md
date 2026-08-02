@@ -59,6 +59,28 @@ registry defines them.
   signer at seal time.
 - `signers[]`: at least one entry. See "Signing" below.
 
+## Unknown members
+
+The preservation rule of [manifest.md](manifest.md) "Unknown members"
+applies to the envelope, with a sharper consequence: unknown members sit
+*inside* the signed payload (`JCS(envelope minus "signers")`).
+
+- Writers MAY add vendor members under the same `x-<vendor>-<name>` key
+  convention; future spec versions will never define `x-`-prefixed
+  members.
+- Readers MUST preserve unknown members verbatim and MUST include them
+  when reconstructing the canonical payload. A reader that drops them
+  reconstructs bytes the signer never signed and rejects every
+  legitimately extended capsule; an attacker who injects or mutates one
+  breaks every signature. Reconstructing the payload from a
+  re-serialized typed projection of the envelope is a conformance
+  violation.
+- Members inside individual `signers[]` entries are outside the signed
+  payload and carry no integrity guarantee; do not put anything there
+  that needs one.
+
+Conformance vectors: `spec/vectors/unknown-fields/`.
+
 ## Signing
 
 The signed payload is the JCS-canonical serialization of the envelope

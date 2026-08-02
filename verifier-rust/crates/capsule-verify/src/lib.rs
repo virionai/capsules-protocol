@@ -27,7 +27,7 @@ pub use decrypt::{decrypt_inner_zip, DecryptError, DecryptionMetadata, KeyBundle
 pub use jcs::jcs;
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
-    Envelope, FormatBlock, Manifest, Originator, Participant, Signer,
+    Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,
 };
 pub use verifier::{
     verify_capsule, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome, TopError,

@@ -39,6 +39,14 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
 - `prev_hash`: hex of the previous event's `hash`, or 64 zeroes for the
   first event.
 - `hash`: see "Hashing" below.
+- Unknown members: events MAY carry extension members beyond this
+  schema, under the same `x-<vendor>-<name>` key convention as
+  [manifest.md](manifest.md) "Unknown members". Readers MUST preserve
+  them verbatim and MUST include them in the canonicalization below —
+  they are covered by the event hash, so recomputing the hash from a
+  re-serialized typed projection of the event (which drops them, or
+  invents defaults for absent optional fields) is a conformance
+  violation. Conformance vectors: `spec/vectors/unknown-fields/`.
 
 ## Hashing
 
