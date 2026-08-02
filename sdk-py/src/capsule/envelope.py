@@ -141,8 +141,11 @@ def verify_envelope_signatures(envelope: dict) -> dict:
             all_valid = False
         out.append(
             {
-                "role": s.get("role"),
-                "public_key": s.get("public_key"),
+                # A signer row may not be an object at all (mirrors the
+                # isinstance guard in the duplicate check above); report it
+                # as an invalid row rather than raising out of verification.
+                "role": s.get("role") if isinstance(s, dict) else None,
+                "public_key": s.get("public_key") if isinstance(s, dict) else None,
                 "valid": valid,
             }
         )

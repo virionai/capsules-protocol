@@ -171,3 +171,131 @@ def test_non_object_chain_event_fails_closed():
     assert result["ok"] is False
     assert result["chain"]["ok"] is False
     assert any("event is not a JSON object" in e["message"] for e in result["chain"]["errors"])
+
+
+class _ManifestIsAnArrayReader:
+    """A hand-built reader whose manifest is a JSON array.
+
+    from_bytes now refuses this shape, so the only way in is a reader
+    constructed by hand — which verify_capsule accepts. Without the
+    total-function wrapper this raises AttributeError on manifest.get().
+    """
+
+    def manifest(self):
+        return []
+
+    def envelope(self):
+        return {}
+
+    def files(self):
+        return {}
+
+    def is_encrypted(self):
+        return False
+
+
+def test_unexpected_exception_becomes_fail_closed_result():
+    result = verify_capsule(_ManifestIsAnArrayReader(), allowlist=[])
+    _assert_fail_closed_shape(result)
+    assert result["errors"][0].startswith("verification failed: AttributeError")
+
+
+def test_invalid_envelope_signature_produces_a_displayable_error():
+    zip_bytes, kp = _sealed()
+
+    def _flip(name: str, data: bytes) -> bytes:
+        if name != "provenance/envelope.json":
+            return data
+        env = json.loads(data.decode("utf-8"))
+        sig = env["signers"][0]["signature"]
+        env["signers"][0]["signature"] = ("1" if sig[0] == "0" else "0") + sig[1:]
+        return json.dumps(env, indent=2).encode("utf-8")
+
+    tampered = _repack(zip_bytes, _flip)
+    result = verify_capsule(tampered, allowlist=[kp.public_key_hex])
+    assert result["ok"] is False
+    assert result["envelope"]["ok"] is False
+    assert result["envelope"]["signers"][0]["valid"] is False
+    assert any("envelope.signers[0] signature invalid" in e for e in result["errors"])
+
+
+def test_hostile_number_in_unknown_manifest_member_fails_closed():
+    # 1e999 parses as float('inf'); JCS refuses non-finite numbers, so the
+    # manifest-hash recompute cannot succeed. It must report, not raise.
+    zip_bytes, kp = _sealed()
+
+    def _inject(name: str, data: bytes) -> bytes:
+        if name != "manifest.json":
+            return data
+        text = data.decode("utf-8")
+        return text.replace("{", '{"x-hostile":1e999,', 1).encode("utf-8")
+
+    tampered = _repack(zip_bytes, _inject)
+    result = verify_capsule(tampered, allowlist=[kp.public_key_hex])
+    assert result["ok"] is False
+    assert any("manifest hash recompute failed" in e for e in result["errors"])
+
+
+def test_verify_capsule_is_total_over_a_corpus_of_malformed_inputs():
+    zip_bytes, kp = _sealed()
+
+    def _raw(name: str, payload: bytes):
+        return _repack(zip_bytes, lambda n, d: payload if n == name else d)
+
+    def _drop(name: str):
+        return _repack(zip_bytes, lambda n, d: None if n == name else d)
+
+    def _edit_env(mutate):
+        def _fn(n: str, d: bytes) -> bytes:
+            if n != "provenance/envelope.json":
+                return d
+            env = json.loads(d.decode("utf-8"))
+            mutate(env)
+            return json.dumps(env, indent=2).encode("utf-8")
+
+        return _repack(zip_bytes, _fn)
+
+    corpus = [
+        # container-level garbage
+        b"",
+        b"PK\x03\x04",
+        bytes((i * 37) % 256 for i in range(512)),
+        zip_bytes[:10],
+        zip_bytes[:-7],
+        # valid JSON, wrong shape
+        _raw("manifest.json", b"null"),
+        _raw("manifest.json", b"123"),
+        _raw("manifest.json", b'"str"'),
+        _raw("manifest.json", b"[]"),
+        _raw("manifest.json", b"{}"),
+        _repack(zip_bytes, _edit_manifest(lambda m: m["content_index"].__setitem__("index_hash", 5))),
+        _repack(zip_bytes, _edit_manifest(lambda m: m["content_index"].__setitem__("files", [None]))),
+        _repack(
+            zip_bytes,
+            _edit_manifest(
+                lambda m: m["content_index"].__setitem__("files", [{"path": "", "sha256": "a" * 64}])
+            ),
+        ),
+        # hostile numbers
+        _raw(
+            "chain/events.jsonl",
+            ('{"seq":1,"prev_hash":"' + "0" * 64 + '","x":1e999}\n').encode("utf-8"),
+        ),
+        # malformed chain documents
+        _raw("chain/events.jsonl", b'"not an event"\n'),
+        _raw("chain/events.jsonl", b"[]\n"),
+        _raw(
+            "chain/events.jsonl",
+            ('{"seq":1,"prev_hash":"' + "Z" * 64 + '","hash":"' + "f" * 64 + '"}\n').encode("utf-8"),
+        ),
+        _drop("chain/events.jsonl"),
+        # malformed envelope signer rows
+        _edit_env(lambda env: env["signers"][0].__setitem__("public_key", None)),
+        _edit_env(lambda env: env["signers"][0].__setitem__("signature", "zz")),
+        _edit_env(lambda env: env.__setitem__("signers", [42])),
+    ]
+
+    for i, data in enumerate(corpus):
+        result = verify_capsule(data, allowlist=[kp.public_key_hex])
+        assert result["ok"] is False, f"corpus[{i}] must fail closed"
+        assert isinstance(result["errors"], list), f"corpus[{i}] must report errors"

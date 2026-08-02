@@ -63,8 +63,9 @@ Sensible defaults keep the happy path short: `created_at` and `seal()`'s
 `signed_at` default to now, while event timestamps inherit `created_at`.
 Pass both values explicitly for reproducible builds. Events default to
 `kind="observation"` / `target="capsule"`, and a signer's role defaults to
-`"originator"`, and `verify_capsule(bytes)` on unopenable input returns
-a fail-closed result (`ok: False`) instead of raising.
+`"originator"`, and `verify_capsule()` never raises: unopenable input, a
+malformed manifest, and a malformed chain all come back as a fail-closed
+result (`ok: False`) with the reason in `errors`.
 
 ## Keys: hex or bytes, your choice
 

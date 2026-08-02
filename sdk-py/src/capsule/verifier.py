@@ -48,6 +48,21 @@ class VerifyResult(TypedDict):
     notes: list[str]
 
 
+def _fail_closed(message: str, level: str) -> VerifyResult:
+    """The documented fail-closed result: every channel present, nothing trusted."""
+    return {
+        "ok": False,
+        "level": level,
+        "errors": [message],
+        "chain": {"ok": False, "errors": []},
+        "content_index": {"ok": False, "errors": []},
+        "envelope": {"ok": False, "signers": []},
+        "signer_set": {"bound": False, "ok": False, "errors": []},
+        "trusted_signer_count": 0,
+        "notes": [],
+    }
+
+
 def verify_capsule(
     reader,
     *,
@@ -61,23 +76,33 @@ def verify_capsule(
     missing or invalid manifest/envelope) returns a fail-closed result
     instead of raising, so app code has a single failure path.
 
+    Verification is total: no input produces an exception. Anything the
+    checks below fail to anticipate comes back as a fail-closed result
+    with the underlying message in ``errors``.
+
     ``allowlist`` entries may be hex strings (any case) or 32 raw bytes.
     """
+    level = "L3" if outer_envelope is not None else "L2"
+    try:
+        return _verify_capsule_impl(reader, allowlist=allowlist, outer_envelope=outer_envelope)
+    except Exception as e:
+        # The docstring promises callers a result, not an exception, for
+        # every input. Anything that escapes the checks below is a capsule
+        # we could not fully evaluate, which is a verification failure.
+        return _fail_closed(f"verification failed: {type(e).__name__}: {e}", level)
+
+
+def _verify_capsule_impl(
+    reader,
+    *,
+    allowlist: list | None = None,
+    outer_envelope: dict | None = None,
+) -> VerifyResult:
     if isinstance(reader, (bytes, bytearray, memoryview)):
         try:
             reader = CapsuleReader.from_bytes(bytes(reader))
         except (ValueError, BadZipFile) as e:
-            return {
-                "ok": False,
-                "level": "L2",
-                "errors": [f"capsule cannot be opened: {e}"],
-                "chain": {"ok": False, "errors": []},
-                "content_index": {"ok": False, "errors": []},
-                "envelope": {"ok": False, "signers": []},
-                "signer_set": {"bound": False, "ok": False, "errors": []},
-                "trusted_signer_count": 0,
-                "notes": [],
-            }
+            return _fail_closed(f"capsule cannot be opened: {e}", "L2")
     errors: list[str] = []
     notes: list[str] = []
     allow: set[str] = set()
@@ -153,11 +178,23 @@ def verify_capsule(
         result["content_index"]["errors"].append(f"recompute failed: {e}")
         recomputed = {"files": [], "index_hash": ""}
 
-    stored_files = manifest.get("content_index", {}).get("files", [])
-    stored_map = {f["path"]: f["sha256"] for f in stored_files}
+    # A reader built by from_bytes has already shape-checked these, but
+    # verify_capsule also accepts hand-constructed readers, so read the
+    # stored index defensively and report rather than raise.
+    stored_index = manifest.get("content_index")
+    if not isinstance(stored_index, dict):
+        stored_index = {}
+        result["content_index"]["errors"].append("manifest.content_index is not a JSON object")
+    stored_files = stored_index.get("files")
+    if not isinstance(stored_files, list):
+        if stored_index:
+            result["content_index"]["errors"].append("manifest.content_index.files is not an array")
+        stored_files = []
+    stored_files = [f for f in stored_files if isinstance(f, dict)]
+    stored_map = {f.get("path"): f.get("sha256") for f in stored_files}
 
     ci_ok = True
-    if recomputed["index_hash"] != manifest.get("content_index", {}).get("index_hash"):
+    if recomputed["index_hash"] != stored_index.get("index_hash"):
         ci_ok = False
         result["content_index"]["errors"].append(
             "manifest.content_index.index_hash does not match recomputed"
@@ -173,10 +210,10 @@ def verify_capsule(
             result["content_index"]["errors"].append(f"file hash mismatch: {f['path']}")
     recomputed_paths = {f["path"] for f in recomputed["files"]}
     for f in stored_files:
-        if f["path"] not in recomputed_paths:
+        if f.get("path") not in recomputed_paths:
             ci_ok = False
             result["content_index"]["errors"].append(
-                f"file in manifest index but missing from package: {f['path']}"
+                f"file in manifest index but missing from package: {f.get('path')}"
             )
     if recomputed["index_hash"] != envelope.get("content_index_hash"):
         ci_ok = False
@@ -257,6 +294,15 @@ def verify_capsule(
             }
         )
     result["envelope"]["signers"] = signers
+    # A bad signature is otherwise only visible as valid=False nested in
+    # envelope.signers[i]; every other failure class produces a displayable
+    # message, so give this one an error too.
+    for i, s in enumerate(signers):
+        if not s["valid"]:
+            errors.append(
+                f"envelope.signers[{i}] signature invalid "
+                f"(role {s['role']!r}, public_key {s['public_key']})"
+            )
     # DISTINCT trusted keys, never rows: the same key signing under two
     # roles is one trusted key, and duplicate rows must never inflate a
     # quorum.
