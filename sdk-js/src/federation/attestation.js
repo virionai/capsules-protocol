@@ -20,6 +20,7 @@
 import { jcs, bytesToHex, hexToBytes } from "../canonical.js";
 import { ed25519Sign, ed25519Verify } from "../crypto.js";
 import { createPublicKey, verify as nodeVerify } from "node:crypto";
+import { normalizeIssuer } from "./issuer.js";
 
 export const ATTESTATION_TYP = "capsule-identity-attestation";
 export const ATTESTATION_DOMAIN = Buffer.from(
@@ -112,12 +113,29 @@ const JWT_ALG_TO_NODE = {
 
 /**
  * Verify a compact JWT (Clerk-issued or compatible) against trust roots /
- * a JWKS. Fully offline given the JWKS. Returns { ok, claims, errors }.
+ * a JWKS. Fully offline given the JWKS. Returns
+ * { ok, claims, errors, trustRootMissing? }.
  *
- * Checks signature, alg/kid selection, and (when present) exp/nbf plus the
- * caller-supplied issuer/audience.
+ * `claims` is the DECODED token payload, returned on failure too so callers
+ * can report diagnostics — it is authenticated only when ok === true and MUST
+ * never be treated as verified identity otherwise.
+ *
+ * Checks signature, alg/kid selection, exp/nbf when present, and the
+ * caller-supplied issuer and audience — both REQUIRED. `trustRootMissing`
+ * marks the "no cached key for this kid" case, which is unknown rather than
+ * negative (spec/federation.md "Failure reporting").
  */
 export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
+  if (typeof issuer !== "string" || issuer.length === 0) {
+    throw new TypeError(
+      "verifyJwt requires an expected issuer: `iss` is checked against caller-supplied trust configuration, never against the token that carries it",
+    );
+  }
+  if (typeof audience !== "string" || audience.length === 0) {
+    throw new TypeError(
+      "verifyJwt requires an expected audience: an attestation JWT is scoped to the verifying host (spec/profiles/clerk.md)",
+    );
+  }
   const errors = [];
   const nowSec = Math.floor((now instanceof Date ? now.getTime() : (now ?? Date.now())) / 1000);
   const parts = String(compact).split(".");
@@ -154,11 +172,11 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
   if (!signatureValid) errors.push("jwt: signature invalid");
   if (typeof claims.exp === "number" && nowSec >= claims.exp) errors.push("jwt: expired");
   if (typeof claims.nbf === "number" && nowSec < claims.nbf) errors.push("jwt: not yet valid");
-  if (issuer && claims.iss !== issuer) errors.push(`jwt: issuer mismatch (${claims.iss})`);
-  if (audience) {
-    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!aud.includes(audience)) errors.push(`jwt: audience mismatch (${claims.aud})`);
+  if (normalizeIssuer(claims.iss) !== normalizeIssuer(issuer)) {
+    errors.push(`jwt: issuer mismatch (${claims.iss})`);
   }
+  const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud == null ? [] : [claims.aud];
+  if (!aud.includes(audience)) errors.push(`jwt: audience mismatch (${claims.aud})`);
   return { ok: errors.length === 0, claims, errors };
 }
 
@@ -173,6 +191,8 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
  *   now                 Date | ms | undefined (defaults to Date.now)
  *   capsuleId           expected capsule_id the attestation MUST bind
  *   signerPublicKeyHex  expected signer key the attestation MUST bind
+ *   expectedIssuer      REQUIRED issuer identity (origin or bare DNS form)
+ *   audience            REQUIRED for the JWT profile: expected `aud`
  *   jwtBindingClaim     for JWT profile: claim key holding the capsule binding
  *                       object (default "cap")
  */
@@ -187,10 +207,18 @@ export function verifyIdentityAttestation(attestation, options = {}) {
       "verifyIdentityAttestation requires options.signerPublicKeyHex: an attestation is only meaningful against a specific signer (spec/federation.md)",
     );
   }
+  if (typeof options.expectedIssuer !== "string" || options.expectedIssuer.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.expectedIssuer: the issuer is caller-supplied trust configuration, never read from the attestation being checked (spec/federation.md)",
+    );
+  }
   const errors = [];
   const now = options.now instanceof Date ? options.now.getTime() : options.now ?? Date.now();
   if (!attestation || attestation.typ !== ATTESTATION_TYP) {
     return { ok: false, subject: null, claims: null, errors: ["not a capsule identity attestation"] };
+  }
+  if (normalizeIssuer(attestation.issuer) !== normalizeIssuer(options.expectedIssuer)) {
+    errors.push(`attestation issuer mismatch: ${attestation.issuer} vs ${options.expectedIssuer}`);
   }
 
   let claims;
@@ -212,10 +240,19 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     claims = attestation.claims ?? {};
   } else if (attestation.jwt) {
     // JWT profile (Clerk): the binding lives inside the verified token.
+    if (typeof options.audience !== "string" || options.audience.length === 0) {
+      throw new TypeError(
+        "verifyIdentityAttestation requires options.audience for the JWT profile: the attestation JWT is scoped to the verifying host (spec/profiles/clerk.md)",
+      );
+    }
     const res = verifyJwt(attestation.jwt, {
       trustRoots: options.trustRoots,
       now,
-      issuer: attestation.issuer,
+      // The expected issuer is caller trust configuration. Reading it from
+      // `attestation.issuer` — a field on the same untrusted wrapper — would
+      // make the `iss` check self-referential and therefore vacuous.
+      issuer: options.expectedIssuer,
+      audience: options.audience,
     });
     errors.push(...res.errors);
     const bindingKey = options.jwtBindingClaim ?? "cap";

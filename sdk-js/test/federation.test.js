@@ -21,6 +21,7 @@ const {
 } = federation;
 
 const TS = "2026-05-07T12:00:00Z";
+const AUD = "capsule-attestation";
 
 // An issuer holding an Ed25519 trust-root key (the native ed25519-jcs profile).
 function makeIssuer() {
@@ -82,6 +83,7 @@ test("ed25519-jcs attestation signs and verifies offline with binding", () => {
     now: new Date(TS),
     capsuleId,
     signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(res.ok, true, JSON.stringify(res.errors));
   assert.equal(res.subject.clerk_user_id, "user_1");
@@ -103,6 +105,7 @@ test("ed25519-jcs attestation fails when a claim is tampered", () => {
   const res = verifyIdentityAttestation(att, {
     trustRoots, now: new Date(TS),
     capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("signature invalid")));
@@ -122,6 +125,7 @@ test("ed25519-jcs attestation fails when expired", () => {
   const res = verifyIdentityAttestation(att, {
     trustRoots, now: new Date("2026-06-01T00:00:00Z"),
     capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("expired")));
@@ -141,6 +145,7 @@ test("ed25519-jcs attestation fails on capsule/signer binding mismatch", () => {
   const wrong = verifyIdentityAttestation(att, {
     trustRoots, now: new Date(TS), capsuleId: "b".repeat(64),
     signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(wrong.ok, false);
   assert.ok(wrong.errors.some((e) => e.includes("capsule_id binding mismatch")));
@@ -159,6 +164,7 @@ test("attestation cannot be verified without the issuer trust root", () => {
   const res = verifyIdentityAttestation(att, {
     trustRoots: { keys: [] }, now: new Date(TS),
     capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("no trust-root key")));
@@ -175,23 +181,36 @@ test("verifyJwt validates a Clerk-style ES256 token against JWKS", () => {
     iss: "https://clerk.acme.example",
     sub: "user_42",
     org_id: "org_9",
+    aud: AUD,
     iat: nowSec,
     exp: nowSec + 3600,
   });
-  const ok = verifyJwt(jwt, { trustRoots: clerk.jwks, now: new Date(TS), issuer: "https://clerk.acme.example" });
+  const ok = verifyJwt(jwt, {
+    trustRoots: clerk.jwks, now: new Date(TS),
+    issuer: "https://clerk.acme.example", audience: AUD,
+  });
   assert.equal(ok.ok, true, JSON.stringify(ok.errors));
   assert.equal(ok.claims.sub, "user_42");
 
   // Tampered payload → signature fails.
   const [h, p, s] = jwt.split(".");
-  const badPayload = b64u(JSON.stringify({ iss: "https://clerk.acme.example", sub: "user_ADMIN", iat: nowSec, exp: nowSec + 3600 }));
-  const bad = verifyJwt(`${h}.${badPayload}.${s}`, { trustRoots: clerk.jwks, now: new Date(TS) });
+  const badPayload = b64u(JSON.stringify({ iss: "https://clerk.acme.example", sub: "user_ADMIN", aud: AUD, iat: nowSec, exp: nowSec + 3600 }));
+  const bad = verifyJwt(`${h}.${badPayload}.${s}`, {
+    trustRoots: clerk.jwks, now: new Date(TS),
+    issuer: "https://clerk.acme.example", audience: AUD,
+  });
   assert.equal(bad.ok, false);
   assert.ok(bad.errors.some((e) => e.includes("signature invalid")));
 
   // Expired.
-  const expired = clerk.mintJwt({ iss: "x", sub: "u", iat: nowSec - 7200, exp: nowSec - 3600 });
-  const exp = verifyJwt(expired, { trustRoots: clerk.jwks, now: new Date(TS) });
+  const expired = clerk.mintJwt({
+    iss: "https://clerk.acme.example", sub: "u", aud: AUD,
+    iat: nowSec - 7200, exp: nowSec - 3600,
+  });
+  const exp = verifyJwt(expired, {
+    trustRoots: clerk.jwks, now: new Date(TS),
+    issuer: "https://clerk.acme.example", audience: AUD,
+  });
   assert.equal(exp.ok, false);
   assert.ok(exp.errors.some((e) => e.includes("expired")));
 });
@@ -204,12 +223,13 @@ test("verifyIdentityAttestation accepts a Clerk JWT attestation with binding", (
   const jwt = clerk.mintJwt({
     iss: "https://clerk.acme.example",
     sub: "user_42", org_id: "org_9", email: "z@acme.example", org_role: "admin",
-    iat: nowSec, exp: nowSec + 3600,
+    aud: AUD, iat: nowSec, exp: nowSec + 3600,
     cap: { capsule_id: capsuleId, signer_public_key: signer.publicKeyHex, signer_role: "originator" },
   });
   const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
   const res = verifyIdentityAttestation(att, {
     trustRoots: clerk.jwks, now: new Date(TS), capsuleId, signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
   });
   assert.equal(res.ok, true, JSON.stringify(res.errors));
   assert.equal(res.subject.clerk_user_id, "user_42");
@@ -315,6 +335,7 @@ test("a capsule with an embedded attestation still verifies offline with NO issu
   const overlay = verifyIdentityAttestation(embedded, {
     trustRoots: issuer.trustRoots, now: new Date(TS),
     capsuleId, signerPublicKeyHex: ed.publicKeyHex,
+    expectedIssuer: issuer.issuer,
   });
   assert.equal(overlay.ok, true, JSON.stringify(overlay.errors));
 });
@@ -386,12 +407,13 @@ test("a validly-signed token with NO cap binding claim is rejected", () => {
   // binds no capsule at all. spec/profiles/clerk.md forbids embedding one.
   const jwt = clerk.mintJwt({
     iss: "https://clerk.acme.example", sub: "user_attacker", org_id: "org_9",
-    org_role: "admin", email: "e@acme.example", iat: nowSec, exp: nowSec + 3600,
+    org_role: "admin", email: "e@acme.example", aud: AUD, iat: nowSec, exp: nowSec + 3600,
   });
   const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
   const res = verifyIdentityAttestation(att, {
     trustRoots: clerk.jwks, now: new Date(TS),
     capsuleId, signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
   });
   assert.equal(res.ok, false, "an unbound token must never verify");
   assert.ok(res.errors.some((e) => e.includes("missing required binding claim 'capsule_id'")));
@@ -411,6 +433,7 @@ test("an ed25519-jcs attestation with an empty binding claim is rejected", () =>
   const res = verifyIdentityAttestation(att, {
     trustRoots, now: new Date(TS),
     capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
   });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("missing required binding claim 'signer_role'")));
@@ -433,5 +456,90 @@ test("verifyIdentityAttestation refuses to run without binding options", () => {
   assert.throws(
     () => verifyIdentityAttestation(att, { trustRoots, now: new Date(TS), capsuleId: "a".repeat(64) }),
     /requires options\.signerPublicKeyHex/,
+  );
+  assert.throws(
+    () =>
+      verifyIdentityAttestation(att, {
+        trustRoots, now: new Date(TS),
+        capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+      }),
+    /requires options\.expectedIssuer/,
+  );
+});
+
+test("a JWT attestation is rejected when iss is not the caller's expected issuer", () => {
+  const clerk = makeClerkInstance();
+  const signer = generateEd25519();
+  const capsuleId = "c".repeat(64);
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  // The attacker controls BOTH the token's `iss` and the wrapper's `issuer`.
+  // Checking one against the other proves nothing.
+  const jwt = clerk.mintJwt({
+    iss: "https://clerk.evil.example", sub: "user_42", org_id: "org_9",
+    org_role: "admin", aud: AUD, iat: nowSec, exp: nowSec + 3600,
+    cap: { capsule_id: capsuleId, signer_public_key: signer.publicKeyHex, signer_role: "originator" },
+  });
+  const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.evil.example", jwt };
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: clerk.jwks, now: new Date(TS), capsuleId,
+    signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("jwt: issuer mismatch")));
+  assert.ok(res.errors.some((e) => e.includes("attestation issuer mismatch")));
+});
+
+test("a JWT attestation minted for another audience is rejected", () => {
+  const clerk = makeClerkInstance();
+  const signer = generateEd25519();
+  const capsuleId = "c".repeat(64);
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  const jwt = clerk.mintJwt({
+    iss: "https://clerk.acme.example", sub: "user_42", aud: "some-other-app",
+    iat: nowSec, exp: nowSec + 3600,
+    cap: { capsule_id: capsuleId, signer_public_key: signer.publicKeyHex, signer_role: "originator" },
+  });
+  const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: clerk.jwks, now: new Date(TS), capsuleId,
+    signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("jwt: audience mismatch")));
+});
+
+test("ed25519-jcs attestation issuer must match the caller's expected issuer", () => {
+  const { kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer: "https://Capsules.Acme.Example/", kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const base = {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+  };
+  const wrong = verifyIdentityAttestation(att, { ...base, expectedIssuer: "other.example" });
+  assert.equal(wrong.ok, false);
+  assert.ok(wrong.errors.some((e) => e.includes("attestation issuer mismatch")));
+
+  // Origin form and bare DNS form are the same issuer (federation.md).
+  const right = verifyIdentityAttestation(att, { ...base, expectedIssuer: "capsules.acme.example" });
+  assert.equal(right.ok, true, JSON.stringify(right.errors));
+});
+
+test("verifyJwt refuses to run without an expected issuer and audience", () => {
+  const clerk = makeClerkInstance();
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  const jwt = clerk.mintJwt({ iss: "https://clerk.acme.example", sub: "u", aud: AUD, iat: nowSec, exp: nowSec + 3600 });
+  assert.throws(() => verifyJwt(jwt, { trustRoots: clerk.jwks, now: new Date(TS) }), /requires an expected issuer/);
+  assert.throws(
+    () => verifyJwt(jwt, { trustRoots: clerk.jwks, now: new Date(TS), issuer: "https://clerk.acme.example" }),
+    /requires an expected audience/,
   );
 });
