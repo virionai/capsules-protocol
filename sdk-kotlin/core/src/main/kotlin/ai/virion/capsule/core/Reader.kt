@@ -34,10 +34,14 @@ object CapsuleReader {
         // Refuse encrypted capsules BEFORE demanding the plain-capsule
         // layout: the chain and program live inside the ciphertext, so
         // requiring them first would misattribute the refusal as
-        // "missing chain".
-        val encryption = (manifest as? JCSValue.Obj)?.pairs
-            ?.firstOrNull { it.first == "encryption" }?.second
-        if (encryption != null && encryption != JCSValue.Null) {
+        // "missing chain". Detection keys off the SIGNED envelope.cipher
+        // plus the presence of content.enc — never the manifest's own
+        // encryption claim. A manifest that merely claims encryption on a
+        // cipher="none" capsule must still be read (and then rejected by
+        // CapsuleVerifier), not waved through as "encrypted, nothing here
+        // to check".
+        val cipher = lookupString(envelope, listOf("cipher"))
+        if (cipher != null && cipher != "none" && files.containsKey("content.enc")) {
             throw CapsuleException("encrypted capsule; v0 reader supports plain only")
         }
 

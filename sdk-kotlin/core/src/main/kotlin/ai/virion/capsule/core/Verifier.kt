@@ -73,10 +73,33 @@ object CapsuleVerifier {
         val firstHash = CapsuleReader.lookupString(parsed.manifest, listOf("first_event_hash"))
         val mfId = CapsuleReader.lookupString(parsed.manifest, listOf("id"))
         val envId = CapsuleReader.lookupString(parsed.envelope, listOf("capsule_id"))
-        if (pubHex != null && firstHash != null && mfId != null && envId != null) {
-            val expected = Manifest.computeCapsuleId(CapsuleCrypto.hexToBytes(pubHex), firstHash)
+        if (pubHex != null && mfId != null && envId != null) {
+            // A null first_event_hash (zero-event capsule, spec/chain.md
+            // "Empty chains") derives with 32 zero bytes standing in
+            // (spec/manifest.md "id"); whether null is LEGAL here is
+            // decided by the anchor checks below, fail-closed.
+            val expected = Manifest.computeCapsuleId(
+                CapsuleCrypto.hexToBytes(pubHex),
+                firstHash ?: "0".repeat(64),
+            )
             rec("capsule_id", expected == mfId && expected == envId, expected.take(12) + "…")
         } else rec("capsule_id", false, "missing fields")
+
+        // Semantic binding: manifest.first_event_hash is the capsule_id
+        // preimage; envelope.first_event_hash is what the chain anchor
+        // checks below compare against. manifest.md and envelope.md both
+        // pin them to the hash of chain event 1, so they must agree —
+        // otherwise capsule_id names a chain this capsule does not carry.
+        // null==null is the legal empty-chain shape, enforced against the
+        // event count below.
+        val envFirstClaim = CapsuleReader.lookupString(parsed.envelope, listOf("first_event_hash"))
+        rec(
+            "first_event_hash_binding",
+            firstHash == envFirstClaim,
+            if (firstHash == envFirstClaim) (firstHash ?: "null")
+            else "manifest.first_event_hash mismatch: ${firstHash ?: "null"} " +
+                "vs envelope.first_event_hash ${envFirstClaim ?: "null"}",
+        )
 
         val mh = Manifest.hash(parsed.manifest)
         val storedMh = CapsuleReader.lookupString(parsed.envelope, listOf("manifest_hash"))
@@ -140,17 +163,107 @@ object CapsuleVerifier {
             else chainErrors.joinToString("; "),
         )
 
-        val firstEvHash = parsed.events.firstOrNull()?.let {
-            CapsuleReader.lookupString(it, listOf("hash"))
-        }
+        // Envelope-to-chain anchors. These MUST fail closed: an anchor
+        // that is missing or null over a non-empty chain is a failure,
+        // never a silently skipped comparison — in a plain capsule these
+        // anchors are the only envelope-to-chain binding.
         val envFirst = CapsuleReader.lookupString(parsed.envelope, listOf("first_event_hash"))
-        if (firstEvHash != null && envFirst != null) rec("first_event_hash", firstEvHash == envFirst)
-
-        val lastEvHash = parsed.events.lastOrNull()?.let {
-            CapsuleReader.lookupString(it, listOf("hash"))
-        }
         val envEntry = CapsuleReader.lookupString(parsed.envelope, listOf("entry_hash"))
-        if (lastEvHash != null && envEntry != null) rec("entry_hash", lastEvHash == envEntry)
+        if (parsed.events.isEmpty()) {
+            // Empty chain is LEGAL — the weakest honest shape (a template
+            // or draft capsule, spec/chain.md "Empty chains") — and then
+            // the capsule must not claim chain anchors it does not have:
+            // manifest.first_event_hash, envelope.first_event_hash and
+            // envelope.entry_hash must all be null. Reported honestly via
+            // the note.
+            notes += "empty chain: no events to walk; envelope anchors checked to be null instead"
+            val firstProblems = mutableListOf<String>()
+            if (envFirst != null) {
+                firstProblems +=
+                    "envelope.first_event_hash must be null when the chain has no events; got $envFirst"
+            }
+            if (firstHash != null) {
+                firstProblems +=
+                    "manifest.first_event_hash must be null when the chain has no events; got $firstHash"
+            }
+            rec(
+                "first_event_hash",
+                firstProblems.isEmpty(),
+                if (firstProblems.isEmpty()) "null (empty chain)"
+                else firstProblems.joinToString("; "),
+            )
+            rec(
+                "entry_hash",
+                envEntry == null,
+                if (envEntry == null) "null (empty chain)"
+                else "envelope.entry_hash must be null when the chain has no events; got $envEntry",
+            )
+        } else {
+            val firstEvHash = parsed.events.first().let {
+                CapsuleReader.lookupString(it, listOf("hash"))
+            }
+            val lastEvHash = parsed.events.last().let {
+                CapsuleReader.lookupString(it, listOf("hash"))
+            }
+            val firstOk = firstEvHash != null && firstEvHash == envFirst
+            rec(
+                "first_event_hash",
+                firstOk,
+                if (firstOk) ""
+                else "envelope.first_event_hash mismatch: ${envFirst ?: "null"} vs ${firstEvHash ?: "null"}",
+            )
+            val entryOk = lastEvHash != null && lastEvHash == envEntry
+            rec(
+                "entry_hash",
+                entryOk,
+                if (entryOk) ""
+                else "envelope.entry_hash mismatch: ${envEntry ?: "null"} vs ${lastEvHash ?: "null"}",
+            )
+        }
+
+        // Encryption declaration. manifest.md fixes manifest.encryption as
+        // null for plain capsules and {metadata_path, cipher} for encrypted
+        // ones. The SIGNED envelope.cipher is authoritative; the manifest
+        // must agree with it, and the declared metadata_path must resolve
+        // to a file that is present AND covered by the content index.
+        val declaredCipher = CapsuleReader.lookupString(parsed.envelope, listOf("cipher")) ?: ""
+        val mfEncryption = (parsed.manifest as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "encryption" }?.second
+        val mfEncryptionPresent = mfEncryption != null && mfEncryption != JCSValue.Null
+        val mfCipher = CapsuleReader.lookupString(parsed.manifest, listOf("encryption", "cipher"))
+        val mfMetadataPath =
+            CapsuleReader.lookupString(parsed.manifest, listOf("encryption", "metadata_path")) ?: ""
+        when {
+            declaredCipher == "none" -> rec(
+                "manifest_encryption",
+                !mfEncryptionPresent,
+                if (mfEncryptionPresent)
+                    "manifest.encryption must be null when envelope.cipher is 'none'"
+                else "null",
+            )
+            !mfEncryptionPresent -> rec(
+                "manifest_encryption", false,
+                "manifest.encryption must be an object when envelope.cipher is '$declaredCipher'",
+            )
+            mfCipher != declaredCipher -> rec(
+                "manifest_encryption", false,
+                "manifest.encryption.cipher mismatch: ${mfCipher ?: "null"} " +
+                    "vs envelope.cipher '$declaredCipher'",
+            )
+            mfMetadataPath.isEmpty() -> rec(
+                "manifest_encryption", false,
+                "manifest.encryption.metadata_path must be a non-empty string",
+            )
+            !parsed.files.containsKey(mfMetadataPath) -> rec(
+                "manifest_encryption", false,
+                "manifest.encryption.metadata_path missing from capsule: $mfMetadataPath",
+            )
+            mfMetadataPath !in contentIndexPaths(parsed.manifest) -> rec(
+                "manifest_encryption", false,
+                "manifest.encryption.metadata_path not covered by content index: $mfMetadataPath",
+            )
+            else -> rec("manifest_encryption", true, mfMetadataPath)
+        }
 
         val env = Envelope.verifySignatures(parsed.envelope)
         val signers = env.signers.map { (role, pk, valid) ->
@@ -317,6 +430,19 @@ object CapsuleVerifier {
             }
         }
         return errors
+    }
+
+    /** Paths listed in `manifest.content_index.files[]`. */
+    private fun contentIndexPaths(manifest: JCSValue): Set<String> {
+        val ci = (manifest as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "content_index" }?.second as? JCSValue.Obj
+            ?: return emptySet()
+        val files = ci.pairs.firstOrNull { it.first == "files" }?.second as? JCSValue.Arr
+            ?: return emptySet()
+        return files.items.mapNotNull { entry ->
+            ((entry as? JCSValue.Obj)?.pairs?.firstOrNull { it.first == "path" }?.second
+                as? JCSValue.Str)?.v
+        }.toSet()
     }
 
     /**

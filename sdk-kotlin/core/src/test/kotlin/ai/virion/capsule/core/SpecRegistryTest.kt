@@ -9,7 +9,9 @@
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
 //   - signer-set/vectors.json         (signer-set binding outcomes)
+//   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //   - chain-rules/vectors.json        (per-event actor + kind field rules)
+//   - semantic-binding/vectors.json   (manifest claims vs envelope/chain/files)
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
@@ -123,6 +125,93 @@ class SpecRegistryTest {
             val bytes = File(base, v.get("capsule_file").asString).readBytes()
             assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
         }
+    }
+
+    /**
+     * Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
+     * chains"). A chain with zero events is legal — the weakest honest
+     * shape — and then manifest.first_event_hash,
+     * envelope.first_event_hash and envelope.entry_hash MUST all be null
+     * (claiming an anchor over zero events fails closed; those anchors
+     * are the only envelope-to-chain binding in a plain capsule). The
+     * verifier must REPORT that no events were walked (notes pin). And an
+     * event whose stored bytes omit the optional untrusted_payload_fields
+     * member must verify: the hash preimage is the stored line, never a
+     * typed-struct round-trip.
+     */
+    @Test
+    fun chainBindingRegistryOutcomes() {
+        val file = File(vectorsDir(), "chain-binding/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "chain-binding registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
+    /**
+     * Manifest claims must agree with the signed envelope, the chain, and
+     * the files (spec/manifest.md, spec/envelope.md). Every fixture is
+     * well-formed and correctly signed; only its semantics are wrong, so
+     * nothing but an explicit cross-check catches it. The core module is
+     * a plain-capsule (L2) verifier with no X25519/ChaCha20 path, so
+     * vectors tagged `"requires": ["encryption"]` are skipped here, as
+     * the registry's notes allow; unknown requirements fail loudly.
+     */
+    @Test
+    fun semanticBindingRegistryOutcomes() {
+        val file = File(vectorsDir(), "semantic-binding/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "semantic-binding registry is empty")
+        var evaluated = 0
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            if (requiresUnimplementedCapability(v)) continue
+            evaluated += 1
+            val expected = v.getAsJsonObject("expected")
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            val result = verify(bytes, allowlist)
+            assertVerifyOutcome(name, expected, result)
+            if (expected.has("reason")) {
+                val reason = expected.get("reason").asString
+                val needle = VERIFY_REASON_NEEDLES[reason]
+                    ?: error("$name: unknown verify-stage reason $reason")
+                val haystack = result.checks.joinToString(" ") { "${it.name} ${it.detail}" }
+                assertTrue(
+                    haystack.contains(needle),
+                    "$name: expected an error for reason $reason; got $haystack",
+                )
+            }
+        }
+        assertTrue(evaluated > 0, "every semantic-binding vector was skipped")
+    }
+
+    /**
+     * Registry `requires` handling: vectors that need the "encryption"
+     * capability are skipped by this plain-only lane. Any OTHER
+     * requirement is unknown and fails loudly, so a new capability cannot
+     * be silently skipped.
+     */
+    private fun requiresUnimplementedCapability(vector: JsonObject): Boolean {
+        val requires = vector.getAsJsonArray("requires") ?: return false
+        var skip = false
+        for (req in requires) {
+            when (val r = req.asString) {
+                "encryption" -> skip = true
+                else -> error("unknown requirement $r")
+            }
+        }
+        return skip
     }
 
     @Test
@@ -345,6 +434,17 @@ class SpecRegistryTest {
 
     companion object {
 
+        /**
+         * Per-lane mapping of the registry's normative verify-stage reason
+         * categories (semantic-binding/vectors.json) onto this lane's
+         * check details.
+         */
+        private val VERIFY_REASON_NEEDLES = mapOf(
+            "first_event_hash_binding" to "manifest.first_event_hash mismatch",
+            "encryption_shape" to "manifest.encryption must be",
+            "encryption_metadata_path" to "manifest.encryption.metadata_path",
+        )
+
         /** Registry `failing` area → this lane's check name. */
         private val AREA_CHECK = mapOf(
             "content_index" to "content_index_hash",
@@ -357,12 +457,13 @@ class SpecRegistryTest {
         /**
          * Encrypted fixtures. The core module is a plain-capsule (L2)
          * verifier: it has no X25519/ChaCha20 path and `CapsuleReader.parse`
-         * refuses any capsule whose manifest carries a non-null `encryption`.
-         * Refusing is strictly stronger than the registry's expectation for
-         * `clean-encrypted` (ok=true), so these are asserted against the
-         * documented refusal instead. Pinned by name: when this module grows
-         * an encryption path, drop the name here and the registry expectation
-         * applies again.
+         * refuses any capsule whose SIGNED envelope.cipher is not "none"
+         * while a `content.enc` blob is present (never the manifest's own
+         * claim). Refusing is strictly stronger than the registry's
+         * expectation for `clean-encrypted` (ok=true), so these are
+         * asserted against the documented refusal instead. Pinned by name:
+         * when this module grows an encryption path, drop the name here
+         * and the registry expectation applies again.
          */
         private val ENCRYPTED_VECTORS = setOf("clean-encrypted", "tampered-blob")
 
