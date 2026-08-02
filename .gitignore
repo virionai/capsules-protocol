@@ -10,6 +10,8 @@
 
 # Local internal documents
 IP-REGISTRY.md
+/capsulesfindingsexpanded.md
+/CODE-REVIEW-2026-07-31.md
 
 # JavaScript dependencies and builds
 node_modules/
