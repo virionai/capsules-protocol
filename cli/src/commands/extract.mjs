@@ -15,7 +15,8 @@ import { CLIError, bytesText, out, readBytes } from "../format.mjs";
 const USAGE = "usage: capsule extract <file> <out-dir> [--force]\n";
 
 export async function extractCmd(argv) {
-  const args = parseArgs(argv, { booleans: ["force"] });
+  const args = parseArgs(argv, { booleans: ["force"], maxPositionals: 2 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const [file, outDir] = args._;
   if (!file || !outDir) { process.stderr.write(USAGE); return 2; }
   const bytes = await readBytes(file);

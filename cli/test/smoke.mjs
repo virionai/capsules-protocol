@@ -297,6 +297,47 @@ section("keygen");
 
 // ----------------------------------------------------------------------
 
+section("args - unknown flags and extra positionals fail closed (F03)");
+
+{
+  const someKey = "cc".repeat(32);
+
+  // A typo'd trust flag must never silently drop the policy and PASS.
+  const typo = run(["verify", CLEAN, "--alowlist", someKey]);
+  check("typo'd --alowlist exits 2", typo.code === 2);
+  check("typo'd --alowlist names the flag on stderr", /--alowlist/.test(typo.stderr));
+  check("typo'd --alowlist prints no verdict", !/Result:/.test(typo.stdout));
+
+  // The exact invocation inspect.mjs used to recommend; the flag does
+  // not exist, so it must be an error, not a silent PASS.
+  const dk = run(["verify", CLEAN, "--decryption-key", someKey]);
+  check("verify --decryption-key exits 2 (flag not implemented)", dk.code === 2);
+  check("verify --decryption-key names the flag on stderr", /--decryption-key/.test(dk.stderr));
+
+  // Two files: verifying only the first and ignoring the second is a lie.
+  const extra = run(["verify", CLEAN, TAMPERED]);
+  check("second positional exits 2", extra.code === 2);
+  check("second positional named on stderr", /unexpected argument/.test(extra.stderr));
+
+  // Fail-closed parsing is parser-wide, not verify-specific.
+  const short = run(["inspect", CLEAN, "-x"]);
+  check("unknown short flag exits 2", short.code === 2);
+  check("unknown short flag named on stderr", /-x/.test(short.stderr));
+
+  // A flag that requires a value but has none is a clean usage error,
+  // not a stack trace.
+  const missing = run(["chain", CLEAN, "--limit"]);
+  check("flag missing its value exits 2", missing.code === 2);
+  check("flag missing its value gets a clean message", /requires a value/.test(missing.stderr) && !/at .*\(/.test(missing.stderr));
+
+  // --help is universally recognized (it must not become an unknown flag).
+  const help = run(["verify", "--help"]);
+  check("verify --help exits 0", help.code === 0);
+  check("verify --help prints usage", /usage: capsule verify/.test(help.stderr));
+}
+
+// ----------------------------------------------------------------------
+
 section("Summary");
 
 console.log(`  ${passed} passed, ${failed} failed`);

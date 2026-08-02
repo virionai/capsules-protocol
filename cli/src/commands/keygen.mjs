@@ -22,8 +22,9 @@ export async function keygenCmd(argv) {
   const args = parseArgs(argv, {
     booleans: ["json"],
     strings: ["out", "label"],
+    maxPositionals: 0,
   });
-  if (args._[0] === "help" || args.help === true) {
+  if (args.help) {
     process.stderr.write(USAGE);
     return 0;
   }

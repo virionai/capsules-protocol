@@ -20,7 +20,12 @@ export async function verifyCmd(argv) {
   const args = parseArgs(argv, {
     booleans: ["json"],
     arrays: ["allowlist"],
+    maxPositionals: 1,
   });
+  if (args.help) {
+    process.stderr.write(USAGE);
+    return 0;
+  }
   const file = args._[0];
   if (!file) {
     process.stderr.write(USAGE);

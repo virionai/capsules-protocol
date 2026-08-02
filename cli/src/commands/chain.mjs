@@ -12,7 +12,8 @@ import { CLIError, out, readBytes, truncHex } from "../format.mjs";
 const USAGE = "usage: capsule chain <file> [--limit N] [--json]\n";
 
 export async function chainCmd(argv) {
-  const args = parseArgs(argv, { booleans: ["json"], strings: ["limit"] });
+  const args = parseArgs(argv, { booleans: ["json"], strings: ["limit"], maxPositionals: 1 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const file = args._[0];
   if (!file) { process.stderr.write(USAGE); return 2; }
 
