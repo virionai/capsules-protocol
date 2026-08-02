@@ -90,8 +90,8 @@ public enum CapsuleReader {
         guard let envBytes = files["provenance/envelope.json"] else {
             throw CapsuleError.malformed("missing provenance/envelope.json")
         }
-        let manifest = try parseJSON(mfBytes)
-        let envelope = try parseJSON(envBytes)
+        let manifest = try parseJSONFile(mfBytes, name: "manifest.json")
+        let envelope = try parseJSONFile(envBytes, name: "provenance/envelope.json")
 
         // Detect encrypted-outer. The chain/program/agents files live
         // inside the encrypted blob, not the outer zip.
@@ -121,7 +121,7 @@ public enum CapsuleReader {
         }
         var events: [JCSValue] = []
         for raw in evBytes.split(separator: 0x0A) where !raw.isEmpty {
-            events.append(try parseJSON(Data(raw)))
+            events.append(try parseJSONFile(Data(raw), name: "chain/events.jsonl"))
         }
         let programMd = String(decoding: progBytes, as: UTF8.self)
         let agentsMd = files["agents.md"].map { String(decoding: $0, as: UTF8.self) }
@@ -343,6 +343,14 @@ public enum CapsuleReader {
             prev = h
         }
         return true
+    }
+
+    /// `parseJSON` with the offending file named in the error, so a reader
+    /// rejection can be attributed to a specific document (mirrors the Rust
+    /// verifier's "failed to parse manifest.json").
+    static func parseJSONFile(_ data: Data, name: String) throws -> JCSValue {
+        do { return try parseJSON(data) }
+        catch { throw CapsuleError.malformed("failed to parse \(name)") }
     }
 
     static func parseJSON(_ data: Data) throws -> JCSValue {
