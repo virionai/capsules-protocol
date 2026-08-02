@@ -123,7 +123,7 @@ public final class CapsuleBuilder {
     public func seal(signedAt: String? = nil) throws -> BuildResult {
         let sealedAt = signedAt ?? Self.isoNow()
         let parts = try buildInnerParts(sealedAt: sealedAt)
-        let contentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let contentIndex = try Manifest.buildContentIndex(parts.innerFiles)
         let manifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -136,7 +136,7 @@ public final class CapsuleBuilder {
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let mfHash = Manifest.hash(manifest)
+        let mfHash = try Manifest.hash(manifest)
 
         var envelope = Envelope.build(
             capsuleId: parts.capsuleId,
@@ -152,8 +152,8 @@ public final class CapsuleBuilder {
         ])
 
         var allFiles = parts.innerFiles
-        allFiles.append(("manifest.json", Manifest.bytes(manifest)))
-        allFiles.append(("provenance/envelope.json", JCS.bytes(envelope)))
+        allFiles.append(("manifest.json", try Manifest.bytes(manifest)))
+        allFiles.append(("provenance/envelope.json", try JCS.bytes(envelope)))
         let zipBytes = CapsuleZip.pack(allFiles.map { ($0.0, $0.1) })
 
         return BuildResult(
@@ -205,7 +205,7 @@ public final class CapsuleBuilder {
         // 2) Build the inner manifest + envelope. The inner package is what
         // recipients receive after decryption — a fully-formed plain
         // capsule that an L3 verifier can verify in isolation.
-        let innerContentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let innerContentIndex = try Manifest.buildContentIndex(parts.innerFiles)
         let innerManifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -219,7 +219,7 @@ public final class CapsuleBuilder {
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let innerMfHash = Manifest.hash(innerManifest)
+        let innerMfHash = try Manifest.hash(innerManifest)
         var innerEnvelope = Envelope.build(
             capsuleId: parts.capsuleId,
             firstEventHash: parts.firstHash,
@@ -234,8 +234,8 @@ public final class CapsuleBuilder {
         ])
 
         var innerAllFiles = parts.innerFiles
-        innerAllFiles.append(("manifest.json", Manifest.bytes(innerManifest)))
-        innerAllFiles.append(("provenance/envelope.json", JCS.bytes(innerEnvelope)))
+        innerAllFiles.append(("manifest.json", try Manifest.bytes(innerManifest)))
+        innerAllFiles.append(("provenance/envelope.json", try JCS.bytes(innerEnvelope)))
         let innerZipBytes = CapsuleZip.pack(innerAllFiles)
 
         // 3) Encrypt the inner zip.
@@ -250,7 +250,7 @@ public final class CapsuleBuilder {
         // capsule sealed in Swift decrypts under JS and vice versa.
         let contentKey = Random.key32()
         let contentNonce = Random.nonce12()
-        let aad = JCS.bytes(.object([
+        let aad = try JCS.bytes(.object([
             ("version", .string("0.6")),
             ("capsule_id", .string(parts.capsuleId)),
             ("first_event_hash", .string(parts.firstHash)),
@@ -291,17 +291,22 @@ public final class CapsuleBuilder {
             ("content_nonce", .string(Bytes.toHex(contentNonce))),
             ("key_bundles", .array(keyBundles)),
         ])
-        let decryptionMetaBytes = JCS.bytes(decryptionMeta)
+        let decryptionMetaBytes = try JCS.bytes(decryptionMeta)
 
         // 5) Outer manifest + envelope. The outer content_index covers
         // only skills/decryption/decryption.json — manifest.json,
-        // provenance/envelope.json, and content.enc are excluded from the
-        // index by `buildContentIndex` (see spec/manifest.md).
+        // provenance/envelope.json, and (because this capsule declares a
+        // cipher) content.enc are excluded. The content.enc exclusion is
+        // requested explicitly here: it is conditional on the signed
+        // envelope.cipher, not on file presence (see spec/manifest.md).
         let outerSidecars: [(String, Data)] = [
             ("skills/decryption/decryption.json", decryptionMetaBytes),
             ("content.enc", contentEnc),
         ]
-        let outerContentIndex = Manifest.buildContentIndex(outerSidecars)
+        let outerContentIndex = try Manifest.buildContentIndex(
+            outerSidecars,
+            excluded: Manifest.contentIndexExclusions(true)
+        )
         let outerManifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -318,7 +323,7 @@ public final class CapsuleBuilder {
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let outerMfHash = Manifest.hash(outerManifest)
+        let outerMfHash = try Manifest.hash(outerManifest)
 
         var outerEnvelope = Envelope.build(
             capsuleId: parts.capsuleId,
@@ -336,8 +341,8 @@ public final class CapsuleBuilder {
 
         // 6) Pack the outer zip.
         var outerAllFiles = outerSidecars
-        outerAllFiles.append(("manifest.json", Manifest.bytes(outerManifest)))
-        outerAllFiles.append(("provenance/envelope.json", JCS.bytes(outerEnvelope)))
+        outerAllFiles.append(("manifest.json", try Manifest.bytes(outerManifest)))
+        outerAllFiles.append(("provenance/envelope.json", try JCS.bytes(outerEnvelope)))
         let outerZipBytes = CapsuleZip.pack(outerAllFiles)
 
         return BuildResult(
@@ -385,7 +390,7 @@ public final class CapsuleBuilder {
                 untrustedPayloadFields: []
             ))
         }
-        let events = Chain.build(bare)
+        let events = try Chain.build(bare)
         guard let firstHash = events.first?.hash, let entryHash = events.last?.hash else {
             throw CapsuleError.malformed("empty chain after build")
         }

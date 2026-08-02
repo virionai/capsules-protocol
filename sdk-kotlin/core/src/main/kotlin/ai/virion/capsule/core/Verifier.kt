@@ -57,15 +57,49 @@ object CapsuleVerifier {
         val storedMh = CapsuleReader.lookupString(parsed.envelope, listOf("manifest_hash"))
         rec("manifest_hash", mh == storedMh, mh.take(12) + "…")
 
+        // `content.enc` drops out of the index only when the SIGNED envelope
+        // declares a cipher (it is bound instead by
+        // envelope.encrypted_blob_hash). Keying off file presence would let
+        // an attacker append a stray blob to a signed plain capsule and have
+        // it excluded for free; keying off the signed cipher means the stray
+        // blob is indexed here and fails verification. See spec/manifest.md.
+        val indexCipher = CapsuleReader.lookupString(parsed.envelope, listOf("cipher")) ?: "none"
+        val excluded = Manifest.contentIndexExclusions(indexCipher != "none")
         val indexInputs = parsed.files
-            .filter { it.key !in Manifest.CONTENT_INDEX_EXCLUDED }
+            .filter { it.key !in excluded }
             .map { it.key to it.value }
-        val ci = Manifest.buildContentIndex(indexInputs)
+        val ci = Manifest.buildContentIndex(indexInputs, excluded)
+        // Per-file attribution, so a failing index names the offending paths
+        // instead of only reporting a hash mismatch (mirrors the JS
+        // reference's contentIndex.errors).
+        val storedIndex = LinkedHashMap<String, String>()
+        val storedRows = ((parsed.manifest as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "content_index" }?.second as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "files" }?.second as? JCSValue.Arr
+        storedRows?.items?.forEach { row ->
+            val cols = (row as? JCSValue.Obj)?.pairs ?: return@forEach
+            val path = (cols.firstOrNull { it.first == "path" }?.second as? JCSValue.Str)?.v
+            val hash = (cols.firstOrNull { it.first == "sha256" }?.second as? JCSValue.Str)?.v
+            if (path != null && hash != null) storedIndex[path] = hash
+        }
+        val indexProblems = mutableListOf<String>()
+        for ((path, hash) in ci.files) {
+            val want = storedIndex[path]
+            if (want == null) indexProblems += "file present but not in manifest index: $path"
+            else if (want != hash) indexProblems += "file hash mismatch: $path"
+        }
+        val recomputedPaths = ci.files.map { it.first }.toSet()
+        for (path in storedIndex.keys.sorted()) {
+            if (path !in recomputedPaths) {
+                indexProblems += "file in manifest index but missing from package: $path"
+            }
+        }
         val storedIdxMf = CapsuleReader.lookupString(parsed.manifest, listOf("content_index", "index_hash"))
         val storedIdxEnv = CapsuleReader.lookupString(parsed.envelope, listOf("content_index_hash"))
+        val indexHashesMatch = ci.indexHash == storedIdxMf && ci.indexHash == storedIdxEnv
         rec("content_index_hash",
-            ci.indexHash == storedIdxMf && ci.indexHash == storedIdxEnv,
-            ci.indexHash.take(12) + "…")
+            indexHashesMatch && indexProblems.isEmpty(),
+            (listOf(ci.indexHash.take(12) + "…") + indexProblems).joinToString("; "))
 
         rec("chain", verifyChain(parsed.events), "${parsed.events.size} events")
 

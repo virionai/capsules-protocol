@@ -44,7 +44,7 @@ final class JCSNumbersVectorTests: XCTestCase {
             }
             let value = Double(bitPattern: bits)
             XCTAssertEqual(
-                JCS.canonical(.decimal(value)),
+                try JCS.canonical(.decimal(value)),
                 vector.expected,
                 "bits \(vector.ieee_hex)"
             )

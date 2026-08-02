@@ -194,23 +194,75 @@ public enum CapsuleVerifier {
             record("capsule_id", false, "missing fields")
         }
 
-        // manifest hash
-        let mh = Manifest.hash(parsed.manifest)
-        if let stored = lookupString(parsed.envelope, ["manifest_hash"]) {
-            record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
+        // manifest hash. Canonicalization can refuse the manifest (e.g. an
+        // integer outside ±(2^53 − 1)) — that is a fail-closed check
+        // failure, never a trap.
+        do {
+            let mh = try Manifest.hash(parsed.manifest)
+            if let stored = lookupString(parsed.envelope, ["manifest_hash"]) {
+                record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
+            }
+        } catch {
+            record("manifest_hash", false, "\(error)")
         }
 
-        // content_index
+        // content_index. `content.enc` drops out of the index only when the
+        // SIGNED envelope declares a cipher (it is bound instead by
+        // envelope.encrypted_blob_hash). Keying off file presence would let
+        // an attacker append a stray blob to a signed plain capsule and have
+        // it excluded for free; keying off the signed cipher means the stray
+        // blob is indexed here and fails verification. See spec/manifest.md.
+        let indexCipher = lookupString(parsed.envelope, ["cipher"]) ?? "none"
+        let excluded = Manifest.contentIndexExclusions(indexCipher != "none")
         var indexInputs: [(String, Data)] = []
-        for (path, data) in parsed.files where !Manifest.CONTENT_INDEX_EXCLUDED.contains(path) {
+        for (path, data) in parsed.files where !excluded.contains(path) {
             indexInputs.append((path, data))
         }
-        let ci = Manifest.buildContentIndex(indexInputs)
-        if let storedMf = lookupString(parsed.manifest, ["content_index", "index_hash"]),
-           let storedEnv = lookupString(parsed.envelope, ["content_index_hash"]) {
-            record("content_index_hash",
-                   ci.indexHash == storedMf && ci.indexHash == storedEnv,
-                   String(ci.indexHash.prefix(12)) + "…")
+        do {
+            let ci = try Manifest.buildContentIndex(indexInputs, excluded: excluded)
+            // Per-file attribution, so a failing index names the offending paths
+            // instead of only reporting a hash mismatch (mirrors the JS
+            // reference's contentIndex.errors).
+            var storedIndex: [String: String] = [:]
+            if case .object(let mfPairs) = parsed.manifest,
+               let civ = mfPairs.first(where: { $0.0 == "content_index" })?.1,
+               case .object(let ciPairs) = civ,
+               let filesV = ciPairs.first(where: { $0.0 == "files" })?.1,
+               case .array(let rows) = filesV
+            {
+                for row in rows {
+                    guard case .object(let cols) = row,
+                          let pv = cols.first(where: { $0.0 == "path" })?.1,
+                          case .string(let path) = pv,
+                          let hv = cols.first(where: { $0.0 == "sha256" })?.1,
+                          case .string(let hash) = hv
+                    else { continue }
+                    storedIndex[path] = hash
+                }
+            }
+            var indexProblems: [String] = []
+            for f in ci.files {
+                guard let want = storedIndex[f.path] else {
+                    indexProblems.append("file present but not in manifest index: \(f.path)")
+                    continue
+                }
+                if want != f.sha256 {
+                    indexProblems.append("file hash mismatch: \(f.path)")
+                }
+            }
+            for path in storedIndex.keys.sorted() where !ci.files.contains(where: { $0.path == path }) {
+                indexProblems.append("file in manifest index but missing from package: \(path)")
+            }
+            if let storedMf = lookupString(parsed.manifest, ["content_index", "index_hash"]),
+               let storedEnv = lookupString(parsed.envelope, ["content_index_hash"]) {
+                let hashesMatch = ci.indexHash == storedMf && ci.indexHash == storedEnv
+                let short = String(ci.indexHash.prefix(12)) + "…"
+                record("content_index_hash",
+                       hashesMatch && indexProblems.isEmpty,
+                       indexProblems.isEmpty ? short : ([short] + indexProblems).joined(separator: "; "))
+            }
+        } catch {
+            record("content_index_hash", false, "\(error)")
         }
 
         if parsed.isEncrypted {

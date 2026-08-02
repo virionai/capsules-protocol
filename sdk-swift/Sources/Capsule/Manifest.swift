@@ -3,12 +3,30 @@
 import Foundation
 
 public enum Manifest {
-    /// Excluded from content_index.files (see manifest.md).
-    public static let CONTENT_INDEX_EXCLUDED: Set<String> = [
+    /// Excluded from content_index.files by structural necessity, for every
+    /// capsule regardless of profile:
+    ///   - manifest.json: the index lives inside it (would be circular)
+    ///   - provenance/envelope.json: it commits to the index hash (circular)
+    public static let STRUCTURAL_EXCLUDED: Set<String> = [
         "manifest.json",
         "provenance/envelope.json",
-        "content.enc",
     ]
+
+    /// `content.enc` is excluded from the content index ONLY for encrypted
+    /// capsules, where it is bound separately by
+    /// `envelope.encrypted_blob_hash`. In a plain capsule (`cipher: "none"`)
+    /// a `content.enc` entry MUST be indexed like any other file, so a signed
+    /// plain capsule cannot carry an unaccounted-for blob past verification
+    /// (spec/manifest.md).
+    public static let CONTENT_INDEX_EXCLUDED: Set<String> =
+        STRUCTURAL_EXCLUDED.union(["content.enc"])
+
+    /// Choose the content-index exclusion set for the capsule's profile.
+    /// `encrypted` must be derived from the SIGNED `envelope.cipher`, never
+    /// from the presence of a `content.enc` file.
+    public static func contentIndexExclusions(_ encrypted: Bool) -> Set<String> {
+        encrypted ? CONTENT_INDEX_EXCLUDED : STRUCTURAL_EXCLUDED
+    }
 
     public static let ID_DOMAIN = Data("capsule-id-v0.6\0".utf8)
 
@@ -26,18 +44,23 @@ public enum Manifest {
         public let indexHash: String
     }
 
-    /// Builds content_index over a sorted list of (path, bytes), excluding
-    /// the three reserved files.
-    public static func buildContentIndex(_ files: [(path: String, data: Data)]) -> ContentIndex {
+    /// Builds content_index over a sorted list of (path, bytes), skipping
+    /// `excluded`. The default is the structural-only set; callers building
+    /// or verifying an ENCRYPTED capsule pass
+    /// `Manifest.contentIndexExclusions(true)`.
+    public static func buildContentIndex(
+        _ files: [(path: String, data: Data)],
+        excluded: Set<String> = Manifest.STRUCTURAL_EXCLUDED
+    ) throws -> ContentIndex {
         var entries: [(path: String, sha256: String)] = []
-        for (path, data) in files where !CONTENT_INDEX_EXCLUDED.contains(path) {
+        for (path, data) in files where !excluded.contains(path) {
             entries.append((path, Hash.sha256Hex(data)))
         }
         entries.sort { $0.path < $1.path }
         let arr = JCSValue.array(entries.map { (p, h) in
             .object([("path", .string(p)), ("sha256", .string(h))])
         })
-        let indexHash = Hash.sha256Hex(JCS.bytes(arr))
+        let indexHash = Hash.sha256Hex(try JCS.bytes(arr))
         return ContentIndex(files: entries, indexHash: indexHash)
     }
 
@@ -103,11 +126,11 @@ public enum Manifest {
         ])
     }
 
-    public static func hash(_ manifest: JCSValue) -> String {
-        Hash.sha256Hex(JCS.bytes(manifest))
+    public static func hash(_ manifest: JCSValue) throws -> String {
+        Hash.sha256Hex(try JCS.bytes(manifest))
     }
 
-    public static func bytes(_ manifest: JCSValue) -> Data {
-        JCS.bytes(manifest)
+    public static func bytes(_ manifest: JCSValue) throws -> Data {
+        try JCS.bytes(manifest)
     }
 }

@@ -33,36 +33,48 @@ public indirect enum JCSValue: Equatable {
 }
 
 public enum JCS {
-    public static func canonical(_ v: JCSValue) -> String {
+    /// Canonicalize a value to its JCS string.
+    ///
+    /// Throws `CapsuleError.malformed` (never traps) on values that have
+    /// no interoperable canonical form: integers outside ±(2^53 − 1) and
+    /// non-finite doubles. These are reachable from
+    /// `CapsuleVerifier.verify` on attacker-controlled manifest, envelope,
+    /// and chain bytes, so a `precondition` here would let a crafted
+    /// capsule kill the host process — matching sdk-py's `ValueError`
+    /// and sdk-kotlin's `IllegalArgumentException`, both catchable.
+    public static func canonical(_ v: JCSValue) throws -> String {
         switch v {
         case .null: return "null"
         case .bool(let b): return b ? "true" : "false"
         case .integer(let i):
-            precondition(
-                i.magnitude <= (UInt64(1) << 53) - 1,
-                "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1); "
-                    + "not representable identically across implementations"
-            )
+            guard i.magnitude <= (UInt64(1) << 53) - 1 else {
+                throw CapsuleError.malformed(
+                    "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1); "
+                        + "not representable identically across implementations"
+                )
+            }
             return String(i)
         case .decimal(let d):
-            precondition(d.isFinite, "JCS: non-finite number")
+            guard d.isFinite else {
+                throw CapsuleError.malformed("JCS: non-finite number")
+            }
             return serializeNumber(d)
         case .string(let s): return encodeString(s)
         case .array(let arr):
-            return "[" + arr.map(canonical).joined(separator: ",") + "]"
+            return "[" + (try arr.map(canonical).joined(separator: ",")) + "]"
         case .object(let pairs):
             // Sort by key; UTF-16 code-unit order is the default for Swift's
             // String comparison when both sides are pure-BMP. For correctness
             // beyond BMP we'd compare code-unit views explicitly; chain keys
             // are ASCII so this is exact.
             let sorted = pairs.sorted { $0.0 < $1.0 }
-            return "{" + sorted.map { encodeString($0.0) + ":" + canonical($0.1) }
-                .joined(separator: ",") + "}"
+            return "{" + (try sorted.map { try encodeString($0.0) + ":" + canonical($0.1) }
+                .joined(separator: ",")) + "}"
         }
     }
 
-    public static func bytes(_ v: JCSValue) -> Data {
-        return Data(canonical(v).utf8)
+    public static func bytes(_ v: JCSValue) throws -> Data {
+        return Data(try canonical(v).utf8)
     }
 
     /// RFC 8785 §3.2.2.3: serialize per ECMAScript Number::toString

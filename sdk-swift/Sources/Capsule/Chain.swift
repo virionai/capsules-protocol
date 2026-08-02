@@ -61,7 +61,7 @@ public struct BuiltEvent {
 public enum Chain {
     static let GENESIS_PREV = Data(repeating: 0, count: 32)
 
-    public static func build(_ bare: [BareEvent]) -> [BuiltEvent] {
+    public static func build(_ bare: [BareEvent]) throws -> [BuiltEvent] {
         var prev = GENESIS_PREV
         var out: [BuiltEvent] = []
         for (i, b) in bare.enumerated() {
@@ -83,7 +83,7 @@ public enum Chain {
                 ("untrusted_payload_fields", .array(b.untrustedPayloadFields.map { .string($0) })),
                 ("prev_hash", .string(prevHex)),
             ])
-            let canonical = JCS.bytes(unsealed)
+            let canonical = try JCS.bytes(unsealed)
             let hashBytes = Hash.sha256(Bytes.concat(prev, canonical))
             let hashHex = Bytes.toHex(hashBytes)
             // Build JSONL line — exact key order matching reader expectations.
@@ -104,7 +104,7 @@ public enum Chain {
             ])
             // For the on-disk JSONL we use canonical bytes (works for any
             // reader; deterministic).
-            let line = JCS.bytes(withHash)
+            let line = try JCS.bytes(withHash)
             out.append(BuiltEvent(
                 seq: seq,
                 event_id: eventId,
