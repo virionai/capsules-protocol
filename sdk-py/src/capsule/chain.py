@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TypedDict
 
 from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256
 
 GENESIS_PREV_BYTES: bytes = b"\x00" * 32
 GENESIS_PREV_HEX: str = "0" * 64
+
+# Chain-bound hex is lowercase per spec/chain.md. verify_chain feeds a
+# stored hash straight into hex_to_bytes to seed the next link, so the
+# canonical-form check has to happen before that call, not inside it.
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_hex64(value) -> bool:
+    return isinstance(value, str) and _HEX64.match(value) is not None
 
 
 class ChainError(TypedDict):
@@ -90,11 +100,17 @@ def verify_chain(events: list[dict]) -> ChainResult:
     errors: list[ChainError] = []
     prev = GENESIS_PREV_BYTES
     for i, e in enumerate(events):
+        if not isinstance(e, dict):
+            errors.append({"seq": i + 1, "message": "event is not a JSON object"})
+            continue
         seq = e.get("seq", i + 1)
         if e.get("seq") != i + 1:
             errors.append({"seq": seq, "message": f"seq {e.get('seq')} expected {i + 1}"})
         if not isinstance(e.get("prev_hash"), str) or len(e["prev_hash"]) != 64:
             errors.append({"seq": seq, "message": "prev_hash missing or wrong length"})
+            continue
+        if not _is_hex64(e["prev_hash"]):
+            errors.append({"seq": seq, "message": "prev_hash is not canonical lowercase hex"})
             continue
         expected_prev = bytes_to_hex(prev)
         if e["prev_hash"] != expected_prev:
@@ -106,6 +122,9 @@ def verify_chain(events: list[dict]) -> ChainResult:
             )
         if not isinstance(e.get("hash"), str) or len(e["hash"]) != 64:
             errors.append({"seq": seq, "message": "hash missing or wrong length"})
+            continue
+        if not _is_hex64(e["hash"]):
+            errors.append({"seq": seq, "message": "hash is not canonical lowercase hex"})
             continue
         rest = {k: v for k, v in e.items() if k != "hash"}
         try:
@@ -124,8 +143,17 @@ def verify_chain(events: list[dict]) -> ChainResult:
     return {"ok": len(errors) == 0, "errors": errors}
 
 
-def first_and_entry_hash(events: list[dict]) -> tuple[str, str]:
-    """Return (first_event_hash, entry_hash) for the chain."""
+def first_and_entry_hash(events: list[dict]) -> tuple[str | None, str | None]:
+    """Return (first_event_hash, entry_hash) for the chain.
+
+    Returns None for an event that is not an object or carries no hash,
+    matching sdk-js: the caller compares against the envelope and reports
+    a mismatch rather than raising.
+    """
     if not events:
         raise ValueError("chain is empty")
-    return events[0]["hash"], events[-1]["hash"]
+
+    def _hash_of(e):
+        return e.get("hash") if isinstance(e, dict) else None
+
+    return _hash_of(events[0]), _hash_of(events[-1])

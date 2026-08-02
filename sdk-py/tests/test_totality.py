@@ -16,6 +16,7 @@ import zipfile
 import pytest
 
 from capsule.builder import CapsuleBuilder
+from capsule.chain import verify_chain
 from capsule.crypto import generate_ed25519
 from capsule.reader import CapsuleReader, MalformedCapsuleError
 from capsule.verifier import verify_capsule
@@ -126,3 +127,47 @@ def test_content_index_entry_without_sha256_fails_closed():
     result = verify_capsule(tampered, allowlist=[kp.public_key_hex])
     _assert_fail_closed_shape(result)
     assert "manifest.content_index.files[0].sha256" in result["errors"][0]
+
+
+def test_verify_chain_reports_non_canonical_hash():
+    result = verify_chain([{"seq": 1, "prev_hash": "0" * 64, "hash": "A" * 64}])
+    assert result["ok"] is False
+    assert any("hash is not canonical lowercase hex" in e["message"] for e in result["errors"])
+
+
+def test_verify_chain_reports_non_object_event():
+    result = verify_chain(["not an event"])
+    assert result["ok"] is False
+    assert result["errors"] == [{"seq": 1, "message": "event is not a JSON object"}]
+
+
+def test_uppercase_stored_event_hash_fails_closed():
+    zip_bytes, kp = _sealed()
+
+    def _upper(name: str, data: bytes) -> bytes:
+        if name != "chain/events.jsonl":
+            return data
+        lines = [ln for ln in data.decode("utf-8").split("\n") if ln]
+        first = json.loads(lines[0])
+        first["hash"] = first["hash"].upper()
+        return ("\n".join([json.dumps(first), *lines[1:]]) + "\n").encode("utf-8")
+
+    tampered = _repack(zip_bytes, _upper)
+    result = verify_capsule(tampered, allowlist=[kp.public_key_hex])
+    assert result["ok"] is False
+    assert result["chain"]["ok"] is False
+    assert any(
+        "hash is not canonical lowercase hex" in e["message"] for e in result["chain"]["errors"]
+    )
+
+
+def test_non_object_chain_event_fails_closed():
+    zip_bytes, kp = _sealed()
+    tampered = _repack(
+        zip_bytes,
+        lambda n, d: b'"not an event"\n' if n == "chain/events.jsonl" else d,
+    )
+    result = verify_capsule(tampered, allowlist=[kp.public_key_hex])
+    assert result["ok"] is False
+    assert result["chain"]["ok"] is False
+    assert any("event is not a JSON object" in e["message"] for e in result["chain"]["errors"])
