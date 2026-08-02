@@ -22,6 +22,7 @@ from .manifest import (
     CONTENT_INDEX_EXCLUDED,
     build_content_index,
     build_manifest,
+    build_signer_commitment,
     compute_capsule_id,
     manifest_bytes,
     manifest_hash,
@@ -206,6 +207,14 @@ class CapsuleBuilder:
         originator_pub_raw = hex_to_bytes(self.originator["public_key"])
         capsule_id = compute_capsule_id(originator_pub_raw, first_event_hash)
 
+        # Signer-set commitment: the exact (role, public_key) membership of
+        # the seal-time signer set, bound into the manifest (and therefore
+        # into every signature via manifest_hash). Plain and encrypted paths
+        # share one signer list, so one commitment serves inner and outer.
+        signer_commitment = build_signer_commitment(
+            [{"role": s["role"], "public_key": bytes_to_hex(s["public_key"])} for s in signers]
+        )
+
         # ---- Plain path ----
         if not recipients:
             content_index = build_content_index(inner)
@@ -217,6 +226,7 @@ class CapsuleBuilder:
                 skill_trust=skill_trust,
                 encryption=None,
                 created_at=self.created_at,
+                signer_commitment=signer_commitment,
             )
             manifest["id"] = capsule_id
             mf_hash = manifest_hash(manifest)
@@ -252,6 +262,7 @@ class CapsuleBuilder:
             skill_trust=skill_trust,
             encryption=None,
             created_at=self.created_at,
+            signer_commitment=signer_commitment,
         )
         inner_manifest["id"] = capsule_id
         inner_mf_hash = manifest_hash(inner_manifest)
@@ -318,6 +329,7 @@ class CapsuleBuilder:
                 "cipher": "ChaCha20-Poly1305",
             },
             created_at=self.created_at,
+            signer_commitment=signer_commitment,
         )
         outer_manifest["id"] = capsule_id
         outer_mf_hash = manifest_hash(outer_manifest)

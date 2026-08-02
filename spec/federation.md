@@ -343,6 +343,12 @@ role such as an org `admin`) sign a capsule, with a quorum. This is
 where the layers compose. A signer counts toward a requirement only if
 **all** of the following hold:
 
+0. **Bound signer set** — the envelope signer set matches
+   `manifest.signer_commitment` (see [envelope.md](envelope.md) "Signer
+   set binding"). A host evaluating quorum over an *unbound* set is
+   evaluating policy over an unauthenticated input; hosts with quorum
+   requirements SHOULD require the commitment to be present. Counting
+   is always over distinct public keys, never signer rows.
 1. **Valid signature** — the signer is valid in the L2 verification
    result.
 2. **Trusted key** — the key is on the host's allowlist, derived from

@@ -423,13 +423,19 @@ mod tests {
                 .expect("envelope parses");
 
         let got = build_aad(&envelope, &manifest);
-        let expected = br#"{"capsule_id":"260b65e936cf5cb0000e46eb770b715f0e0e27627958ae1d591cb5984e9b8049","cipher":"ChaCha20-Poly1305","first_event_hash":"331924b4ac4bb305b48f0fccf05fe3f963bcb9d08e3c87b5a6ed97d0ac2558ea","originator_public_key":"cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc","version":"0.6"}"#;
+        // The byte template (field order, key naming, quoting) is the pin;
+        // the key-derived VALUES are sourced from the fixture's own signed
+        // documents so the pin survives fixture keypair re-baselines.
+        let expected = format!(
+            r#"{{"capsule_id":"{}","cipher":"ChaCha20-Poly1305","first_event_hash":"{}","originator_public_key":"{}","version":"0.6"}}"#,
+            envelope.capsule_id, envelope.first_event_hash, manifest.originator.public_key
+        );
         assert_eq!(
             got,
-            expected,
+            expected.as_bytes(),
             "AAD bytes mismatch:\n got:      {}\n expected: {}",
             String::from_utf8_lossy(&got),
-            String::from_utf8_lossy(expected)
+            expected
         );
     }
 

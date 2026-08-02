@@ -133,6 +133,7 @@ public final class CapsuleBuilder {
             contentIndex: contentIndex,
             firstEventHash: parts.firstHash,
             skillTrust: parts.skillTrust,
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
@@ -216,6 +217,7 @@ public final class CapsuleBuilder {
             firstEventHash: parts.firstHash,
             skillTrust: parts.skillTrust,
             encryption: .null,
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
@@ -320,6 +322,7 @@ public final class CapsuleBuilder {
                 ("metadata_path", .string("skills/decryption/decryption.json")),
                 ("cipher", .string("ChaCha20-Poly1305")),
             ]),
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
@@ -357,6 +360,16 @@ public final class CapsuleBuilder {
             fileCount: outerAllFiles.count,
             byteCount: outerZipBytes.count
         )
+    }
+
+    /// The exact seal-time signer set for this builder: the originator is
+    /// the sole signer in v0, so the commitment is a single member. Plain
+    /// and encrypted paths share it (one commitment serves the inner and
+    /// outer manifests).
+    private func signerCommitment() -> [Manifest.SignerCommitmentMember] {
+        Manifest.buildSignerCommitment([
+            .init(role: "originator", publicKeyHex: originator.keyPair.publicKeyHex)
+        ])
     }
 
     public static func isoNow() -> String {

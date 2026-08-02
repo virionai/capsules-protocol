@@ -85,6 +85,8 @@ final class SpecRegistryTests: XCTestCase {
         "chain": "chain",
         "envelope": "envelope_signature",
         "encrypted_blob": "encrypted_blob_hash",
+        "signer_set": "signer_commitment",
+        "originator_binding": "originator_binding",
     ]
 
     /// Verify-stage vectors that THIS lane legitimately rejects at OPEN:
@@ -129,6 +131,12 @@ final class SpecRegistryTests: XCTestCase {
                 "\(name): expected an error containing \(needle); got \(haystack(v))"
             )
         }
+        if let bound = expected["signer_set_bound"] as? Bool {
+            XCTAssertEqual(
+                v.signerSetBound, bound,
+                "\(name): expected signerSetBound=\(bound)"
+            )
+        }
     }
 
     // MARK: - tamper-detection/vectors.json
@@ -140,6 +148,32 @@ final class SpecRegistryTests: XCTestCase {
         let keys = try allowlist(doc, base: base)
         let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
         XCTAssertFalse(vectors.isEmpty, "tamper-detection registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - signer-set/vectors.json
+
+    /// Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS
+    /// (spec/manifest.md "signer_commitment", spec/envelope.md "Signer set
+    /// binding"). A present manifest.signer_commitment must equal the
+    /// normalized envelope signer set exactly — strip / add / role-swap /
+    /// unsorted all fail closed; an absent one verifies with
+    /// signerSetBound=false. Duplicate (role, public_key) signers are
+    /// malformed, and the manifest originator must have a valid
+    /// role-"originator" signature.
+    func testSignerSetRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("signer-set/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "signer-set registry is empty")
         for vector in vectors {
             let name = vector["name"] as? String ?? "<unnamed>"
             let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")

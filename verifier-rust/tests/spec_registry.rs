@@ -8,6 +8,7 @@
 //!   - tamper-detection/vectors.json   (verify-stage outcomes)
 //!   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
 //!   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
+//!   - signer-set/vectors.json         (signer-set binding outcomes)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!
 //! The registry's `reason` categories are normative; the substring tables
@@ -89,6 +90,19 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
                     "{name}: expected an encrypted_blob_hash error; got {:?}",
                     result.errors
                 ),
+                "signer_set" => assert!(
+                    !result.signer_set.ok,
+                    "{name}: signer_set must fail; got {:?}",
+                    result.signer_set
+                ),
+                "originator_binding" => assert!(
+                    result
+                        .errors
+                        .iter()
+                        .any(|e| e.message.contains("originator binding")),
+                    "{name}: expected an originator binding error; got {:?}",
+                    result.errors
+                ),
                 other => panic!("{name}: unknown failing area {other:?}"),
             }
         }
@@ -98,6 +112,13 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
         assert!(
             haystack.contains(needle),
             "{name}: expected an error containing {needle:?}; got {haystack:?}"
+        );
+    }
+    if let Some(bound) = expected["signer_set_bound"].as_bool() {
+        assert_eq!(
+            result.signer_set.bound, bound,
+            "{name}: expected signer_set.bound={bound}; got {:?}",
+            result.signer_set
         );
     }
 }
@@ -142,6 +163,29 @@ fn tamper_registry_outcomes() {
 #[test]
 fn unknown_fields_registry_outcomes() {
     let path = vectors_dir().join("unknown-fields/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS
+/// (spec/manifest.md "signer_commitment", spec/envelope.md "Signer set
+/// binding"). A present manifest.signer_commitment must equal the
+/// normalized envelope signer set exactly — strip / add / role-swap /
+/// unsorted all fail closed; an absent one verifies with
+/// signer_set.bound=false. Duplicate (role, public_key) signers are
+/// malformed, and the manifest originator must have a valid
+/// role-"originator" signature.
+#[test]
+fn signer_set_registry_outcomes() {
+    let path = vectors_dir().join("signer-set/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);

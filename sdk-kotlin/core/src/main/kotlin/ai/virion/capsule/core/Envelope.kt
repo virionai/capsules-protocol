@@ -82,6 +82,21 @@ object Envelope {
         val signers = (obj.pairs.firstOrNull { it.first == "signers" }?.second as? JCSValue.Arr)?.items
             ?: return VerifyResult(false, emptyList(), "no signers")
         if (signers.isEmpty()) return VerifyResult(false, emptyList(), "envelope has no signers")
+        // Duplicate (role, public_key) entries are malformed: counting rows
+        // instead of distinct members lets one key satisfy an M-of-N policy.
+        // Same key under different roles is permitted (distinct members).
+        val seen = mutableSetOf<Pair<String, String>>()
+        for (s in signers) {
+            val sObj = s as? JCSValue.Obj ?: continue
+            val role = (sObj.pairs.firstOrNull { it.first == "role" }?.second as? JCSValue.Str)?.v ?: ""
+            val pk = (sObj.pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v ?: ""
+            if (!seen.add(role to pk.lowercase())) {
+                return VerifyResult(
+                    false, emptyList(),
+                    "duplicate signer entry (role=$role, public_key=$pk)",
+                )
+            }
+        }
         var allValid = true
         val results = mutableListOf<Triple<String, String, Boolean>>()
         for (s in signers) {

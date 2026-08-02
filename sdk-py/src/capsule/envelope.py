@@ -110,6 +110,22 @@ def verify_envelope_signatures(envelope: dict) -> dict:
     if not isinstance(signers, list) or len(signers) == 0:
         return {"ok": False, "signers": [], "note": "envelope has no signers"}
 
+    # Duplicate (role, public_key) entries are malformed: counting rows
+    # instead of distinct members lets one key satisfy an M-of-N policy.
+    # Same key under different roles is permitted (distinct members).
+    seen: set[tuple] = set()
+    for s in signers:
+        role = s.get("role") if isinstance(s, dict) else None
+        key = s.get("public_key") if isinstance(s, dict) else None
+        member = (role, key.lower() if isinstance(key, str) else key)
+        if member in seen:
+            return {
+                "ok": False,
+                "signers": [],
+                "note": f"duplicate signer entry (role={role}, public_key={key})",
+            }
+        seen.add(member)
+
     out = []
     all_valid = True
     for s in signers:

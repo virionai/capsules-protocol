@@ -112,6 +112,52 @@ the prior `Ed25519.sign(utf8(hex_string))` interop bomb.
 roles: a `creator` signature is not also a valid `notary` signature even
 over identical envelope bytes.
 
+## Signer set binding
+
+The envelope does **not** bind its own `signers[]`. The signing input is
+`JCS(envelope minus signers)`, so the array is not an input to any
+signature — and `provenance/envelope.json` is structurally excluded from
+the content index. This is deliberate and matches TUF and DSSE: a
+signature array cannot authenticate itself (adding any signature would
+invalidate every existing one). The *requirement* is authenticated in a
+signed parent instead:
+
+- `manifest.signer_commitment` (see [manifest.md](manifest.md)) stores
+  the exact `(role, public_key)` membership of the seal-time signer
+  set. `envelope.manifest_hash` is inside the canonical payload, so the
+  commitment is transitively signed by every signer.
+- **Presence binds, absence reports.** When the commitment is present,
+  the normalized signer set MUST equal it exactly — a stripped signer,
+  an appended signature in a chosen role, a role swap, or a duplicated
+  entry fails verification closed. When absent, verification MAY
+  succeed, but the verifier MUST report machine-readably that the
+  signer set is unbound. Per-role domain separation alone stops
+  replaying one key's signature into another role; it does nothing
+  against a *fresh* signature in a chosen role — only the commitment
+  closes that.
+- **Duplicate signer entries are malformed.** A verifier MUST reject an
+  envelope whose `signers[]` contains two entries with the same
+  `(role, lowercase public_key)`, whether or not a commitment is
+  present. Counting rows instead of members lets one key satisfy an
+  M-of-N policy by repetition.
+- **Distinct-key counting.** Any signer count a verifier reports (e.g.
+  a trusted-signer count) MUST count distinct public keys, never array
+  rows. This is TUF's threshold rule and DSSE's: the same key under two
+  roles is two set members but one key.
+- **Originator binding.** `signers[]` MUST include an entry with role
+  `originator` whose `public_key` equals
+  `manifest.originator.public_key` and whose signature verifies
+  (integrity invariant; see manifest.md).
+
+Post-seal countersigning is *not* expressed by appending to
+`signers[]` — the set is fixed when the manifest is built, and mutating
+a finalized structure is not countersigning (RFC 9338 requires a
+finalized target). A post-seal approval is a separate signed artifact
+whose subject names the finalized capsule; a countersignature-capsule
+profile is future (v0.7+) work.
+
+Conformance vectors: `spec/vectors/signer-set/`.
+
 ## Verification
 
 For each signer:
@@ -155,14 +201,23 @@ Negative conformance vectors for every case above are checked in at
 
 Then:
 
-1. Recompute `manifest_hash` from the manifest as actually stored.
+1. Reject the envelope if `signers[]` contains duplicate
+   `(role, lowercase public_key)` entries.
+2. Recompute `manifest_hash` from the manifest as actually stored.
    Compare to `envelope.manifest_hash`.
-2. Recompute `content_index_hash` from `manifest.content_index.files`.
+3. Recompute `content_index_hash` from `manifest.content_index.files`.
    Compare.
-3. Recompute `first_event_hash` and `entry_hash` from the chain.
+4. Recompute `first_event_hash` and `entry_hash` from the chain.
    Compare.
-4. For encrypted capsules: recompute SHA-256 of `content.enc`. Compare
+5. For encrypted capsules: recompute SHA-256 of `content.enc`. Compare
    to `encrypted_blob_hash`.
+6. Signer-set binding: when `manifest.signer_commitment` is present,
+   require the normalized signer set to equal it exactly (fail closed);
+   when absent, report the set as unbound without failing. See "Signer
+   set binding".
+7. Originator binding: require a valid signer with role `originator`
+   whose key equals `manifest.originator.public_key`.
+8. Report any signer count over distinct public keys, not rows.
 
 The verifier reports an L2 result with per-signer outcomes. **The
 verifier does not return `trusted: true`.** Trust is a host concern,
@@ -257,6 +312,16 @@ There is no L1 in v0.6. L1 (ledger-anchored existence) is parking-lot.
 
 - That the keys in `signers[]` belong to whom they claim. The envelope
   proves the math; trust is the host's responsibility.
+- That `signers[]` is the set that sealed the capsule — *on its own*.
+  The envelope's signatures do not cover the array; that binding comes
+  from `manifest.signer_commitment`, and a capsule without one makes no
+  signer-set claim at all (verifiers report it as unbound).
+- That any role satisfies a policy. `signer_commitment` authenticates
+  the set's membership, not identity or quorum: which keys count, which
+  roles are required, and how many, remain host policy
+  ([trust.md](trust.md), [federation.md](federation.md)) — the
+  commitment is what makes evaluating that policy over the reported set
+  sound.
 - That `signed_at` is the real time of sealing. Self-attested time is
   trivially backdatable. External anchoring (Rekor / RFC 3161) is
   parking-lot for v0.7+.

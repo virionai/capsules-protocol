@@ -20,7 +20,17 @@ public struct CapsuleVerification {
     public let level: String
     public let checks: [VerifyCheck]
     public let signers: [SignerCheck]
+    /// Number of DISTINCT public keys that are both valid and on the
+    /// allowlist — never signer rows (the same key under two roles is one
+    /// trusted key).
     public let trustedSignerCount: Int
+    /// Signer-set binding (manifest.signer_commitment): PRESENCE BINDS,
+    /// ABSENCE REPORTS. `true` means the manifest commits to the exact
+    /// signer set (the `signer_commitment` check reflects the match,
+    /// fail-closed); `false` means the capsule does not assert signer-set
+    /// integrity — verification can still succeed, at a visibly lower
+    /// assurance.
+    public let signerSetBound: Bool
     public let notes: [String]
 }
 
@@ -46,7 +56,8 @@ public enum CapsuleVerifier {
             return CapsuleVerification(
                 ok: false, level: "L2",
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
-                signers: [], trustedSignerCount: 0, notes: initialNotes
+                signers: [], trustedSignerCount: 0, signerSetBound: false,
+                notes: initialNotes
             )
         }
         return verifyParsed(parsed, level: "L2", allowlist: allowlist)
@@ -77,7 +88,8 @@ public enum CapsuleVerifier {
             return CapsuleVerification(
                 ok: false, level: "L3",
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
-                signers: [], trustedSignerCount: 0, notes: initialNotes
+                signers: [], trustedSignerCount: 0, signerSetBound: false,
+                notes: initialNotes
             )
         }
         if !outerParsed.isEncrypted {
@@ -100,6 +112,7 @@ public enum CapsuleVerifier {
                 ok: false, level: "L3", checks: checks,
                 signers: outer.signers,
                 trustedSignerCount: outer.trustedSignerCount,
+                signerSetBound: outer.signerSetBound,
                 notes: outer.notes
             )
         }
@@ -147,7 +160,13 @@ public enum CapsuleVerifier {
         return CapsuleVerification(
             ok: ok, level: "L3", checks: checks,
             signers: allSigners,
-            trustedSignerCount: allSigners.filter { $0.trusted }.count,
+            // Distinct-key counting applies PER ENVELOPE (it exists to stop
+            // one key inflating a single envelope's quorum by repetition);
+            // the L3 aggregate is the sum of the outer and inner envelopes'
+            // distinct counts — the same composition the Rust verifier
+            // documents for its separate outer/inner counts.
+            trustedSignerCount: outer.trustedSignerCount + innerResult.trustedSignerCount,
+            signerSetBound: outer.signerSetBound,
             notes: outer.notes
         )
     }
@@ -321,13 +340,151 @@ public enum CapsuleVerifier {
             .joined(separator: ", ")
         record("envelope_signature", env.ok, detail.isEmpty ? (env.note ?? "") : detail)
 
+        // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS. A present
+        // manifest.signer_commitment must equal the normalized envelope
+        // signer set exactly (integrity invariant, fail-closed). An absent
+        // commitment downgrades the reported assurance — it never fails
+        // verification (templates and other writers make a weaker claim
+        // honestly).
+        var signerSetBound = false
+        if let commitment = lookupValue(parsed.manifest, ["signer_commitment"]) {
+            signerSetBound = true
+            let scErrors = signerCommitmentErrors(commitment, envelope: parsed.envelope)
+            record("signer_commitment",
+                   scErrors.isEmpty,
+                   scErrors.isEmpty ? "exact membership matched" : scErrors.joined(separator: "; "))
+        } else {
+            record("signer_commitment", true, "absent (signer set not bound by seal)")
+            notes.append("manifest.signer_commitment absent: the signer set is not bound by the seal")
+        }
+
+        // Originator binding (invariant): the manifest names an originator
+        // key — that key must actually have sealed the capsule with a valid
+        // envelope signature under role "originator".
+        let originatorKey = lookupString(parsed.manifest, ["originator", "public_key"])?.lowercased()
+        let originatorSigned = env.signers.contains {
+            $0.role == "originator" && $0.valid && $0.publicKey.lowercased() == originatorKey
+        }
+        record("originator_binding", originatorSigned,
+               originatorSigned
+                   ? ""
+                   : "originator binding: manifest.originator.public_key \(originatorKey ?? "(missing)") has no valid envelope signature with role 'originator'")
+
         let ok = checks.allSatisfy { $0.ok }
         return CapsuleVerification(
             ok: ok, level: level, checks: checks,
             signers: signers,
-            trustedSignerCount: signers.filter { $0.trusted }.count,
+            // DISTINCT trusted keys, never rows.
+            trustedSignerCount: Set(
+                signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
+            ).count,
+            signerSetBound: signerSetBound,
             notes: notes
         )
+    }
+
+    /// Validate a stored signer_commitment against the envelope's signer
+    /// set. Returns the failure messages ([] = bound and matched). Rules:
+    /// spec/manifest.md "signer_commitment".
+    private static func signerCommitmentErrors(_ commitment: JCSValue,
+                                               envelope: JCSValue) -> [String]
+    {
+        guard case .array(let list) = commitment else {
+            return ["manifest.signer_commitment malformed: must be a non-empty array of {role, public_key}"]
+        }
+        if list.isEmpty {
+            return ["manifest.signer_commitment malformed: must not be empty when present"]
+        }
+        var problems: [String] = []
+        var members: [(key: String, role: String)] = []
+        for (i, m) in list.enumerated() {
+            guard case .object(let mp) = m else {
+                problems.append("manifest.signer_commitment malformed: member \(i) is not an object")
+                continue
+            }
+            let keys = mp.map { $0.0 }.sorted()
+            guard keys == ["public_key", "role"],
+                  case .string(let role)? = mp.first(where: { $0.0 == "role" })?.1,
+                  case .string(let key)? = mp.first(where: { $0.0 == "public_key" })?.1
+            else {
+                problems.append("manifest.signer_commitment malformed: member \(i) must carry exactly {role, public_key}")
+                continue
+            }
+            if role.isEmpty {
+                problems.append("manifest.signer_commitment malformed: member \(i): role must be a non-empty string")
+            }
+            let keyOk = key.count == 64 && key.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) }
+            if !keyOk {
+                problems.append("manifest.signer_commitment malformed: member \(i): public_key must be lowercase 64-hex")
+            }
+            members.append((key, role))
+        }
+        if !problems.isEmpty { return problems }
+        for i in 1..<members.count {
+            let a = members[i - 1], b = members[i]
+            if a == b {
+                problems.append("manifest.signer_commitment malformed: duplicate member (role=\(b.role), public_key=\(b.key))")
+            } else if a.key > b.key || (a.key == b.key && a.role > b.role) {
+                problems.append("manifest.signer_commitment malformed: members not sorted ascending by (public_key, role)")
+                break
+            }
+        }
+        if !problems.isEmpty { return problems }
+
+        // Normalized envelope signer set, sorted the same way.
+        var actual: [(key: String, role: String)] = []
+        if case .object(let ep) = envelope,
+           case .array(let signersArr)? = ep.first(where: { $0.0 == "signers" })?.1
+        {
+            for s in signersArr {
+                guard case .object(let sp) = s else {
+                    actual.append((key: "", role: ""))
+                    continue
+                }
+                let role = sp.first(where: { $0.0 == "role" }).flatMap {
+                    if case .string(let r) = $0.1 { return r } else { return nil }
+                } ?? ""
+                let key = sp.first(where: { $0.0 == "public_key" }).flatMap {
+                    if case .string(let k) = $0.1 { return k.lowercased() } else { return nil }
+                } ?? ""
+                actual.append((key: key, role: role))
+            }
+        }
+        actual.sort { $0.key != $1.key ? $0.key < $1.key : $0.role < $1.role }
+
+        // Merge-walk both sorted member lists; name every difference.
+        var errors: [String] = []
+        var i = 0, j = 0
+        while i < members.count || j < actual.count {
+            let cmp: Int
+            if i >= members.count { cmp = 1 }
+            else if j >= actual.count { cmp = -1 }
+            else {
+                let a = members[i], b = actual[j]
+                if a == b { cmp = 0 }
+                else if a.key != b.key ? a.key < b.key : a.role < b.role { cmp = -1 }
+                else { cmp = 1 }
+            }
+            if cmp == 0 { i += 1; j += 1 }
+            else if cmp < 0 {
+                let m = members[i]; i += 1
+                errors.append("signer_commitment mismatch: no envelope signer matches committed member (role=\(m.role), public_key=\(m.key))")
+            } else {
+                let m = actual[j]; j += 1
+                errors.append("signer_commitment mismatch: envelope signer not committed (role=\(m.role), public_key=\(m.key))")
+            }
+        }
+        return errors
+    }
+
+    private static func lookupValue(_ v: JCSValue, _ path: [String]) -> JCSValue? {
+        var cur = v
+        for k in path {
+            guard case .object(let pairs) = cur,
+                  let next = pairs.first(where: { $0.0 == k })?.1 else { return nil }
+            cur = next
+        }
+        return cur
     }
 
     private static func lookupString(_ v: JCSValue, _ path: [String]) -> String? {

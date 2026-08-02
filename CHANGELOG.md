@@ -9,6 +9,50 @@ incompatible wire changes ship as `0.7`).
 
 ## Unreleased
 
+### Security
+
+- **The envelope signer set is now bound by the seal
+  (`manifest.signer_commitment`).** The signing input is
+  `JCS(envelope minus signers)`, so `signers[]` was never an input to
+  any signature — and `provenance/envelope.json` is structurally
+  excluded from the content index. Measured on the previous code: a
+  signer could be stripped with no residue (`ok:true`, count 2→1), and
+  anyone holding the bytes could append a fresh valid signature in a
+  role of their choosing (`notary`, `compliance`, …) that verified
+  clean. The fix is the TUF/DSSE-shaped one: the manifest now stores the
+  exact sorted `(role, public_key)` membership of the seal-time signer
+  set, which is transitively signed by every signer via
+  `envelope.manifest_hash`. The rule is **presence binds, absence
+  reports**: a present commitment must equal the normalized signer set
+  exactly (strip / append / role-swap / unsorted / duplicated all fail
+  closed); a manifest without one still verifies, and every verifier
+  reports the set as unbound machine-readably (JS
+  `result.signerSet.bound`, Python `result["signer_set"]["bound"]`,
+  Rust `VerifyResult::signer_set.bound`, Swift/Kotlin
+  `signerSetBound`) — templates and legacy capsules make a weaker claim
+  honestly instead of failing. Two adjacent holes closed in the same
+  change: duplicate `(role, public_key)` signer entries are rejected as
+  malformed and trusted-signer counts are over DISTINCT keys (an M-of-N
+  policy can no longer be satisfied by repeating one key), and
+  `manifest.originator.public_key` must now actually have a valid
+  envelope signature with role `originator` (originator binding — the
+  rule was already in spec/manifest.md but no lane enforced it).
+  Spec: `spec/manifest.md` ("signer_commitment"), `spec/envelope.md`
+  ("Signer set binding"), `spec/trust.md` threat table,
+  `spec/federation.md` quorum step 0. New conformance collection
+  `spec/vectors/signer-set/` (deterministic generator
+  `sdk-js/tools/generate-signer-set-fixtures.mjs`, `--check` wired into
+  the conformance harness) pins a bound positive control, the unbound
+  absent-commitment report, and strip / append / duplicate / role-swap /
+  unsorted / originator-not-a-signer negatives, consumed by the JS
+  (`tools/check-spec-vectors.mjs`), Python (`test_spec_registry.py`),
+  Rust (`spec_registry.rs`), Swift (`SpecRegistryTests.swift`), and
+  Kotlin (`SpecRegistryTest.kt`) lanes. All five SDK builders emit the
+  commitment on every seal (one commitment serves the inner and outer
+  manifests of an encrypted capsule); the tamper-detection and
+  malformed-layout fixtures were re-baselined so their clean capsules
+  carry it.
+
 ### Added
 
 - **Unknown-member preservation is normative.** `spec/manifest.md`,

@@ -138,6 +138,8 @@ const FAILING_AREA = {
   chain: (r) => r.chain.ok === false,
   envelope: (r) => r.envelope.ok === false,
   encrypted_blob: (r) => r.errors.some((e) => e.includes("encrypted_blob_hash")),
+  signer_set: (r) => r.signerSet.ok === false,
+  originator_binding: (r) => r.errors.some((e) => e.includes("originator binding")),
 };
 
 // Map an open-stage `reason` category to the JS reference lane's error
@@ -221,6 +223,14 @@ async function checkCollection(path, doc) {
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // Signer-set binding is PRESENCE BINDS, ABSENCE REPORTS: vectors pin
+    // the machine-readable bound/unbound report, not just ok.
+    if (typeof v.expected.signer_set_bound === "boolean" &&
+        result.signerSet.bound !== v.expected.signer_set_bound) {
+      fail(
+        `${label}: expected signerSet.bound=${v.expected.signer_set_bound}, got ${result.signerSet.bound}`,
+      );
     }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];

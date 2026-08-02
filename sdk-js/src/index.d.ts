@@ -148,6 +148,13 @@ export interface Envelope {
   signers: Array<{ role: string; public_key: string; signature: string }>;
 }
 
+/** One member of manifest.signer_commitment. */
+export interface SignerCommitmentMember {
+  role: string;
+  /** Lowercase 64-hex Ed25519 public key. */
+  public_key: string;
+}
+
 export interface Manifest {
   format: { version: string; container: string; canonicalization: string; hash_algorithm: string };
   id: string;
@@ -158,6 +165,14 @@ export interface Manifest {
   skill_trust: Record<string, "signed" | "unsigned">;
   encryption: { metadata_path: string; cipher: string } | null;
   created_at: string;
+  /**
+   * Exact (role, public_key) membership of the seal-time signer set,
+   * sorted ascending by public_key then role. Bound into every envelope
+   * signature via manifest_hash. Optional: absence downgrades reported
+   * assurance (VerifyResult.signerSet.bound=false) but never fails
+   * verification. The SDK builder always emits it.
+   */
+  signer_commitment?: SignerCommitmentMember[];
 }
 
 export interface DecryptOptions {
@@ -207,7 +222,15 @@ export interface VerifyResult {
     ok: boolean;
     signers: Array<{ role: string; public_key: string; valid: boolean; trusted: boolean }>;
   };
-  /** Number of signers that are both valid and on your allowlist. */
+  /**
+   * Signer-set binding (manifest.signer_commitment). bound=true means the
+   * manifest commits to the exact signer set and ok reflects the match
+   * (fail-closed). bound=false means the capsule does not assert
+   * signer-set integrity: verification can still succeed, at a visibly
+   * lower assurance.
+   */
+  signerSet: { bound: boolean; ok: boolean; errors: string[] };
+  /** Number of DISTINCT public keys that are both valid and on your allowlist. */
   trustedSignerCount: number;
   notes: string[];
 }

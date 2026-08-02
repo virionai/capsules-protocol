@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from .canonical import (
@@ -60,6 +61,83 @@ def build_content_index(
     return {"files": entries, "index_hash": sha256_hex(jcs(entries))}
 
 
+# ---------------------------------------------------------------------------
+# Signer-set commitment (manifest.signer_commitment).
+#
+# The envelope's signing input is JCS(envelope minus signers), so signers[]
+# is not an input to any signature — and provenance/envelope.json is
+# structurally excluded from the content index. The commitment closes that
+# gap: the manifest stores the exact (role, public_key) membership of the
+# seal-time signer set, and manifest_hash IS inside every signature, so the
+# set is transitively signed by every signer. See spec/manifest.md.
+# ---------------------------------------------------------------------------
+
+_SIGNER_KEY_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def commitment_member_key(member: dict) -> tuple[str, str]:
+    """Sort key: ascending by public_key, then role (byte order)."""
+    return (member["public_key"], member["role"])
+
+
+def signer_commitment_problems(commitment) -> list[str]:
+    """Validate a stored signer_commitment value; [] means well-formed.
+
+    Rules (spec/manifest.md): non-empty array; each member is an object
+    with exactly `role` (non-empty string) and `public_key` (lowercase
+    64-hex); members sorted ascending by (public_key, role); pairs unique.
+    """
+    if not isinstance(commitment, list):
+        return ["must be a non-empty array of {role, public_key}"]
+    if len(commitment) == 0:
+        return ["must not be empty when present"]
+    problems: list[str] = []
+    for i, m in enumerate(commitment):
+        if not isinstance(m, dict):
+            problems.append(f"member {i} is not an object")
+            continue
+        if sorted(m.keys()) != ["public_key", "role"]:
+            problems.append(f"member {i} must carry exactly {{role, public_key}}")
+            continue
+        if not isinstance(m["role"], str) or not m["role"]:
+            problems.append(f"member {i}: role must be a non-empty string")
+        if not isinstance(m["public_key"], str) or not _SIGNER_KEY_HEX_RE.match(m["public_key"]):
+            problems.append(f"member {i}: public_key must be lowercase 64-hex")
+    if problems:
+        return problems
+    for i in range(1, len(commitment)):
+        prev = commitment_member_key(commitment[i - 1])
+        cur = commitment_member_key(commitment[i])
+        if prev == cur:
+            problems.append(
+                f"duplicate member (role={commitment[i]['role']}, "
+                f"public_key={commitment[i]['public_key']})"
+            )
+        elif prev > cur:
+            problems.append("members not sorted ascending by (public_key, role)")
+            break
+    return problems
+
+
+def build_signer_commitment(members: list[dict]) -> list[dict]:
+    """Build a well-formed signer_commitment from seal-time members.
+
+    Sorts ascending by (public_key, role) and raises on duplicate
+    (role, public_key) pairs — the same key under different roles is
+    permitted as distinct members.
+    """
+    out = sorted(
+        ({"role": m["role"], "public_key": m["public_key"].lower()} for m in members),
+        key=commitment_member_key,
+    )
+    for i in range(1, len(out)):
+        if commitment_member_key(out[i - 1]) == commitment_member_key(out[i]):
+            raise ValueError(
+                f"duplicate signer (role={out[i]['role']}, public_key={out[i]['public_key']})"
+            )
+    return out
+
+
 def build_manifest(
     *,
     originator: dict,
@@ -69,8 +147,9 @@ def build_manifest(
     skill_trust: dict | None = None,
     encryption: dict | None = None,
     created_at: str,
+    signer_commitment: list[dict] | None = None,
 ) -> dict:
-    return {
+    manifest = {
         "format": {
             "version": "0.6",
             "container": "zip",
@@ -86,6 +165,12 @@ def build_manifest(
         "encryption": encryption,
         "created_at": created_at,
     }
+    # Optional: templates and other unsigned tiers legitimately omit it.
+    # JCS sorts keys at serialization time, so insertion position is
+    # irrelevant to the canonical bytes.
+    if signer_commitment is not None:
+        manifest["signer_commitment"] = signer_commitment
+    return manifest
 
 
 def manifest_hash(manifest: dict) -> str:

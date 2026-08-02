@@ -11,9 +11,11 @@ from .envelope import verify_envelope_signatures
 from .keys import to_key_hex
 from .manifest import (
     build_content_index,
+    commitment_member_key,
     compute_capsule_id,
     content_index_exclusions,
     manifest_hash,
+    signer_commitment_problems,
 )
 from .reader import CapsuleReader
 
@@ -28,6 +30,12 @@ class _EnvelopeSummary(TypedDict):
     signers: list[dict]
 
 
+class _SignerSetResult(TypedDict):
+    bound: bool
+    ok: bool
+    errors: list[str]
+
+
 class VerifyResult(TypedDict):
     ok: bool
     level: str
@@ -35,6 +43,7 @@ class VerifyResult(TypedDict):
     chain: dict
     content_index: _ContentIndexResult
     envelope: _EnvelopeSummary
+    signer_set: _SignerSetResult
     trusted_signer_count: int
     notes: list[str]
 
@@ -65,6 +74,7 @@ def verify_capsule(
                 "chain": {"ok": False, "errors": []},
                 "content_index": {"ok": False, "errors": []},
                 "envelope": {"ok": False, "signers": []},
+                "signer_set": {"bound": False, "ok": False, "errors": []},
                 "trusted_signer_count": 0,
                 "notes": [],
             }
@@ -85,6 +95,7 @@ def verify_capsule(
         "chain": {"ok": False, "errors": []},
         "content_index": {"ok": False, "errors": []},
         "envelope": {"ok": False, "signers": []},
+        "signer_set": {"bound": False, "ok": True, "errors": []},
         "trusted_signer_count": 0,
         "notes": notes,
     }
@@ -246,7 +257,97 @@ def verify_capsule(
             }
         )
     result["envelope"]["signers"] = signers
-    result["trusted_signer_count"] = sum(1 for s in signers if s["trusted"])
+    # DISTINCT trusted keys, never rows: the same key signing under two
+    # roles is one trusted key, and duplicate rows must never inflate a
+    # quorum.
+    result["trusted_signer_count"] = len(
+        {(s["public_key"] or "").lower() for s in signers if s["trusted"]}
+    )
+
+    # Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
+    # A present manifest.signer_commitment must equal the normalized
+    # envelope signer set exactly (integrity invariant, fail-closed). An
+    # absent commitment downgrades the reported assurance — it never fails
+    # verification, because a capsule that does not assert signer-set
+    # binding is making a weaker claim honestly (templates, other writers).
+    if "signer_commitment" not in manifest:
+        notes.append(
+            "manifest.signer_commitment absent: the signer set is not bound by the seal"
+        )
+    else:
+        result["signer_set"]["bound"] = True
+        commitment = manifest["signer_commitment"]
+        sc_errors: list[str] = []
+        problems = signer_commitment_problems(commitment)
+        if problems:
+            sc_errors.extend(f"manifest.signer_commitment malformed: {p}" for p in problems)
+        else:
+            raw_signers = envelope.get("signers")
+            actual = sorted(
+                (
+                    {
+                        "role": s.get("role") if isinstance(s.get("role"), str) else "",
+                        "public_key": (
+                            s.get("public_key").lower()
+                            if isinstance(s.get("public_key"), str)
+                            else ""
+                        ),
+                    }
+                    for s in (raw_signers if isinstance(raw_signers, list) else [])
+                    if isinstance(s, dict)
+                ),
+                key=commitment_member_key,
+            )
+            # Merge-walk both sorted member lists; name every difference.
+            i = j = 0
+            while i < len(commitment) or j < len(actual):
+                if i >= len(commitment):
+                    cmp = 1
+                elif j >= len(actual):
+                    cmp = -1
+                else:
+                    a, b = commitment_member_key(commitment[i]), commitment_member_key(actual[j])
+                    cmp = -1 if a < b else (1 if a > b else 0)
+                if cmp == 0:
+                    i += 1
+                    j += 1
+                elif cmp < 0:
+                    m = commitment[i]
+                    i += 1
+                    sc_errors.append(
+                        "signer_commitment mismatch: no envelope signer matches committed "
+                        f"member (role={m['role']}, public_key={m['public_key']})"
+                    )
+                else:
+                    m = actual[j]
+                    j += 1
+                    sc_errors.append(
+                        "signer_commitment mismatch: envelope signer not committed "
+                        f"(role={m['role']}, public_key={m['public_key']})"
+                    )
+        if sc_errors:
+            result["signer_set"]["ok"] = False
+            result["signer_set"]["errors"] = sc_errors
+            errors.extend(sc_errors)
+
+    # Originator binding (invariant): the manifest names an originator key —
+    # that key must actually have sealed the capsule with a valid envelope
+    # signature under role "originator". A manifest naming an originator who
+    # never signed is the capsule asserting something false about itself.
+    originator_key = manifest.get("originator", {}).get("public_key")
+    originator_key = originator_key.lower() if isinstance(originator_key, str) else None
+    originator_signed = any(
+        s.get("role") == "originator"
+        and s.get("valid")
+        and isinstance(s.get("public_key"), str)
+        and s["public_key"].lower() == originator_key
+        for s in env_result.get("signers", [])
+    )
+    if not originator_signed:
+        errors.append(
+            f"originator binding: manifest.originator.public_key {originator_key or '(missing)'} "
+            "has no valid envelope signature with role 'originator'"
+        )
 
     if not allow:
         notes.append(

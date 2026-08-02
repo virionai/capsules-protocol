@@ -50,6 +50,7 @@ export async function verifyCmd(argv) {
         chain: result.chain,
         content_index: result.contentIndex,
         envelope: result.envelope,
+        signer_set: result.signerSet,
         notes: result.notes,
         trusted_signer_count: result.trustedSignerCount,
       },
@@ -75,6 +76,8 @@ export async function verifyCmd(argv) {
       (result.chain.errors?.length ? `  (${result.chain.errors.length} error(s))` : "") +
       (result.chain.note ? `  — ${result.chain.note}` : ""));
   out(`  [${check(result.envelope.ok)}] envelope_signature`);
+  out(`  [${check(result.signerSet.ok)}] signer_set` +
+      (result.signerSet.bound ? "" : "  — unbound (manifest.signer_commitment absent)"));
   out("");
   out("Signers:");
   if (result.envelope.signers?.length) {

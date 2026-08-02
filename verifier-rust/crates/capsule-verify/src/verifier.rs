@@ -70,6 +70,13 @@ pub enum TopErrorCategory {
     ManifestHash,
     /// chain cross-checks vs envelope (first_event_hash / entry_hash)
     ChainAnchor,
+    /// signer-set binding failures: a present `manifest.signer_commitment`
+    /// that is malformed or does not equal the normalized envelope signer
+    /// set, or duplicate `(role, public_key)` signer entries
+    SignerSet,
+    /// `manifest.originator.public_key` has no valid envelope signature
+    /// with role "originator"
+    OriginatorBinding,
     /// cipher / encrypted-blob inconsistencies: unsupported cipher,
     /// `envelope.encrypted_blob_hash` mismatch with the recomputed
     /// `sha256(content.enc)`, or encrypted blob present with cipher='none'
@@ -191,6 +198,16 @@ pub struct VerifyResult {
     pub chain: ChainCheck,
     pub content_index: ContentIndexCheck,
     pub envelope: EnvelopeCheck,
+    /// Signer-set binding (manifest.signer_commitment): PRESENCE BINDS,
+    /// ABSENCE REPORTS. `bound=true` means the manifest commits to the
+    /// exact signer set and `ok` reflects the match (fail-closed);
+    /// `bound=false` means the capsule does not assert signer-set
+    /// integrity — verification can still succeed, at a visibly lower
+    /// assurance. `#[serde(default)]` keeps pre-signer-set JSON
+    /// deserializable (defaulting to unbound/not-ok, the fail-closed
+    /// reading).
+    #[serde(default)]
+    pub signer_set: SignerSetCheck,
     /// Inner envelope signature check, populated when L3 verification ran
     /// and the inner envelope was successfully parsed. None for plain
     /// capsules, L2-only paths (no recipient key), or when L3 failed
@@ -232,6 +249,17 @@ pub struct ChainCheck {
 /// Per-file and aggregate content_index results.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ContentIndexCheck {
+    pub ok: bool,
+    pub errors: Vec<String>,
+}
+
+/// Signer-set binding results (see [`VerifyResult::signer_set`]). The
+/// derived `Default` is `bound: false, ok: false, errors: []` — the
+/// fail-closed shape used by every early-return path; the happy paths set
+/// the fields explicitly.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SignerSetCheck {
+    pub bound: bool,
     pub ok: bool,
     pub errors: Vec<String>,
 }
@@ -671,9 +699,50 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
 
     // ---- (10) envelope signature verification ---------------------------
     envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &options.allowlist);
+    // Duplicate (role, public_key) signer entries are malformed — surface
+    // the envelope-check note as a categorized top-level error too, so
+    // structured consumers and the registry haystack both see it.
+    if let Some(note) = envelope_check.note.as_ref() {
+        if note.starts_with("duplicate signer entry") {
+            errors.push(TopError::outer(TopErrorCategory::SignerSet, note.clone()));
+        }
+    }
+
+    // ---- (10b) signer-set binding: PRESENCE BINDS, ABSENCE REPORTS ------
+    // A present manifest.signer_commitment must equal the normalized
+    // envelope signer set exactly (integrity invariant, fail-closed). An
+    // absent commitment downgrades the reported assurance — it never fails
+    // verification, because a capsule that does not assert signer-set
+    // binding is making a weaker claim honestly (templates, other writers).
+    // The check runs against the PRESERVED trees so malformed shapes (e.g.
+    // a null commitment) fail closed exactly like the JS reference.
+    let signer_set_check = check_signer_set(&manifest_value, &envelope_value);
+    if !signer_set_check.bound {
+        notes.push(
+            "manifest.signer_commitment absent: the signer set is not bound by the seal"
+                .to_string(),
+        );
+    }
+    for e in &signer_set_check.errors {
+        errors.push(TopError::outer(TopErrorCategory::SignerSet, e.clone()));
+    }
+
+    // ---- (10c) originator binding (invariant) ---------------------------
+    // The manifest names an originator key — that key must actually have
+    // sealed the capsule with a valid envelope signature under role
+    // "originator". A manifest naming an originator who never signed is
+    // the capsule asserting something false about itself.
+    if let Some(msg) =
+        originator_binding_error(&manifest.originator.public_key, &envelope_check.signers)
+    {
+        errors.push(TopError::outer(TopErrorCategory::OriginatorBinding, msg));
+    }
 
     // ---- (11) trusted_signer_count --------------------------------------
-    let trusted_signer_count = envelope_check.signers.iter().filter(|s| s.trusted).count();
+    // DISTINCT trusted keys, never rows: the same key signing under two
+    // roles is one trusted key, and duplicate rows must never inflate a
+    // quorum.
+    let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
 
     // ---- (12) advisory note ---------------------------------------------
     let no_allowlist = options.allowlist.is_empty();
@@ -693,6 +762,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         && content_index_check.ok
         && chain_check.ok
         && envelope_check.ok
+        && signer_set_check.ok
         && inner_envelope_check.as_ref().is_none_or(|e| e.ok)
         && inner_content_index_check.as_ref().is_none_or(|ci| ci.ok);
 
@@ -705,11 +775,190 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         chain: chain_check,
         content_index: content_index_check,
         envelope: envelope_check,
+        signer_set: signer_set_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
         notes,
     }
+}
+
+/// Normalized `(public_key, role)` member — the commitment sort order is
+/// ascending by public_key, then role, byte order (spec/manifest.md).
+type Member = (String, String);
+
+fn member_of(role: &str, public_key: &str) -> Member {
+    (public_key.to_lowercase(), role.to_string())
+}
+
+/// Validate a raw `signer_commitment` value. `Ok(members)` when
+/// well-formed; `Err(problems)` otherwise. Rules (spec/manifest.md):
+/// non-empty array; each member an object with exactly `role` (non-empty
+/// string) and `public_key` (lowercase 64-hex); sorted ascending by
+/// (public_key, role); pairs unique.
+fn validate_signer_commitment(raw: &serde_json::Value) -> Result<Vec<Member>, Vec<String>> {
+    let Some(list) = raw.as_array() else {
+        return Err(vec!["must be a non-empty array of {role, public_key}".to_string()]);
+    };
+    if list.is_empty() {
+        return Err(vec!["must not be empty when present".to_string()]);
+    }
+    let mut problems = Vec::new();
+    let mut members: Vec<Member> = Vec::with_capacity(list.len());
+    for (i, m) in list.iter().enumerate() {
+        let Some(obj) = m.as_object() else {
+            problems.push(format!("member {i} is not an object"));
+            continue;
+        };
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        if keys != ["public_key", "role"] {
+            problems.push(format!("member {i} must carry exactly {{role, public_key}}"));
+            continue;
+        }
+        let role = obj.get("role").and_then(|v| v.as_str());
+        let key = obj.get("public_key").and_then(|v| v.as_str());
+        match role {
+            Some(r) if !r.is_empty() => {}
+            _ => problems.push(format!("member {i}: role must be a non-empty string")),
+        }
+        let key_ok = key.is_some_and(|k| {
+            k.len() == 64 && k.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        });
+        if !key_ok {
+            problems.push(format!("member {i}: public_key must be lowercase 64-hex"));
+        }
+        if problems.is_empty() {
+            members.push((key.unwrap().to_string(), role.unwrap().to_string()));
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    for i in 1..members.len() {
+        if members[i - 1] == members[i] {
+            problems.push(format!(
+                "duplicate member (role={}, public_key={})",
+                members[i].1, members[i].0
+            ));
+        } else if members[i - 1] > members[i] {
+            problems.push("members not sorted ascending by (public_key, role)".to_string());
+            break;
+        }
+    }
+    if problems.is_empty() {
+        Ok(members)
+    } else {
+        Err(problems)
+    }
+}
+
+/// Signer-set binding check over the PRESERVED manifest and envelope
+/// trees. PRESENCE BINDS (exact membership, fail-closed); ABSENCE REPORTS
+/// (`bound: false`, `ok: true` — the caller surfaces the advisory note).
+pub(crate) fn check_signer_set(
+    manifest_value: &serde_json::Value,
+    envelope_value: &serde_json::Value,
+) -> SignerSetCheck {
+    let Some(raw) = manifest_value.get("signer_commitment") else {
+        return SignerSetCheck {
+            bound: false,
+            ok: true,
+            errors: Vec::new(),
+        };
+    };
+    let mut errors: Vec<String> = Vec::new();
+    match validate_signer_commitment(raw) {
+        Err(problems) => {
+            errors.extend(
+                problems
+                    .into_iter()
+                    .map(|p| format!("manifest.signer_commitment malformed: {p}")),
+            );
+        }
+        Ok(committed) => {
+            let mut actual: Vec<Member> = envelope_value
+                .get("signers")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|s| {
+                            member_of(
+                                s.get("role").and_then(|v| v.as_str()).unwrap_or(""),
+                                s.get("public_key").and_then(|v| v.as_str()).unwrap_or(""),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            actual.sort();
+            // Merge-walk both sorted member lists; name every difference.
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < committed.len() || j < actual.len() {
+                let ord = if i >= committed.len() {
+                    std::cmp::Ordering::Greater
+                } else if j >= actual.len() {
+                    std::cmp::Ordering::Less
+                } else {
+                    committed[i].cmp(&actual[j])
+                };
+                match ord {
+                    std::cmp::Ordering::Equal => {
+                        i += 1;
+                        j += 1;
+                    }
+                    std::cmp::Ordering::Less => {
+                        let (key, role) = &committed[i];
+                        errors.push(format!(
+                            "signer_commitment mismatch: no envelope signer matches committed member (role={role}, public_key={key})"
+                        ));
+                        i += 1;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let (key, role) = &actual[j];
+                        errors.push(format!(
+                            "signer_commitment mismatch: envelope signer not committed (role={role}, public_key={key})"
+                        ));
+                        j += 1;
+                    }
+                }
+            }
+        }
+    }
+    SignerSetCheck {
+        bound: true,
+        ok: errors.is_empty(),
+        errors,
+    }
+}
+
+/// Originator binding (invariant): `Some(message)` when the manifest's
+/// originator key has NO valid envelope signature with role "originator".
+pub(crate) fn originator_binding_error(
+    originator_public_key: &str,
+    outcomes: &[SignerOutcome],
+) -> Option<String> {
+    let key = originator_public_key.to_lowercase();
+    let bound = outcomes
+        .iter()
+        .any(|s| s.role == "originator" && s.valid && s.public_key.to_lowercase() == key);
+    if bound {
+        None
+    } else {
+        Some(format!(
+            "originator binding: manifest.originator.public_key {key} has no valid envelope signature with role 'originator'"
+        ))
+    }
+}
+
+/// Count DISTINCT trusted public keys (lowercased), never signer rows.
+pub(crate) fn distinct_trusted_keys(outcomes: &[SignerOutcome]) -> usize {
+    outcomes
+        .iter()
+        .filter(|s| s.trusted)
+        .map(|s| s.public_key.to_lowercase())
+        .collect::<std::collections::BTreeSet<String>>()
+        .len()
 }
 
 /// Verify a manifest's content_index against the actual files on disk.
@@ -893,6 +1142,20 @@ pub(crate) fn verify_envelope_signatures(
     allowlist: &[String],
 ) -> EnvelopeCheck {
     let mut envelope_check = EnvelopeCheck::default();
+    // Duplicate (role, public_key) entries are malformed: counting rows
+    // instead of distinct members lets one key satisfy an M-of-N policy.
+    // Same key under different roles is permitted (distinct members).
+    let mut seen = std::collections::BTreeSet::new();
+    for s in &envelope.signers {
+        if !seen.insert((s.role.clone(), s.public_key.to_lowercase())) {
+            envelope_check.ok = false;
+            envelope_check.note = Some(format!(
+                "duplicate signer entry (role={}, public_key={})",
+                s.role, s.public_key
+            ));
+            return envelope_check;
+        }
+    }
     let signer_outcomes = verify_signatures(envelope, envelope_value);
     let mut all_valid = !signer_outcomes.is_empty();
     let allowlist_lower: std::collections::BTreeSet<String> =
@@ -950,7 +1213,7 @@ fn assemble_result(
                 .to_string(),
         );
     }
-    let trusted_signer_count = envelope_check.signers.iter().filter(|s| s.trusted).count();
+    let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
     let ok = errors.is_empty()
         && content_index_check.ok
         && chain_check.ok
@@ -966,6 +1229,9 @@ fn assemble_result(
         chain: chain_check,
         content_index: content_index_check,
         envelope: envelope_check,
+        // Early-return shape: fail-closed (bound=false, ok=false) — the
+        // capsule never reached the signer-set check.
+        signer_set: SignerSetCheck::default(),
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -2433,5 +2699,90 @@ mod tests {
             post, inner_envelope.manifest_hash,
             "mutated inner manifest_hash must differ from the inner envelope's claim"
         );
+    }
+
+    /// The same trusted key under two roles is ONE distinct trusted key;
+    /// rows never inflate the count.
+    #[test]
+    fn distinct_trusted_keys_counts_keys_not_rows() {
+        let outcomes = vec![
+            SignerOutcome {
+                role: "originator".into(),
+                public_key: "AB".repeat(32),
+                valid: true,
+                trusted: true,
+            },
+            SignerOutcome {
+                role: "notary".into(),
+                public_key: "ab".repeat(32),
+                valid: true,
+                trusted: true,
+            },
+        ];
+        assert_eq!(distinct_trusted_keys(&outcomes), 1);
+    }
+
+    /// Originator binding requires role "originator" AND a matching key
+    /// AND a valid signature.
+    #[test]
+    fn originator_binding_requires_valid_originator_role_signer() {
+        let key = "cd".repeat(32);
+        let mk = |role: &str, pk: &str, valid: bool| SignerOutcome {
+            role: role.into(),
+            public_key: pk.into(),
+            valid,
+            trusted: false,
+        };
+        // Bound: exact match.
+        assert!(originator_binding_error(&key, &[mk("originator", &key, true)]).is_none());
+        // Not bound: wrong role, wrong key, or invalid signature.
+        assert!(originator_binding_error(&key, &[mk("creator", &key, true)]).is_some());
+        assert!(originator_binding_error(&key, &[mk("originator", &"ef".repeat(32), true)]).is_some());
+        assert!(originator_binding_error(&key, &[mk("originator", &key, false)]).is_some());
+    }
+
+    /// check_signer_set: absence reports (bound=false, ok=true); a present
+    /// commitment must byte-match the normalized signer set.
+    #[test]
+    fn check_signer_set_presence_binds_absence_reports() {
+        let key = "ab".repeat(32);
+        let envelope = serde_json::json!({
+            "signers": [ { "role": "originator", "public_key": key, "signature": "00" } ]
+        });
+        // Absent commitment: unbound, ok.
+        let absent = check_signer_set(&serde_json::json!({}), &envelope);
+        assert!(!absent.bound);
+        assert!(absent.ok);
+        // Matching commitment: bound, ok.
+        let bound = check_signer_set(
+            &serde_json::json!({
+                "signer_commitment": [ { "role": "originator", "public_key": key } ]
+            }),
+            &envelope,
+        );
+        assert!(bound.bound && bound.ok, "{:?}", bound.errors);
+        // Extra committed member with no signer: fail, naming the member.
+        let mismatch = check_signer_set(
+            &serde_json::json!({
+                "signer_commitment": [
+                    { "role": "originator", "public_key": key },
+                    { "role": "approver", "public_key": "cd".repeat(32) },
+                ]
+            }),
+            &envelope,
+        );
+        assert!(mismatch.bound && !mismatch.ok);
+        assert!(
+            mismatch.errors.iter().any(|e| e.contains("signer_commitment mismatch")
+                && e.contains(&"cd".repeat(32))),
+            "{:?}",
+            mismatch.errors
+        );
+        // null commitment is PRESENT and malformed, never treated as absent.
+        let null_commitment = check_signer_set(
+            &serde_json::json!({ "signer_commitment": null }),
+            &envelope,
+        );
+        assert!(null_commitment.bound && !null_commitment.ok);
     }
 }

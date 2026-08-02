@@ -104,6 +104,28 @@ public enum Envelope {
               case .array(let signersArr) = signersPair.1, !signersArr.isEmpty
         else { return VerifyResult(ok: false, signers: [], note: "no signers") }
 
+        // Duplicate (role, public_key) entries are malformed: counting rows
+        // instead of distinct members lets one key satisfy an M-of-N policy.
+        // Same key under different roles is permitted (distinct members).
+        var seen = Set<String>()
+        for s in signersArr {
+            guard case .object(let sp) = s else { continue }
+            let role = sp.first(where: { $0.0 == "role" }).flatMap {
+                if case .string(let r) = $0.1 { return r } else { return nil }
+            } ?? ""
+            let pk = sp.first(where: { $0.0 == "public_key" }).flatMap {
+                if case .string(let k) = $0.1 { return k } else { return nil }
+            } ?? ""
+            let member = role + "\u{0000}" + pk.lowercased()
+            if seen.contains(member) {
+                return VerifyResult(
+                    ok: false, signers: [],
+                    note: "duplicate signer entry (role=\(role), public_key=\(pk))"
+                )
+            }
+            seen.insert(member)
+        }
+
         var allValid = true
         var out: [(String, String, Bool)] = []
         for s in signersArr {

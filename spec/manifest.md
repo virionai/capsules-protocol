@@ -45,6 +45,10 @@ here.
   "skill_trust": {
     "<skill_id>": "signed | unsigned"
   },
+  "signer_commitment": [
+    { "role": "approver", "public_key": "<64-hex ed25519 raw>" },
+    { "role": "originator", "public_key": "<64-hex ed25519 raw>" }
+  ],
   "encryption": null,
   "created_at": "2026-05-07T12:00:00Z"
 }
@@ -57,8 +61,12 @@ here.
 - `id`: derived; see "Capsule identity" below. Computed by the writer
   and checked by the reader.
 - `originator.public_key`: 32 bytes of Ed25519 raw public key, lowercase
-  hex. The `signers[]` of the envelope must include an entry whose
-  `public_key` equals this value with role `originator`.
+  hex. The `signers[]` of the envelope MUST include an entry whose
+  `public_key` equals this value with role `originator`, and that
+  entry's signature MUST verify. This is an integrity invariant enforced
+  by verifiers at every profile — a manifest naming an originator who
+  never signed is the capsule asserting something false about itself.
+  Conformance vector: `spec/vectors/signer-set/` (`originator-not-a-signer`).
 - `originator.label`: free-text, advisory only. Auditors verify the
   public key, not the label.
 - `participants[].actor_id`: must match one of the patterns
@@ -85,6 +93,39 @@ here.
   Skills marked `signed` must have their `skill.json` covered by an
   envelope signature; unsigned skills are passed to readers as
   untrusted content.
+- `signer_commitment`: the exact membership of the seal-time signer
+  set, as an array of `{role, public_key}` members. The envelope's
+  signing input is `JCS(envelope minus signers)`, so `signers[]` is not
+  an input to any signature; this field is what binds the set, because
+  `manifest_hash` *is* inside every signature. (This is the TUF/DSSE
+  shape: authenticate the requirement in a signed parent, never the
+  signature array itself.)
+  - **Optional — presence binds, absence reports.** When present, the
+    normalized envelope signer set MUST equal this array exactly (see
+    below); any mismatch fails verification closed. When absent, the
+    capsule does not assert signer-set integrity: verification MAY
+    still succeed, and the verifier MUST report, machine-readably, that
+    the signer set is unbound (a weaker claim made honestly — this is
+    what lets unsigned templates and legacy capsules share the format
+    with a notarised loan file). A writer that seals with the v0.6
+    cryptographic profile SHOULD always emit it; the SDK builders do.
+  - Each member carries exactly `role` (non-empty string) and
+    `public_key` (lowercase 64-hex Ed25519 raw key). Members are sorted
+    ascending by `public_key`, then `role`, byte order — equivalently,
+    by each member's JCS bytes. `(role, public_key)` pairs MUST be
+    unique; the same key under different roles is permitted as distinct
+    members. The commitment is bound by its stored bytes, so the sort
+    order is normative: a commitment that is unsorted, has duplicate
+    members, or is present-but-empty is malformed and fails
+    verification closed.
+  - **Equality rule (normative):** normalize each `envelope.signers[]`
+    entry to `(role, lowercase public_key)`; the resulting set, sorted
+    as above, MUST equal `signer_commitment` member-for-member. A
+    stripped signer, an appended signer (any role), a role swap, or a
+    duplicated signer entry all fail.
+  - One commitment value serves both the inner and outer manifests of
+    an encrypted capsule — both are sealed by the same signer list.
+  - Conformance vectors: `spec/vectors/signer-set/`.
 - `encryption`: `null` for plain capsules; for encrypted capsules a
   small object pointing to the decryption metadata path:
   ```json

@@ -200,6 +200,27 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         format_envelope_messages(r),
     );
 
+    // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS. An unbound set
+    // renders as a PASS with an explicit sub-line so the lowered assurance
+    // is visible; a bound-but-mismatched set renders the commitment errors
+    // (also present under the SignerSet error category). Originator-binding
+    // failures ride the same section — both are signer-set invariants.
+    let mut signer_set_msgs = r.signer_set.errors.clone();
+    signer_set_msgs.extend(strings_of(errors_for(r, TopErrorCategory::OriginatorBinding)));
+    if !r.signer_set.bound && signer_set_msgs.is_empty() {
+        print_check(
+            "signer_set",
+            r.signer_set.ok,
+            vec!["unbound (manifest.signer_commitment absent)".to_string()],
+        );
+    } else {
+        print_check(
+            "signer_set",
+            r.signer_set.ok && signer_set_msgs.is_empty(),
+            signer_set_msgs,
+        );
+    }
+
     // Inner envelope signature check is rendered ONLY when L3 verification
     // reached the inner envelope and `inner_envelope` was populated. For
     // plain capsules, L2-only paths, and L3 paths that failed before the

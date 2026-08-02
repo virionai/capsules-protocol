@@ -1,0 +1,14 @@
+{
+  "originator": {
+    "publicKey": "ab0201a342283278d052a19ffeb3e04e42c96f766200495f30e6fc80cf20b18f",
+    "privateKey": "aa0f3a26b41c8d715356d24054f2b1cbcddbea94b7d3b3bd60cbe08a2c2f7112"
+  },
+  "approver": {
+    "publicKey": "55d15da00559e84f09cabd93eeb68882530aa8204497a660515472d86df28228",
+    "privateKey": "b7d0e5f1c0a94ed35c7e19a44c1a7e02246cb0fb04d0f1e73a889d5c33b40921"
+  },
+  "attacker": {
+    "publicKey": "757a260e8e45da4dd633f8b8a41d49edcdaedce54722da368939290d3be3d9fe",
+    "privateKey": "c3e88a9f5b2d41c6a90e7fd21b7c39a45d10e6b98f24c7d0a3b5e19c60d8f437"
+  }
+}

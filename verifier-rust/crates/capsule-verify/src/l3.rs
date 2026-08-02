@@ -25,8 +25,9 @@ use crate::decrypt::decrypt_inner_zip;
 use crate::manifest::{compute_capsule_id, content_index_exclusions, manifest_hash};
 use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::verifier::{
-    chain_walk_into, verify_content_index, verify_envelope_signatures, ChainCheck,
-    ContentIndexCheck, EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions,
+    chain_walk_into, check_signer_set, originator_binding_error, verify_content_index,
+    verify_envelope_signatures, ChainCheck, ContentIndexCheck, EnvelopeCheck, TopError,
+    TopErrorCategory, TopErrorScope, VerifyOptions,
 };
 use crate::zip_reader::unpack_zip;
 
@@ -267,6 +268,33 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // inner-envelope verification still surfaces in `result.inner_envelope`.
     let inner_check =
         verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &options.allowlist);
+    // Inner signer-set invariants, mirroring outer steps 10-10c with the
+    // "L3 inner: " message prefix. Inner commitment absence is reported
+    // (not failed) by the signer-set semantics; inner duplicate signers
+    // and a broken inner originator binding fail closed.
+    if let Some(note) = inner_check.note.as_ref() {
+        if note.starts_with("duplicate signer entry") {
+            errors.push(TopError::inner(
+                TopErrorCategory::SignerSet,
+                format!("L3 inner: {note}"),
+            ));
+        }
+    }
+    let inner_signer_set = check_signer_set(&inner_manifest_value, &inner_envelope_value);
+    for e in &inner_signer_set.errors {
+        errors.push(TopError::inner(
+            TopErrorCategory::SignerSet,
+            format!("L3 inner: {e}"),
+        ));
+    }
+    if let Some(msg) =
+        originator_binding_error(&inner_manifest.originator.public_key, &inner_check.signers)
+    {
+        errors.push(TopError::inner(
+            TopErrorCategory::OriginatorBinding,
+            format!("L3 inner: {msg}"),
+        ));
+    }
     *inner_envelope_check = Some(inner_check);
 
     // Step 3c (v0.5): recompute the inner manifest_hash and compare to the

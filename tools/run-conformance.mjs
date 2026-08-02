@@ -101,6 +101,16 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "signer-set-fixtures-regen",
+    name: "signer-set fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-signer-set-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "spec-vectors",
     name: "spec/vectors registry",
     language: "javascript",

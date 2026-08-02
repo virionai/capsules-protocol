@@ -112,6 +112,12 @@ class CapsuleBuilder(
 
         val capsuleId = Manifest.computeCapsuleId(originator.keyPair.publicKeyBytes, firstHash)
         val ci = Manifest.buildContentIndex(innerFiles)
+        // Signer-set commitment: the originator is the sole signer in v0,
+        // so the commitment is a single member. Bound into every envelope
+        // signature via manifest_hash (spec/manifest.md).
+        val signerCommitment = Manifest.buildSignerCommitment(listOf(
+            Manifest.SignerCommitmentMember("originator", originator.keyPair.publicKeyHex)
+        ))
         val manifest = Manifest.build(
             originator = Manifest.Originator(originator.keyPair.publicKeyHex, originator.label),
             participants = participants.map {
@@ -120,6 +126,7 @@ class CapsuleBuilder(
             contentIndex = ci,
             firstEventHash = firstHash,
             skillTrust = skillTrust,
+            signerCommitment = signerCommitment,
             createdAt = createdAt,
             capsuleId = capsuleId,
         )

@@ -15,14 +15,20 @@ lane):
    This is the language-neutral registry for negative cases. Two stages
    exist:
 
-   - *Verify stage* (default): `{ ok, failing?, error_includes? }`, where
-     `failing` names the result areas that must fail (`content_index`,
-     `chain`, `envelope`, `encrypted_blob`). See
-     `tamper-detection/vectors.json` and `unknown-fields/vectors.json`
+   - *Verify stage* (default): `{ ok, failing?, error_includes?,
+     signer_set_bound? }`, where `failing` names the result areas that
+     must fail (`content_index`, `chain`, `envelope`, `encrypted_blob`,
+     `signer_set`, `originator_binding`) and `signer_set_bound` pins the
+     machine-readable bound/unbound signer-set report. See
+     `tamper-detection/vectors.json`, `unknown-fields/vectors.json`
      (the latter pins the unknown-member preservation rule of
      `spec/manifest.md` / `spec/envelope.md` / `spec/chain.md`: a capsule
      carrying `x-` extension members must verify, and a post-seal
-     mutation of an unknown member must fail).
+     mutation of an unknown member must fail), and
+     `signer-set/vectors.json` (pins `manifest.signer_commitment`
+     presence-binds/absence-reports, duplicate-signer rejection, and
+     originator binding — spec/manifest.md "signer_commitment",
+     spec/envelope.md "Signer set binding").
    - *Open stage*: `{ ok: false, stage: "open", reason, detail? }` — the
      reader must refuse the container before verification, for the named
      `reason` category (by error, exception, or fail-closed result, per the
@@ -65,9 +71,9 @@ lane):
    (`ed25519_key_validation_registry`), Swift (`Ed25519KeyValidationTests`)
    and Kotlin (`Ed25519KeyValidationVectorTest`) lanes consume it directly.
 
-Other JSON here (e.g. `tamper-detection/output/keys.json` and
-`unknown-fields/output/keys.json`) is supporting material, not a vector,
-and is ignored by the checker.
+Other JSON here (e.g. `tamper-detection/output/keys.json`,
+`unknown-fields/output/keys.json`, and `signer-set/output/keys.json`) is
+supporting material, not a vector, and is ignored by the checker.
 
 Generators (deterministic; regeneration is an intentional spec change and
 should be reviewed with the byte-level diff):
@@ -77,6 +83,8 @@ should be reviewed with the byte-level diff):
   (derived from the tamper-detection clean fixture)
 - `sdk-js/tools/generate-unknown-fields-fixtures.mjs` → `unknown-fields/output/`
   (fixed throwaway TEST keypair; byte-stable, supports `--check`)
+- `sdk-js/tools/generate-signer-set-fixtures.mjs` → `signer-set/output/`
+  (fixed throwaway TEST keypairs; byte-stable, supports `--check`)
 - `sdk-js/tools/generate-signing-input-vector.mjs` → `signing-input.json`
   (derived from `plain-basic.json`)
 - `sdk-js/tools/generate-ed25519-key-validation-vector.mjs` →

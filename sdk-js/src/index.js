@@ -37,9 +37,12 @@ export {
   buildContentIndex,
   contentIndexExclusions,
   buildManifest,
+  buildSignerCommitment,
+  compareCommitmentMembers,
   computeCapsuleId,
   manifestHash,
   manifestBytes,
+  signerCommitmentProblems,
 } from "./manifest.js";
 
 // Useful for demos and tooling that needs to read or rewrite the

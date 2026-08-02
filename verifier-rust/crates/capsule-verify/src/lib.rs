@@ -28,9 +28,10 @@ pub use jcs::jcs;
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
     Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,
+    SignerCommitmentEntry,
 };
 pub use verifier::{
-    verify_capsule, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome, TopError,
-    TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
+    verify_capsule, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome, SignerSetCheck,
+    TopError, TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
 };
 pub use zip_reader::{unpack_zip, PathReason, ZipError, MAX_ENTRIES, MAX_TOTAL_BYTES};

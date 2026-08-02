@@ -7,6 +7,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - tamper-detection/vectors.json   (verify-stage outcomes)
   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
+  - signer-set/vectors.json         (signer-set binding outcomes)
   - signing-input.json              (byte-level signing/hashing pins)
 
 The `reason` categories are normative; the regexes below map each
@@ -30,6 +31,7 @@ VECTORS = pathlib.Path(__file__).resolve().parents[2] / "spec" / "vectors"
 TAMPER = VECTORS / "tamper-detection" / "vectors.json"
 MALFORMED = VECTORS / "malformed-layout" / "vectors.json"
 UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
+SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 
@@ -52,6 +54,8 @@ AREA_PREDICATES = {
     "chain": lambda r: r["chain"]["ok"] is False,
     "envelope": lambda r: r["envelope"]["ok"] is False,
     "encrypted_blob": lambda r: any("encrypted_blob_hash" in e for e in r["errors"]),
+    "signer_set": lambda r: r["signer_set"]["ok"] is False,
+    "originator_binding": lambda r: any("originator binding" in e for e in r["errors"]),
 }
 
 
@@ -93,6 +97,11 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
         assert expected["error_includes"] in _error_haystack(result), (
             f"{name}: expected an error containing {expected['error_includes']!r}"
         )
+    if "signer_set_bound" in expected:
+        assert result["signer_set"]["bound"] is expected["signer_set_bound"], (
+            f"{name}: expected signer_set.bound={expected['signer_set_bound']}, "
+            f"got {result['signer_set']}"
+        )
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(TAMPER))
@@ -112,6 +121,22 @@ def test_unknown_fields_registry_outcomes(doc: dict, vector: dict, base: pathlib
     it must verify ok=true. The tampered variants mutate an unknown member
     post-seal and must fail in the pinned area — proving the members are
     inside the integrity envelope, not decoration.
+    """
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(vector["name"], vector["expected"], result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(SIGNER_SET))
+def test_signer_set_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
+
+    A present manifest.signer_commitment must equal the normalized
+    envelope signer set exactly (strip / add / role-swap / unsorted all
+    fail closed); an absent one verifies with signer_set.bound=False.
+    Duplicate (role, public_key) signers are malformed, and the manifest
+    originator must have a valid role-'originator' signature.
     """
     data = (base / vector["capsule_file"]).read_bytes()
     reader = CapsuleReader.from_bytes(data)

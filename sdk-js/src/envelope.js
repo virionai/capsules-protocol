@@ -106,6 +106,22 @@ export function verifyEnvelopeSignatures(envelope) {
   if (!Array.isArray(envelope.signers) || envelope.signers.length === 0) {
     return { ok: false, signers: [], note: "envelope has no signers" };
   }
+  // Duplicate (role, public_key) entries are malformed: counting rows
+  // instead of distinct members lets one key satisfy an M-of-N policy.
+  // Same key under different roles is permitted (distinct members).
+  const seen = new Set();
+  for (const s of envelope.signers) {
+    const keyLower = typeof s?.public_key === "string" ? s.public_key.toLowerCase() : "";
+    const member = `${s?.role}\u0000${keyLower}`;
+    if (seen.has(member)) {
+      return {
+        ok: false,
+        signers: [],
+        note: `duplicate signer entry (role=${s.role}, public_key=${s.public_key})`,
+      };
+    }
+    seen.add(member);
+  }
   for (const s of envelope.signers) {
     let valid = false;
     try {

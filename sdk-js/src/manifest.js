@@ -64,6 +64,90 @@ export function buildContentIndex(files, excluded = STRUCTURAL_EXCLUDED) {
   return { files: entries, index_hash: indexHash };
 }
 
+// ---------------------------------------------------------------------------
+// Signer-set commitment (manifest.signer_commitment).
+//
+// The envelope's signing input is JCS(envelope minus signers), so signers[]
+// is not an input to any signature — and provenance/envelope.json is
+// structurally excluded from the content index. The commitment closes that
+// gap: the manifest stores the exact (role, public_key) membership of the
+// seal-time signer set, and manifest_hash IS inside every signature, so the
+// set is transitively signed by every signer. See spec/manifest.md.
+// ---------------------------------------------------------------------------
+
+const SIGNER_KEY_HEX_RE = /^[0-9a-f]{64}$/;
+
+/** Ascending by public_key, then role (byte order — equivalently, by each
+ *  member's JCS bytes, since the "public_key" key sorts before "role"). */
+export function compareCommitmentMembers(a, b) {
+  if (a.public_key !== b.public_key) return a.public_key < b.public_key ? -1 : 1;
+  if (a.role !== b.role) return a.role < b.role ? -1 : 1;
+  return 0;
+}
+
+/**
+ * Validate a stored signer_commitment value. Returns a list of problems;
+ * empty means well-formed. Rules (spec/manifest.md): non-empty array;
+ * each member is an object with exactly `role` (non-empty string) and
+ * `public_key` (lowercase 64-hex); members sorted ascending by
+ * (public_key, role); (role, public_key) pairs unique.
+ */
+export function signerCommitmentProblems(commitment) {
+  if (!Array.isArray(commitment)) return ["must be a non-empty array of {role, public_key}"];
+  if (commitment.length === 0) return ["must not be empty when present"];
+  const problems = [];
+  for (const [i, m] of commitment.entries()) {
+    if (m == null || typeof m !== "object" || Array.isArray(m)) {
+      problems.push(`member ${i} is not an object`);
+      continue;
+    }
+    const keys = Object.keys(m).sort();
+    if (keys.length !== 2 || keys[0] !== "public_key" || keys[1] !== "role") {
+      problems.push(`member ${i} must carry exactly {role, public_key}`);
+      continue;
+    }
+    if (typeof m.role !== "string" || m.role.length === 0) {
+      problems.push(`member ${i}: role must be a non-empty string`);
+    }
+    if (typeof m.public_key !== "string" || !SIGNER_KEY_HEX_RE.test(m.public_key)) {
+      problems.push(`member ${i}: public_key must be lowercase 64-hex`);
+    }
+  }
+  if (problems.length > 0) return problems;
+  for (let i = 1; i < commitment.length; i++) {
+    const cmp = compareCommitmentMembers(commitment[i - 1], commitment[i]);
+    if (cmp === 0) {
+      problems.push(
+        `duplicate member (role=${commitment[i].role}, public_key=${commitment[i].public_key})`,
+      );
+    } else if (cmp > 0) {
+      problems.push("members not sorted ascending by (public_key, role)");
+      break;
+    }
+  }
+  return problems;
+}
+
+/**
+ * Build a well-formed signer_commitment from seal-time members
+ * [{role, public_key}]. Sorts ascending by (public_key, role) and throws
+ * on duplicate (role, public_key) pairs — the same key under different
+ * roles is permitted as distinct members.
+ */
+export function buildSignerCommitment(members) {
+  const out = members
+    .map((m) => ({ role: m.role, public_key: m.public_key.toLowerCase() }))
+    .sort(compareCommitmentMembers);
+  for (let i = 1; i < out.length; i++) {
+    if (compareCommitmentMembers(out[i - 1], out[i]) === 0) {
+      throw new Error(
+        `duplicate signer (role=${out[i].role}, public_key=${out[i].public_key})`,
+      );
+    }
+  }
+  return out;
+}
+
 /** Build a v0.6 manifest object (without `id` populated). */
 export function buildManifest({
   originator,
@@ -73,8 +157,9 @@ export function buildManifest({
   skillTrust,
   encryption,
   createdAt,
+  signerCommitment,
 }) {
-  return {
+  const manifest = {
     format: {
       version: "0.6",
       container: "zip",
@@ -90,6 +175,11 @@ export function buildManifest({
     encryption: encryption ?? null,
     created_at: createdAt,
   };
+  // Optional: templates and other unsigned tiers legitimately omit it.
+  // JCS sorts keys at serialization time, so insertion position is
+  // irrelevant to the canonical bytes.
+  if (signerCommitment !== undefined) manifest.signer_commitment = signerCommitment;
+  return manifest;
 }
 
 /** Compute manifest hash over a fully-populated manifest. */

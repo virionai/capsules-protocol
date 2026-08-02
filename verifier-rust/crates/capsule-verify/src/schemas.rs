@@ -108,12 +108,28 @@ pub struct Encryption {
     pub cipher: String,
 }
 
+/// One member of `manifest.signer_commitment`: a `(role, public_key)` pair
+/// naming one seal-time signer. `public_key` is 64 lowercase hex chars.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignerCommitmentEntry {
+    pub role: String,
+    pub public_key: String,
+}
+
 /// The full v0.6 manifest. Field names match the on-disk keys exactly.
 ///
 /// `skill_trust` is keyed by skill id (e.g. `"intake-checklist"`) and valued
 /// by trust state (e.g. `"signed"`). `BTreeMap` is intentional: the on-disk
 /// representation comes through JCS, which sorts object keys, and any
 /// re-canonicalization on our side has to honor the same ordering.
+///
+/// `signer_commitment` is the exact seal-time signer set (spec/manifest.md
+/// "signer_commitment"). It is OPTIONAL on the wire — presence binds,
+/// absence reports — so `#[serde(default)]` keeps commitment-less capsules
+/// parseable, and `skip_serializing_if` keeps round-trips from inventing the
+/// member. NOTE this struct is a VIEW: the normative signer-set check runs
+/// against the preserved `serde_json::Value` tree so that malformed shapes
+/// (e.g. a `null` commitment) fail closed exactly like the JS reference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub format: FormatBlock,
@@ -125,6 +141,8 @@ pub struct Manifest {
     pub skill_trust: BTreeMap<String, String>,
     pub encryption: Option<Encryption>,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_commitment: Option<Vec<SignerCommitmentEntry>>,
 }
 
 /// One signature in the envelope's `signers` array. `role` namespaces the

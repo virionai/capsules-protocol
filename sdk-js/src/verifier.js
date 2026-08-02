@@ -9,10 +9,12 @@ import { sha256Hex, jcs } from "./canonical.js";
 import { verifyChain, firstAndEntryHash } from "./chain.js";
 import {
   buildContentIndex,
+  compareCommitmentMembers,
   contentIndexExclusions,
   manifestBytes,
   manifestHash,
   computeCapsuleId,
+  signerCommitmentProblems,
 } from "./manifest.js";
 import { hexToBytes } from "./crypto.js";
 import { verifyEnvelopeSignatures } from "./envelope.js";
@@ -41,9 +43,19 @@ import { toKeyHex } from "./keys.js";
  *     chain: { ok, errors },
  *     contentIndex: { ok, errors },
  *     envelope: { ok, signers: [{role, public_key, valid, trusted}] },
+ *     signerSet: { bound, ok, errors: [string] },
  *     trustedSignerCount: number,
  *     notes: [string]
  *   }
+ *
+ * signerSet is the signer-set binding check (manifest.signer_commitment):
+ *   bound=true  — the manifest commits to the exact signer set; ok reflects
+ *                 whether envelope.signers matches it (fail-closed).
+ *   bound=false — the manifest carries no commitment. Verification still
+ *                 succeeds (absence is a weaker claim, not a violation),
+ *                 but the reported assurance visibly excludes signer-set
+ *                 integrity.
+ * trustedSignerCount counts DISTINCT trusted public keys, not signer rows.
  */
 export async function verifyCapsule(readerOrBytes, options = {}) {
   let reader = readerOrBytes;
@@ -60,6 +72,7 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
         chain: { ok: false, errors: [] },
         contentIndex: { ok: false, errors: [] },
         envelope: { ok: false, signers: [] },
+        signerSet: { bound: false, ok: false, errors: [] },
         trustedSignerCount: 0,
         notes: [],
       };
@@ -84,6 +97,7 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
     chain: { ok: false, errors: [] },
     contentIndex: { ok: false, errors: [] },
     envelope: { ok: false, signers: [] },
+    signerSet: { bound: false, ok: true, errors: [] },
     trustedSignerCount: 0,
     notes,
   };
@@ -225,7 +239,87 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
     ...s,
     trusted: s.valid && allowlist.has(s.public_key.toLowerCase()),
   }));
-  result.trustedSignerCount = result.envelope.signers.filter((s) => s.trusted).length;
+  // DISTINCT trusted keys, never rows: the same key signing under two roles
+  // is one trusted key, and duplicate rows must never inflate a quorum.
+  result.trustedSignerCount = new Set(
+    result.envelope.signers.filter((s) => s.trusted).map((s) => s.public_key.toLowerCase()),
+  ).size;
+
+  // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
+  // A present manifest.signer_commitment must equal the normalized
+  // envelope signer set exactly (integrity invariant, fail-closed). An
+  // absent commitment downgrades the reported assurance — it never fails
+  // verification, because a capsule that does not assert signer-set
+  // binding is making a weaker claim honestly (templates, other writers).
+  const commitment = manifest.signer_commitment;
+  if (commitment === undefined) {
+    notes.push(
+      "manifest.signer_commitment absent: the signer set is not bound by the seal",
+    );
+  } else {
+    result.signerSet.bound = true;
+    const scErrors = [];
+    const problems = signerCommitmentProblems(commitment);
+    if (problems.length > 0) {
+      for (const p of problems) scErrors.push(`manifest.signer_commitment malformed: ${p}`);
+    } else {
+      const actual = (Array.isArray(envelope.signers) ? envelope.signers : [])
+        .map((s) => ({
+          role: typeof s?.role === "string" ? s.role : "",
+          public_key: typeof s?.public_key === "string" ? s.public_key.toLowerCase() : "",
+        }))
+        .sort(compareCommitmentMembers);
+      // Merge-walk both sorted member lists; report every difference by name.
+      let i = 0;
+      let j = 0;
+      while (i < commitment.length || j < actual.length) {
+        const cmp =
+          i >= commitment.length ? 1 : j >= actual.length ? -1
+          : compareCommitmentMembers(commitment[i], actual[j]);
+        if (cmp === 0) {
+          i++; j++;
+        } else if (cmp < 0) {
+          const m = commitment[i++];
+          scErrors.push(
+            `signer_commitment mismatch: no envelope signer matches committed member (role=${m.role}, public_key=${m.public_key})`,
+          );
+        } else {
+          const m = actual[j++];
+          scErrors.push(
+            `signer_commitment mismatch: envelope signer not committed (role=${m.role}, public_key=${m.public_key})`,
+          );
+        }
+      }
+    }
+    if (scErrors.length > 0) {
+      result.signerSet.ok = false;
+      result.signerSet.errors = scErrors;
+      errors.push(...scErrors);
+    }
+  }
+
+  // Originator binding (invariant): the manifest names an originator key —
+  // that key must actually have sealed the capsule with a valid envelope
+  // signature under role "originator". A manifest naming an originator who
+  // never signed is the capsule asserting something false about itself.
+  {
+    const originatorKey =
+      typeof manifest.originator?.public_key === "string"
+        ? manifest.originator.public_key.toLowerCase()
+        : null;
+    const originatorSigned = envelopeResult.signers.some(
+      (s) =>
+        s.role === "originator" &&
+        s.valid &&
+        typeof s.public_key === "string" &&
+        s.public_key.toLowerCase() === originatorKey,
+    );
+    if (!originatorSigned) {
+      errors.push(
+        `originator binding: manifest.originator.public_key ${originatorKey ?? "(missing)"} has no valid envelope signature with role 'originator'`,
+      );
+    }
+  }
 
   // L3: cross-check inner against outer envelope
   if (options.outerEnvelope) {

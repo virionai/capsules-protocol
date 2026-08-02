@@ -12,7 +12,21 @@ data class CapsuleVerification(
     val level: String,                                  // "L2"
     val checks: List<VerifyCheck>,
     val signers: List<SignerCheck>,
+    /**
+     * Number of DISTINCT public keys that are both valid and on the
+     * allowlist — never signer rows (the same key under two roles is one
+     * trusted key).
+     */
     val trustedSignerCount: Int,
+    /**
+     * Signer-set binding (manifest.signer_commitment): PRESENCE BINDS,
+     * ABSENCE REPORTS. `true` means the manifest commits to the exact
+     * signer set (the `signer_commitment` check reflects the match,
+     * fail-closed); `false` means the capsule does not assert signer-set
+     * integrity — verification can still succeed, at a visibly lower
+     * assurance.
+     */
+    val signerSetBound: Boolean,
     val notes: List<String>,
 ) {
     data class SignerCheck(
@@ -38,7 +52,8 @@ object CapsuleVerifier {
             return CapsuleVerification(
                 ok = false, level = "L2",
                 checks = listOf(VerifyCheck("parse", false, e.message ?: "$e")),
-                signers = emptyList(), trustedSignerCount = 0, notes = notes,
+                signers = emptyList(), trustedSignerCount = 0,
+                signerSetBound = false, notes = notes,
             )
         }
         rec("zip_parse", true, "${parsed.files.size} files")
@@ -128,12 +143,144 @@ object CapsuleVerifier {
         }
         rec("envelope_signature", env.ok, if (detail.isEmpty()) (env.note ?: "") else detail)
 
+        // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS. A present
+        // manifest.signer_commitment must equal the normalized envelope
+        // signer set exactly (integrity invariant, fail-closed). An absent
+        // commitment downgrades the reported assurance — it never fails
+        // verification (templates and other writers make a weaker claim
+        // honestly).
+        val commitment = (parsed.manifest as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "signer_commitment" }?.second
+        val signerSetBound = commitment != null
+        if (commitment != null) {
+            val scErrors = signerCommitmentErrors(commitment, parsed.envelope)
+            rec(
+                "signer_commitment",
+                scErrors.isEmpty(),
+                if (scErrors.isEmpty()) "exact membership matched" else scErrors.joinToString("; "),
+            )
+        } else {
+            rec("signer_commitment", true, "absent (signer set not bound by seal)")
+            notes += "manifest.signer_commitment absent: the signer set is not bound by the seal"
+        }
+
+        // Originator binding (invariant): the manifest names an originator
+        // key — that key must actually have sealed the capsule with a valid
+        // envelope signature under role "originator".
+        val originatorKey = CapsuleReader
+            .lookupString(parsed.manifest, listOf("originator", "public_key"))?.lowercase()
+        val originatorSigned = env.signers.any { (role, pk, valid) ->
+            role == "originator" && valid && pk.lowercase() == originatorKey
+        }
+        rec(
+            "originator_binding", originatorSigned,
+            if (originatorSigned) ""
+            else "originator binding: manifest.originator.public_key " +
+                "${originatorKey ?: "(missing)"} has no valid envelope signature " +
+                "with role 'originator'",
+        )
+
         val ok = checks.all { it.ok }
         return CapsuleVerification(
             ok = ok, level = "L2", checks = checks,
-            signers = signers, trustedSignerCount = signers.count { it.trusted },
+            signers = signers,
+            // DISTINCT trusted keys, never rows.
+            trustedSignerCount = signers.filter { it.trusted }
+                .map { it.publicKey.lowercase() }.toSet().size,
+            signerSetBound = signerSetBound,
             notes = notes,
         )
+    }
+
+    /**
+     * Validate a stored signer_commitment against the envelope's signer
+     * set. Returns the failure messages (empty = bound and matched).
+     * Rules: spec/manifest.md "signer_commitment".
+     */
+    private fun signerCommitmentErrors(commitment: JCSValue, envelope: JCSValue): List<String> {
+        val list = (commitment as? JCSValue.Arr)?.items
+            ?: return listOf(
+                "manifest.signer_commitment malformed: must be a non-empty array of {role, public_key}"
+            )
+        if (list.isEmpty()) {
+            return listOf("manifest.signer_commitment malformed: must not be empty when present")
+        }
+        val problems = mutableListOf<String>()
+        val members = mutableListOf<Pair<String, String>>() // (public_key, role)
+        val keyHex = Regex("^[0-9a-f]{64}$")
+        for ((i, m) in list.withIndex()) {
+            val pairs = (m as? JCSValue.Obj)?.pairs
+            if (pairs == null) {
+                problems += "manifest.signer_commitment malformed: member $i is not an object"
+                continue
+            }
+            val role = (pairs.firstOrNull { it.first == "role" }?.second as? JCSValue.Str)?.v
+            val key = (pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v
+            if (pairs.map { it.first }.sorted() != listOf("public_key", "role") ||
+                role == null || key == null
+            ) {
+                problems += "manifest.signer_commitment malformed: member $i must carry exactly {role, public_key}"
+                continue
+            }
+            if (role.isEmpty()) {
+                problems += "manifest.signer_commitment malformed: member $i: role must be a non-empty string"
+            }
+            if (!keyHex.matches(key)) {
+                problems += "manifest.signer_commitment malformed: member $i: public_key must be lowercase 64-hex"
+            }
+            members += key to role
+        }
+        if (problems.isNotEmpty()) return problems
+        for (i in 1 until members.size) {
+            val a = members[i - 1]
+            val b = members[i]
+            if (a == b) {
+                problems += "manifest.signer_commitment malformed: duplicate member " +
+                    "(role=${b.second}, public_key=${b.first})"
+            } else if (a.first > b.first || (a.first == b.first && a.second > b.second)) {
+                problems += "manifest.signer_commitment malformed: members not sorted " +
+                    "ascending by (public_key, role)"
+                break
+            }
+        }
+        if (problems.isNotEmpty()) return problems
+
+        // Normalized envelope signer set, sorted the same way.
+        val signersArr = ((envelope as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "signers" }?.second as? JCSValue.Arr)?.items.orEmpty()
+        val actual = signersArr.map { s ->
+            val pairs = (s as? JCSValue.Obj)?.pairs.orEmpty()
+            val role = (pairs.firstOrNull { it.first == "role" }?.second as? JCSValue.Str)?.v ?: ""
+            val key = (pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v
+                ?.lowercase() ?: ""
+            key to role
+        }.sortedWith(compareBy({ it.first }, { it.second }))
+
+        // Merge-walk both sorted member lists; name every difference.
+        val errors = mutableListOf<String>()
+        var i = 0
+        var j = 0
+        while (i < members.size || j < actual.size) {
+            val cmp = when {
+                i >= members.size -> 1
+                j >= actual.size -> -1
+                else -> compareValuesBy(members[i], actual[j], { it.first }, { it.second })
+            }
+            when {
+                cmp == 0 -> { i++; j++ }
+                cmp < 0 -> {
+                    val (key, role) = members[i]; i++
+                    errors += "signer_commitment mismatch: no envelope signer matches " +
+                        "committed member (role=$role, public_key=$key)"
+                }
+                else -> {
+                    val (key, role) = actual[j]; j++
+                    errors += "signer_commitment mismatch: envelope signer not committed " +
+                        "(role=$role, public_key=$key)"
+                }
+            }
+        }
+        return errors
     }
 
     private fun verifyChain(events: List<JCSValue>): Boolean {

@@ -23,6 +23,7 @@ import {
 import {
   buildContentIndex,
   buildManifest,
+  buildSignerCommitment,
   computeCapsuleId,
   CONTENT_INDEX_EXCLUDED,
   manifestBytes,
@@ -192,6 +193,14 @@ export class CapsuleBuilder {
     const originatorPubRaw = hexToBytes(this.originator.public_key);
     const capsuleId = computeCapsuleId(originatorPubRaw, firstEventHash);
 
+    // Signer-set commitment: the exact (role, public_key) membership of the
+    // seal-time signer set, bound into the manifest (and therefore into
+    // every signature via manifest_hash). Plain and encrypted paths share
+    // one signer list, so one commitment serves inner and outer manifests.
+    const signerCommitment = buildSignerCommitment(
+      signers.map((s) => ({ role: s.role, public_key: bytesToHex(s.publicKey) })),
+    );
+
     if (recipients.length === 0) {
       // ---- Plain capsule ----
       const contentIndex = buildContentIndex(innerFiles);
@@ -203,6 +212,7 @@ export class CapsuleBuilder {
         skillTrust,
         encryption: null,
         createdAt: this.createdAt,
+        signerCommitment,
       });
       manifest.id = capsuleId;
       const mfHash = manifestHash(manifest);
@@ -238,6 +248,7 @@ export class CapsuleBuilder {
       skillTrust,
       encryption: null,
       createdAt: this.createdAt,
+      signerCommitment,
     });
     innerManifest.id = capsuleId;
     const innerMfHash = manifestHash(innerManifest);
@@ -335,6 +346,7 @@ export class CapsuleBuilder {
         cipher: "ChaCha20-Poly1305",
       },
       createdAt: this.createdAt,
+      signerCommitment,
     });
     outerManifest.id = capsuleId;
     const outerMfHash = manifestHash(outerManifest);

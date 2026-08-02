@@ -45,6 +45,32 @@ class SpecRegistryTest {
         }
     }
 
+    /**
+     * Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS
+     * (spec/manifest.md "signer_commitment", spec/envelope.md "Signer set
+     * binding"). A present manifest.signer_commitment must equal the
+     * normalized envelope signer set exactly — strip / add / role-swap /
+     * unsorted all fail closed; an absent one verifies with
+     * signerSetBound=false. Duplicate (role, public_key) signers are
+     * malformed, and the manifest originator must have a valid
+     * role-"originator" signature.
+     */
+    @Test
+    fun signerSetRegistryOutcomes() {
+        val file = File(vectorsDir(), "signer-set/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "signer-set registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
     @Test
     fun malformedRegistryOutcomes() {
         val file = File(vectorsDir(), "malformed-layout/vectors.json")
@@ -118,6 +144,12 @@ class SpecRegistryTest {
                 "$name: expected an error containing $needle; got $haystack",
             )
         }
+        if (expected.has("signer_set_bound")) {
+            assertEquals(
+                expected.get("signer_set_bound").asBoolean, result.signerSetBound,
+                "$name: signerSetBound mismatch",
+            )
+        }
     }
 
     private fun verify(bytes: ByteArray, allowlist: Set<String>): CapsuleVerification =
@@ -159,6 +191,8 @@ class SpecRegistryTest {
             "content_index" to "content_index_hash",
             "chain" to "chain",
             "envelope" to "envelope_signature",
+            "signer_set" to "signer_commitment",
+            "originator_binding" to "originator_binding",
         )
 
         /**
