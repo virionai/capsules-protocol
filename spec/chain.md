@@ -82,6 +82,42 @@ into a model context. Readers should:
 The default for narrative summary/statement fields is to mark them
 untrusted unless the host knows otherwise.
 
+## Empty chains
+
+A chain with ZERO events is legal. It is the weakest honest claim the
+format supports — a template or draft capsule that carries no recorded
+work yet — and it sits squarely in the open/low-assurance tier the
+format must serve. Verifiers MUST NOT reject a capsule merely because
+`chain/events.jsonl` is present but empty. (The FILE itself is still
+required; a missing chain file is a container defect.)
+
+What an empty chain must not do is claim anchors it does not have.
+With zero events there is no first event and no entry event, so:
+
+- `manifest.first_event_hash` MUST be `null`,
+- `envelope.first_event_hash` MUST be `null`,
+- `envelope.entry_hash` MUST be `null`.
+
+A capsule carrying no events while claiming any of these anchors is
+lying about its own bytes; verifiers MUST reject it fail-closed. This
+matters because in a plain capsule the two envelope anchors are the
+ONLY binding between the envelope and the chain — a verifier that
+treats an empty chain as "nothing to check" silently skips that
+binding and reports an unbound capsule as verified.
+
+Verifiers MUST also report, machine-readably and in human output, that
+a zero-event chain was NOT walked (there was nothing to walk) and that
+the anchors were checked for null instead — never an unqualified pass
+indistinguishable from a walked chain.
+
+`capsule_id` for a zero-event capsule is derived with 32 zero bytes in
+place of `first_event_hash_raw` (see [manifest.md](manifest.md)
+"Capsule identity").
+
+Conformance vectors: `spec/vectors/chain-binding/`
+(`empty-chain-null-anchors` MUST verify; `empty-chain-claimed-anchors`
+MUST fail).
+
 ## Backstop event
 
 If a session ends without explicit chain events, the host SDK emits a
@@ -102,6 +138,14 @@ single backstop event before sealing:
 The host always controls backstop emission. The LLM cannot suppress it.
 This is the mitigation for "the LLM curates its own audit log."
 
+The backstop is a *session-host* obligation: a runtime that hosted a
+session MUST NOT seal it with an empty chain, because "a session
+happened and recorded nothing" is exactly the curation hazard above.
+It does not forbid the zero-event shape itself — a writer sealing a
+template or draft that hosted no session legitimately produces an
+empty chain (see "Empty chains"), and the null anchors make that
+weaker claim visible to every reader.
+
 ## Verification
 
 The reader walks the chain in order:
@@ -115,6 +159,12 @@ The reader walks the chain in order:
 
 A mismatch at any step fails verification. The reader reports which
 event failed which check; it does not stop at the first error.
+
+When the chain has zero events, steps 1-6 are vacuous; the reader
+instead enforces the null-anchor rule of "Empty chains" (all three
+anchor claims null, fail-closed otherwise) and reports that no events
+were walked. When the chain has events, a `null` anchor fails the
+envelope anchor comparison like any other mismatch.
 
 ## What the chain does *not* prove
 

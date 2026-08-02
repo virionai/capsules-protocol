@@ -104,17 +104,17 @@
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "897f56a723e13e4d02589ecdc84095596cbbcc7d3788e389781903d43fbae90a"
+        "sha256": "50e96fb5647621b39564a04f61ac83282a2300c12f20232eab4a6024383cd2af"
       },
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "641373ee7823fec67d1aca95a55839d06a9e56f1926c0e465595aab47ec5af18"
+        "sha256": "301e1dbfc5adaa507c6f3e0fe88c7761566fca4a2a3c00182f24a7ab669af714"
       },
       {
         "path": "spec/envelope.md",
         "title": "Provenance envelope",
-        "sha256": "a06d19fc48a41b3fa756917d7af6989707e8e18761a4326e7a2ff8018db4e97d"
+        "sha256": "1e872a889d4e88d12a6a329ea60e899d4aa9e32634082cfdbcf884ab1768abd0"
       },
       {
         "path": "spec/trust.md",

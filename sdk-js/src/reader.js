@@ -35,8 +35,13 @@ function validateManifestShape(manifest) {
   if (!manifest.originator || !HEX64.test(manifest.originator.public_key ?? "")) {
     throw new Error("manifest.originator.public_key must be a 64-char lowercase hex string");
   }
-  if (!HEX64.test(manifest.first_event_hash ?? "")) {
-    throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string");
+  // null is the legal empty-chain shape (spec/chain.md "Empty chains"):
+  // a zero-event capsule has no first event to hash. The verifier enforces
+  // the null-anchor / event-count consistency; the reader only rejects
+  // values that are neither null nor well-formed hex.
+  const feh = manifest.first_event_hash ?? null;
+  if (feh !== null && !HEX64.test(feh)) {
+    throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string or null");
   }
 }
 

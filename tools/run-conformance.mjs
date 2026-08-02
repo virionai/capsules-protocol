@@ -111,6 +111,16 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "chain-binding-fixtures-regen",
+    name: "chain-binding fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-chain-binding-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "attestation-vectors-regen",
     name: "identity-attestation vector regeneration check",
     language: "javascript",

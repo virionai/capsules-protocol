@@ -202,19 +202,50 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
 
   // Chain
   if (!reader.isEncrypted()) {
-    let events;
-    try {
-      events = reader.events();
-    } catch (err) {
-      events = [];
-      result.chain = { ok: false, errors: [{ seq: 0, message: err.message }] };
-    }
-    if (events.length === 0) {
-      result.chain ??= {
-        ok: false,
-        errors: [{ seq: 0, message: "chain/events.jsonl missing or empty" }],
-      };
+    let events = null;
+    if (!files.has("chain/events.jsonl")) {
+      // The chain FILE is required even when it carries no events; its
+      // absence is a container defect, not a weaker claim.
+      result.chain = { ok: false, errors: [{ seq: 0, message: "missing chain/events.jsonl" }] };
     } else {
+      try {
+        events = reader.events();
+      } catch (err) {
+        result.chain = { ok: false, errors: [{ seq: 0, message: err.message }] };
+      }
+    }
+    if (events !== null && events.length === 0) {
+      // Empty chain is LEGAL — the weakest honest shape (a template or
+      // draft capsule that carries no events yet). But the capsule must
+      // not claim chain anchors it does not have: with zero events there
+      // is nothing for first_event_hash / entry_hash to commit to, so
+      // all three anchor claims MUST be null. A capsule claiming an
+      // anchor over an empty chain is lying about its own bytes — the
+      // integrity violation to reject (spec/chain.md "Empty chains").
+      result.chain = {
+        ok: true,
+        errors: [],
+        note: "empty chain: no events to walk; envelope anchors checked to be null instead",
+      };
+      notes.push(
+        "empty chain: no events to walk; envelope anchors checked to be null instead",
+      );
+      if (envelope.first_event_hash !== null) {
+        errors.push(
+          `envelope.first_event_hash must be null when the chain has no events; got ${envelope.first_event_hash}`,
+        );
+      }
+      if (envelope.entry_hash !== null) {
+        errors.push(
+          `envelope.entry_hash must be null when the chain has no events; got ${envelope.entry_hash}`,
+        );
+      }
+      if (manifest.first_event_hash !== null) {
+        errors.push(
+          `manifest.first_event_hash must be null when the chain has no events; got ${manifest.first_event_hash}`,
+        );
+      }
+    } else if (events !== null) {
       result.chain = verifyChain(events);
       const { firstEventHash, entryHash } = firstAndEntryHash(events);
       if (firstEventHash !== envelope.first_event_hash) {
@@ -224,6 +255,9 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
       }
       if (entryHash !== envelope.entry_hash) {
         errors.push(`envelope.entry_hash mismatch: ${envelope.entry_hash} vs ${entryHash}`);
+      }
+      if (manifest.first_event_hash == null) {
+        errors.push("manifest.first_event_hash must not be null when the chain has events");
       }
     }
   } else {

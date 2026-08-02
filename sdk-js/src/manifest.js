@@ -14,13 +14,22 @@ const ID_DOMAIN = Buffer.from("capsule-id-v0.6\x00", "utf8");
 /**
  * Compute capsule_id from originator pubkey + first event hash.
  * All inputs are raw bytes; no hex strings.
+ *
+ * A zero-event capsule (spec/chain.md "Empty chains") has no first event:
+ * its manifest carries `first_event_hash: null`, and the derivation uses
+ * 32 zero bytes — the genesis prev-hash value — in place of
+ * `first_event_hash_raw` (spec/manifest.md "id").
  */
 export function computeCapsuleId(originatorPubKeyRaw, firstEventHashHex) {
   if (originatorPubKeyRaw.length !== 32) throw new Error("originator pubkey must be 32 bytes");
-  if (typeof firstEventHashHex !== "string" || firstEventHashHex.length !== 64) {
-    throw new Error("first_event_hash must be 64-hex");
+  let fehRaw;
+  if (firstEventHashHex == null) {
+    fehRaw = new Uint8Array(32); // genesis stand-in for an empty chain
+  } else if (typeof firstEventHashHex === "string" && firstEventHashHex.length === 64) {
+    fehRaw = hexToBytes(firstEventHashHex);
+  } else {
+    throw new Error("first_event_hash must be 64-hex or null (empty chain)");
   }
-  const fehRaw = hexToBytes(firstEventHashHex);
   const out = sha256(concatBytes(ID_DOMAIN, originatorPubKeyRaw, fehRaw));
   return bytesToHex(out);
 }

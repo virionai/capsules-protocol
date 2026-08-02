@@ -31,7 +31,7 @@ here.
       "label": "AI advisor"
     }
   ],
-  "first_event_hash": "<64-hex>",
+  "first_event_hash": "<64-hex> | null",
   "content_index": {
     "files": [
       { "path": "program.md", "sha256": "<64-hex>" },
@@ -73,7 +73,13 @@ here.
   `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>`. Not
   cryptographically bound to a key by default — only `originator` is.
 - `first_event_hash`: 32 bytes of SHA-256, lowercase hex; equals the
-  hash of the first event in `chain/events.jsonl`.
+  hash of the first event in `chain/events.jsonl`. When the chain has
+  ZERO events (see [chain.md](chain.md) "Empty chains") this member
+  MUST be `null` — a zero-event capsule has no first event, and a
+  non-null value over an empty chain is an integrity violation that
+  verifiers reject fail-closed. Conversely, `null` with a non-empty
+  chain fails verification. Conformance vectors:
+  `spec/vectors/chain-binding/`.
 - `content_index.files`: every file in the capsule *except* the
   structural files `manifest.json` (the index lives inside it) and
   `provenance/envelope.json` (it commits to the index hash), plus — **only
@@ -180,6 +186,13 @@ Notes:
 - All concatenations are raw bytes. No hex strings as inputs.
 - Domain-separation prefix `"capsule-id-v0.6\x00"` is 16 ASCII bytes
   including the trailing NUL, so the prefix has a fixed boundary.
+- **Empty chain:** when `first_event_hash` is `null` (zero-event
+  capsule, see [chain.md](chain.md) "Empty chains"),
+  `first_event_hash_raw_bytes` is 32 zero bytes — the same value as the
+  chain's genesis previous-hash. Consequence: two zero-event capsules
+  from the same originator share a `capsule_id`; identity diverges once
+  the first event is appended and the capsule is re-sealed. That is the
+  honest reading of a draft with no history.
 - This binds the identity to a public key. Identity squatting on a
   future ledger requires the squatter to also possess a private key
   whose public key the squatter wants to claim — not a free win.
