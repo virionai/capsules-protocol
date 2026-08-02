@@ -110,7 +110,11 @@ object CapsuleVerifier {
         // envelope.encrypted_blob_hash). Keying off file presence would let
         // an attacker append a stray blob to a signed plain capsule and have
         // it excluded for free; keying off the signed cipher means the stray
-        // blob is indexed here and fails verification. See spec/manifest.md.
+        // blob is indexed here like any other file. Indexing alone is
+        // accounting, not the rejection — a fully re-derived index can cover
+        // the blob — the envelope_cipher shape check below rejects any
+        // content.enc the signed envelope does not account for, indexed or
+        // not. See spec/manifest.md.
         val indexCipher = CapsuleReader.lookupString(parsed.envelope, listOf("cipher")) ?: "none"
         val excluded = Manifest.contentIndexExclusions(indexCipher != "none")
         val indexInputs = parsed.files
@@ -148,6 +152,51 @@ object CapsuleVerifier {
         rec("content_index_hash",
             indexHashesMatch && indexProblems.isEmpty(),
             (listOf(ci.indexHash.take(12) + "…") + indexProblems).joinToString("; "))
+
+        // Encrypted-blob shape (mirrors verifier-rust). Two legal shapes:
+        //   - Plain:     no content.enc, cipher == "none",
+        //                encrypted_blob_hash == null.
+        //   - Encrypted: content.enc present, cipher != "none",
+        //                encrypted_blob_hash == sha256(content.enc).
+        // The checks are keyed off blob PRESENCE, never off "encrypted
+        // mode" (cipher AND blob): that conjunction is false exactly when
+        // the two halves disagree, which are the capsules that must fail
+        // here. Without this check a cipher-declaring capsule with no blob
+        // falls through to the plain path and verifies a chain it claims
+        // to have encrypted — fail-open.
+        val rawCipher = CapsuleReader.lookupString(parsed.envelope, listOf("cipher"))
+        val storedBlobHash =
+            CapsuleReader.lookupString(parsed.envelope, listOf("encrypted_blob_hash"))
+        val blobBytes = parsed.files["content.enc"]
+        val blobProblems = mutableListOf<String>()
+        if (blobBytes != null) {
+            if (storedBlobHash == null) {
+                blobProblems += "encrypted blob present but envelope.encrypted_blob_hash=null"
+            } else {
+                val recomputedBlobHash = CapsuleCrypto.sha256Hex(blobBytes)
+                if (recomputedBlobHash != storedBlobHash) {
+                    blobProblems += "envelope.encrypted_blob_hash mismatch: " +
+                        "stored $storedBlobHash vs recomputed $recomputedBlobHash"
+                }
+            }
+            if (rawCipher == "none") {
+                blobProblems += "encrypted blob present but envelope.cipher='none'"
+            } else if (rawCipher == null) {
+                blobProblems += "encrypted blob present but envelope.cipher missing"
+            }
+        } else {
+            if (storedBlobHash != null) {
+                blobProblems += "plain capsule must have envelope.encrypted_blob_hash=null"
+            }
+            if (rawCipher != "none") {
+                blobProblems += "plain capsule must have cipher='none', got '${rawCipher ?: "null"}'"
+            }
+        }
+        rec(
+            "envelope_cipher",
+            blobProblems.isEmpty(),
+            if (blobProblems.isEmpty()) (rawCipher ?: "none") else blobProblems.joinToString("; "),
+        )
 
         // Chain integrity: hash linkage plus the spec/chain.md per-event
         // actor (step 6, conditional on declared participants) and kind

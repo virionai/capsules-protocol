@@ -185,6 +185,48 @@ async function main() {
       files.set("content.enc", FAKE_BLOB);
       return Buffer.from(await packZip(files));
     })(),
+
+    // The SIGNED envelope declares a cipher, but the package carries NO
+    // content.enc (encrypted_blob_hash stays null) while a plaintext chain
+    // and program are present. manifest.encryption AGREES with the envelope
+    // and names a metadata_path (program.md) that is present and indexed,
+    // so every manifest-vs-envelope agreement check passes. Only the
+    // package-shape invariant — no blob means plain, and plain must declare
+    // cipher='none' and encrypted_blob_hash=null — rejects it. A lane
+    // missing that check walks the plaintext chain and reports success for
+    // a capsule that lies about being encrypted.
+    "cipher-declared-no-blob.capsule": await resign(
+      await loadCapsule("clean.capsule"),
+      signer,
+      {
+        mutate: ({ manifest, envelope }) => {
+          envelope.cipher = "ChaCha20-Poly1305";
+          manifest.encryption = {
+            metadata_path: "program.md",
+            cipher: "ChaCha20-Poly1305",
+          };
+        },
+      },
+    ),
+
+    // Plain capsule (signed cipher "none", chain intact) with a stray
+    // content.enc appended AND correctly indexed — content index, manifest
+    // hash and signature all re-derived. Unlike smuggled-blob-broken-chain
+    // nothing else is wrong, so only the blob-shape invariant (a present
+    // blob must be accounted for by the signed cipher and
+    // encrypted_blob_hash) catches it. Lanes must key the shape checks off
+    // blob PRESENCE; keying them off is_encrypted (cipher AND blob) skips
+    // them exactly when the two halves disagree.
+    "smuggled-blob-indexed.capsule": await resign(
+      await loadCapsule("clean.capsule"),
+      signer,
+      {
+        rebuildIndex: true,
+        mutate: ({ files }) => {
+          files.set("content.enc", FAKE_BLOB);
+        },
+      },
+    ),
   };
 
   for (const [name, bytes] of Object.entries(fixtures)) {

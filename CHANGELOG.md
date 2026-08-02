@@ -50,6 +50,40 @@ incompatible wire changes ship as `0.7`).
   by all five lanes; sdk-swift and sdk-kotlin now also consume
   `spec/vectors/chain-binding/`.
 
+- **Encrypted-blob shape checks are now keyed off blob PRESENCE in
+  every lane, closing two fail-opens the semantic-binding remediation
+  introduced.** The remediation settled encrypted-mode detection on
+  "signed cipher AND `content.enc` present" — correct for choosing
+  whether to walk the chain, but sdk-py, sdk-js, sdk-swift and
+  sdk-kotlin also gated the cipher/blob-hash SHAPE checks behind that
+  conjunction, which is false exactly when the two halves disagree.
+  Consequences: (1) sdk-kotlin verified `ok=true` for a capsule whose
+  SIGNED `envelope.cipher` named a real cipher while carrying no
+  `content.enc` and a plaintext chain — it walked the plaintext chain
+  of a capsule claiming to be encrypted (before the remediation the
+  same bytes were accidentally refused); (2) sdk-py — which had
+  rejected it before the remediation — plus sdk-js, sdk-swift and
+  sdk-kotlin verified `ok=true` for a plain (`cipher='none'`) capsule
+  with a stray `content.enc` appended AND correctly content-indexed,
+  index/manifest-hash/signature re-derived. verifier-rust already had
+  the correct split (`blob_present` for the shape checks, `blob_present
+  && cipher != "none"` only for mode selection); the other four lanes
+  now mirror it: a present blob must be accounted for by the signed
+  cipher and `encrypted_blob_hash`, and an absent blob means plain —
+  `cipher='none'`, `encrypted_blob_hash=null` — unconditionally
+  (integrity invariant: the capsule must not lie about its own bytes;
+  a manifest that merely OMITS the optional `encryption` member is
+  still not a violation). Two new semantic-binding vectors pin it in
+  all five lanes: `cipher-declared-no-blob` (reason
+  `cipher_without_blob`) and `smuggled-blob-indexed` (reason
+  `blob_without_cipher`). Also corrected the sdk-js
+  `CONTENT_INDEX_EXCLUDED`/verifier comments, which claimed indexing a
+  smuggled blob is what fails verification — a fully re-derived index
+  passes the index checks; the blob-shape invariant is what rejects
+  it. The CLI's vendored `@capsule/sdk-v0.6-prototype` was a stale
+  directory copy of sdk-js; it is now an npm `file:` symlink, so the
+  CLI lane exercises the current SDK.
+
 - **The chain.md step-6 actor rule and the closed `kind` enum are now
   enforced in all five lanes — with the actor rule conditioned on the
   manifest's own claim.** Only verifier-rust implemented step 6

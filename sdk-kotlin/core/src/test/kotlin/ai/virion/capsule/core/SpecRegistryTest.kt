@@ -443,6 +443,8 @@ class SpecRegistryTest {
             "first_event_hash_binding" to "manifest.first_event_hash mismatch",
             "encryption_shape" to "manifest.encryption must be",
             "encryption_metadata_path" to "manifest.encryption.metadata_path",
+            "cipher_without_blob" to "plain capsule must have cipher='none'",
+            "blob_without_cipher" to "encrypted blob present but envelope.",
         )
 
         /** Registry `failing` area → this lane's check name. */

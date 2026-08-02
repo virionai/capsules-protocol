@@ -345,6 +345,8 @@ fn verify_reason_needle(reason: &str) -> &'static str {
         "first_event_hash_binding" => "manifest.first_event_hash mismatch",
         "encryption_shape" => "manifest.encryption must be",
         "encryption_metadata_path" => "manifest.encryption.metadata_path",
+        "cipher_without_blob" => "plain capsule must have cipher='none'",
+        "blob_without_cipher" => "encrypted blob present but envelope.",
         other => panic!("unknown verify-stage reason {other:?}"),
     }
 }

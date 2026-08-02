@@ -201,9 +201,12 @@ def _verify_capsule_impl(
 
     # Content index. content.enc is excluded only when the capsule declares a
     # cipher (bound instead by envelope.encrypted_blob_hash). Key off the signed
-    # envelope.cipher, not file presence: a stray content.enc injected into a
-    # plain (cipher="none") capsule is indexed here and therefore fails
-    # verification, and forcing its exclusion would break the envelope signature.
+    # envelope.cipher, not file presence: a stray content.enc in a plain
+    # (cipher="none") capsule is indexed here like any other file, and forcing
+    # its exclusion would break the envelope signature. Indexing alone is
+    # accounting, not the rejection — a fully re-derived index can cover the
+    # blob — the blob-shape check below rejects any content.enc the signed
+    # envelope does not account for, indexed or not.
     excluded = content_index_exclusions(envelope.get("cipher") not in (None, "none"))
     files = reader.files()
     index_files = {p: b for p, b in files.items() if p not in excluded}
@@ -258,17 +261,29 @@ def _verify_capsule_impl(
         )
     result["content_index"]["ok"] = ci_ok and not result["content_index"]["errors"]
 
-    # Encrypted blob hash sanity (matches sdk/src/verifier.js lines 127-145)
-    if reader.is_encrypted():
-        blob = reader.encrypted_blob_bytes()
-        recomputed = sha256_hex(blob)
-        if recomputed != envelope.get("encrypted_blob_hash"):
-            errors.append(
-                "envelope.encrypted_blob_hash mismatch: "
-                f"{envelope.get('encrypted_blob_hash')} vs recomputed {recomputed}"
-            )
+    # Encrypted-blob shape (mirrors verifier-rust). Two legal shapes:
+    #   - Plain:     no content.enc, cipher == "none", encrypted_blob_hash null.
+    #   - Encrypted: content.enc present, cipher != "none",
+    #                encrypted_blob_hash == sha256(content.enc).
+    # The checks are deliberately keyed off blob PRESENCE, never off
+    # reader.is_encrypted() (the signed cipher AND the blob): that
+    # conjunction is false exactly when the two halves disagree — a smuggled
+    # content.enc on a cipher='none' capsule, or a declared cipher with no
+    # blob — which are precisely the capsules that must fail here.
+    blob = files.get("content.enc")
+    if blob is not None:
+        stored_blob_hash = envelope.get("encrypted_blob_hash")
+        if stored_blob_hash is None:
+            errors.append("encrypted blob present but envelope.encrypted_blob_hash=null")
+        else:
+            recomputed_blob_hash = sha256_hex(blob)
+            if recomputed_blob_hash != stored_blob_hash:
+                errors.append(
+                    "envelope.encrypted_blob_hash mismatch: "
+                    f"{stored_blob_hash} vs recomputed {recomputed_blob_hash}"
+                )
         if envelope.get("cipher") == "none":
-            errors.append("encrypted blob present but envelope.cipher is 'none'")
+            errors.append("encrypted blob present but envelope.cipher='none'")
     else:
         if envelope.get("encrypted_blob_hash") is not None:
             errors.append("plain capsule must have envelope.encrypted_blob_hash=null")

@@ -207,7 +207,10 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   // signed envelope.cipher, not file presence: an attacker who injects a
   // content.enc into a plain (cipher="none") capsule cannot force its
   // exclusion without breaking the envelope signature, so the stray blob is
-  // indexed here and fails verification.
+  // indexed here like any other file. Indexing alone is accounting, not the
+  // rejection — a fully re-derived index can cover the blob and still pass
+  // this check — the blob-shape check below rejects any content.enc the
+  // SIGNED envelope does not account for, indexed or not.
   const excluded = contentIndexExclusions(envelope.cipher !== "none");
   const files = reader.files_();
   const indexFiles = new Map();
@@ -244,17 +247,29 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   }
   if (result.contentIndex.errors.length > 0) result.contentIndex.ok = false;
 
-  // Encrypted blob hash
-  if (reader.isEncrypted()) {
-    const blob = reader.encryptedBlobBytes();
-    const recomputed = sha256Hex(blob);
-    if (recomputed !== envelope.encrypted_blob_hash) {
-      errors.push(
-        `envelope.encrypted_blob_hash mismatch: ${envelope.encrypted_blob_hash} vs recomputed ${recomputed}`,
-      );
+  // Encrypted-blob shape (mirrors verifier-rust). Two legal shapes:
+  //   - Plain:     no content.enc, cipher === "none", encrypted_blob_hash null.
+  //   - Encrypted: content.enc present, cipher !== "none",
+  //                encrypted_blob_hash === sha256(content.enc).
+  // The checks are deliberately keyed off blob PRESENCE, never off
+  // reader.isEncrypted() (the signed cipher AND the blob): that conjunction
+  // is false exactly when the two halves disagree — a smuggled content.enc
+  // on a cipher='none' capsule, or a declared cipher with no blob — which
+  // are precisely the capsules that must fail here.
+  if (files.has("content.enc")) {
+    const storedBlobHash = envelope.encrypted_blob_hash ?? null;
+    if (storedBlobHash === null) {
+      errors.push("encrypted blob present but envelope.encrypted_blob_hash=null");
+    } else {
+      const recomputedBlobHash = sha256Hex(files.get("content.enc"));
+      if (recomputedBlobHash !== storedBlobHash) {
+        errors.push(
+          `envelope.encrypted_blob_hash mismatch: ${storedBlobHash} vs recomputed ${recomputedBlobHash}`,
+        );
+      }
     }
     if (envelope.cipher === "none") {
-      errors.push("encrypted blob present but envelope.cipher is 'none'");
+      errors.push("encrypted blob present but envelope.cipher='none'");
     }
   } else {
     if (envelope.encrypted_blob_hash !== null) {

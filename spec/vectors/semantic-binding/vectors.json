@@ -10,7 +10,9 @@
   "reasons": {
     "first_event_hash_binding": "manifest.first_event_hash, envelope.first_event_hash and the hash of chain event 1 do not all agree. manifest.first_event_hash is the capsule_id preimage, so a drift here means capsule_id names a chain the capsule does not carry",
     "encryption_shape": "manifest.encryption disagrees with the SIGNED envelope.cipher: non-null on a cipher='none' capsule, null on an encrypted one, or naming a different cipher",
-    "encryption_metadata_path": "manifest.encryption.metadata_path does not resolve to a file that is present in the package AND covered by manifest.content_index"
+    "encryption_metadata_path": "manifest.encryption.metadata_path does not resolve to a file that is present in the package AND covered by manifest.content_index",
+    "cipher_without_blob": "the SIGNED envelope declares a cipher but the package carries no content.enc: a package without a blob is plain, and plain must declare cipher='none' and encrypted_blob_hash=null",
+    "blob_without_cipher": "a content.enc blob is present but the SIGNED envelope does not account for it: cipher='none' and/or encrypted_blob_hash=null. The shape checks must be keyed off blob PRESENCE, never off is_encrypted (cipher AND blob) — that conjunction is false exactly when the two halves disagree"
   },
   "notes": [
     "The 'reason' field is normative when present: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
@@ -56,6 +58,18 @@
       "capsule_file": "output/smuggled-blob-broken-chain.capsule",
       "expected": { "ok": false, "failing": ["chain", "content_index"] },
       "note": "Signed cipher is 'none' but a content.enc was appended, and chain/events.jsonl is corrupt. Encrypted-mode detection must key off the signed cipher, not file presence, or the chain is never walked and chain.ok is reported true for a broken chain."
+    },
+    {
+      "name": "cipher-declared-no-blob",
+      "capsule_file": "output/cipher-declared-no-blob.capsule",
+      "expected": { "ok": false, "reason": "cipher_without_blob" },
+      "note": "The SIGNED envelope declares cipher='ChaCha20-Poly1305' with encrypted_blob_hash=null and NO content.enc, while a plaintext chain and program are present. manifest.encryption AGREES with the envelope and names a metadata_path (program.md) that is present and content-indexed, so every manifest-vs-envelope agreement check passes — only the package-shape invariant (no blob means plain; plain must declare cipher='none') rejects it. A lane missing that check walks the plaintext chain and reports success for a capsule that lies about being encrypted."
+    },
+    {
+      "name": "smuggled-blob-indexed",
+      "capsule_file": "output/smuggled-blob-indexed.capsule",
+      "expected": { "ok": false, "reason": "blob_without_cipher" },
+      "note": "Plain capsule (signed cipher 'none', chain intact) with a stray content.enc appended AND correctly indexed; content index, manifest hash and signature are all re-derived. Unlike smuggled-blob-broken-chain nothing else is wrong, so only the blob-shape invariant (a present blob must be accounted for by the signed cipher and encrypted_blob_hash) catches it. A lane that gates the shape checks behind is_encrypted (cipher AND blob) skips them here and accepts the smuggled blob."
     },
     {
       "name": "plain-null-encryption-control",

@@ -191,6 +191,8 @@ const VERIFY_REASON = {
   first_event_hash_binding: /manifest\.first_event_hash mismatch/,
   encryption_shape: /manifest\.encryption must be/,
   encryption_metadata_path: /manifest\.encryption\.metadata_path/,
+  cipher_without_blob: /plain capsule must have cipher='none'/,
+  blob_without_cipher: /encrypted blob present but envelope\./,
 };
 
 // Optional lane capabilities a vector may require. The JS reference lane

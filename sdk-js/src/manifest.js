@@ -49,8 +49,14 @@ export const STRUCTURAL_EXCLUDED = new Set([
  * `content.enc` is excluded from the content index ONLY for encrypted
  * capsules, where it is bound separately by envelope.encrypted_blob_hash.
  * In a plain capsule there is no content.enc; if one is present it MUST be
- * indexed (and will therefore fail verification), so that a signed plain
- * capsule cannot smuggle an unaccounted-for blob past the verifier.
+ * indexed like any other file (an attacker cannot force its exclusion
+ * without breaking the envelope signature over content_index_hash). Note
+ * that indexing alone is NOT what rejects the smuggled blob — a fully
+ * re-derived index can cover it and the index checks pass — the verifier's
+ * blob-shape invariant does: a content.enc that the SIGNED envelope does
+ * not account for (cipher='none' or encrypted_blob_hash=null) fails
+ * verification whether or not it is indexed. Pinned by the
+ * smuggled-blob-indexed vector in spec/vectors/semantic-binding.
  */
 export const CONTENT_INDEX_EXCLUDED = new Set([
   ...STRUCTURAL_EXCLUDED,

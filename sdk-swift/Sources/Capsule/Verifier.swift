@@ -263,7 +263,11 @@ public enum CapsuleVerifier {
         // envelope.encrypted_blob_hash). Keying off file presence would let
         // an attacker append a stray blob to a signed plain capsule and have
         // it excluded for free; keying off the signed cipher means the stray
-        // blob is indexed here and fails verification. See spec/manifest.md.
+        // blob is indexed here like any other file. Indexing alone is
+        // accounting, not the rejection — a fully re-derived index can cover
+        // the blob — the envelope_cipher shape check below rejects any
+        // content.enc the signed envelope does not account for, indexed or
+        // not. See spec/manifest.md.
         let indexCipher = lookupString(parsed.envelope, ["cipher"]) ?? "none"
         let excluded = Manifest.contentIndexExclusions(indexCipher != "none")
         var indexInputs: [(String, Data)] = []
@@ -387,10 +391,45 @@ public enum CapsuleVerifier {
                        entryOk ? "" :
                        "envelope.entry_hash mismatch: \(envEntry ?? "null") vs \(lastEvHash ?? "null")")
             }
-            // Plain must declare cipher="none" and encrypted_blob_hash=null.
+            // Encrypted-blob shape (mirrors verifier-rust). This branch runs
+            // whenever the capsule is NOT in encrypted mode — no blob, or a
+            // blob the signed cipher does not account for. The checks are
+            // keyed off blob PRESENCE, never off "encrypted mode" (cipher
+            // AND blob): that conjunction is false exactly when the two
+            // halves disagree — a smuggled content.enc on a cipher='none'
+            // capsule, or a declared cipher with no blob — which are
+            // precisely the capsules that must fail here.
             let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
-            record("envelope_cipher", envCipher == "none",
-                   envCipher.isEmpty ? "missing" : envCipher)
+            var shapeProblems: [String] = []
+            if let blob = parsed.files["content.enc"] {
+                if let stored = lookupString(parsed.envelope, ["encrypted_blob_hash"]) {
+                    let recomputed = Hash.sha256Hex(blob)
+                    if recomputed != stored {
+                        shapeProblems.append(
+                            "envelope.encrypted_blob_hash mismatch: stored \(stored) "
+                            + "vs recomputed \(recomputed)")
+                    }
+                } else {
+                    shapeProblems.append(
+                        "encrypted blob present but envelope.encrypted_blob_hash=null")
+                }
+                if envCipher == "none" {
+                    shapeProblems.append("encrypted blob present but envelope.cipher='none'")
+                } else if envCipher.isEmpty {
+                    shapeProblems.append("encrypted blob present but envelope.cipher missing")
+                }
+            } else {
+                if lookupString(parsed.envelope, ["encrypted_blob_hash"]) != nil {
+                    shapeProblems.append("plain capsule must have envelope.encrypted_blob_hash=null")
+                }
+                if envCipher != "none" {
+                    shapeProblems.append(
+                        "plain capsule must have cipher='none', got "
+                        + "'\(envCipher.isEmpty ? "null" : envCipher)'")
+                }
+            }
+            record("envelope_cipher", shapeProblems.isEmpty,
+                   shapeProblems.isEmpty ? envCipher : shapeProblems.joined(separator: "; "))
         }
 
         // Encryption declaration. manifest.md fixes manifest.encryption as
