@@ -6,6 +6,7 @@ import {
   eventsToJsonl,
   firstAndEntryHash,
   isValidEventKind,
+  isValidUntrustedPayloadPath,
   participantActorIds,
   EVENT_KINDS,
   HOST_ACTOR,
@@ -125,6 +126,22 @@ export class CapsuleBuilder {
           `add { actor_id: ${JSON.stringify(event.actor)}, role: "..." } to the builder's ` +
           `participants[] (only "system:host" may appear without one)`,
       );
+    }
+    // Writer obligation (spec/chain.md "Untrusted content"): a marking
+    // outside the path grammar has no defined resolution, so refuse it at
+    // the call site that introduced it rather than at some future reader.
+    if (event.untrusted_payload_fields !== undefined) {
+      if (!Array.isArray(event.untrusted_payload_fields)) {
+        throw new Error("appendEvent: untrusted_payload_fields must be an array of payload paths");
+      }
+      for (const p of event.untrusted_payload_fields) {
+        if (!isValidUntrustedPayloadPath(p)) {
+          throw new Error(
+            `appendEvent: untrusted_payload_fields entry ${JSON.stringify(p)} is not a valid ` +
+              `payload path (expected "payload.<segment>" per spec/chain.md)`,
+          );
+        }
+      }
     }
     const applyPith = options.pith !== false && this.pith;
     const rawPayload = event.payload ?? {};

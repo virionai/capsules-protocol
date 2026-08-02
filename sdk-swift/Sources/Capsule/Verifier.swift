@@ -199,18 +199,22 @@ public enum CapsuleVerifier {
         record("zip_parse", true, "\(parsed.files.count) files")
         record("json_parse", true)
 
-        // capsule_id derivation. A zero-event capsule (spec/chain.md
-        // "Empty chains") carries first_event_hash: null and derives with
-        // 32 zero bytes standing in for first_event_hash_raw
-        // (spec/manifest.md "id"); whether null is LEGAL here is decided
-        // by the anchor checks below, which fail closed on any
-        // anchor/event-count inconsistency.
+        // capsule_id derivation. A null (or absent) manifest.first_event_hash
+        // is the legal zero-event shape: capsule_id then derives with 32
+        // zero bytes standing in for first_event_hash_raw (spec/chain.md
+        // "Empty chains", spec/manifest.md "Capsule identity"). Whether the
+        // chain actually HAS zero events is the anchor check's job below,
+        // which fails closed on any anchor/event-count inconsistency.
+        let mfFirstHashValue = lookupValue(parsed.manifest, ["first_event_hash"])
         if let pubHex = lookupString(parsed.manifest, ["originator", "public_key"]),
            let mfId = lookupString(parsed.manifest, ["id"]),
            let envId = lookupString(parsed.envelope, ["capsule_id"])
         {
-            let firstHash = lookupString(parsed.manifest, ["first_event_hash"])
-                ?? String(repeating: "0", count: 64)
+            let firstHash: String
+            switch mfFirstHashValue {
+            case .some(.string(let s)): firstHash = s
+            default: firstHash = String(repeating: "0", count: 64)  // null/absent
+            }
             // Untrusted hex from manifest — degrade gracefully on bad input
             // (originator pub must be 64 hex chars, first_event_hash 64).
             if let pubBytes = try? Bytes.fromHexThrowing(pubHex, label: "manifest.originator.public_key"),
@@ -255,7 +259,9 @@ public enum CapsuleVerifier {
                 record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
             }
         } catch {
-            record("manifest_hash", false, "\(error)")
+            // Same wording as the JS reference: a canonicalization refusal
+            // must read as a recompute failure, never as tampering.
+            record("manifest_hash", false, "manifest hash recompute failed: \(error)")
         }
 
         // content_index. `content.enc` drops out of the index only when the
@@ -344,61 +350,79 @@ public enum CapsuleVerifier {
             // chain is deferred — content lives inside the ciphertext.
             record("chain", true, "deferred to L3 (encrypted outer)")
         } else {
-            // Plain-capsule checks: chain integrity (hash linkage plus the
-            // spec/chain.md per-event actor and kind rules) + envelope
-            // anchors.
-            let chainErrors = CapsuleReader.verifyChain(
-                parsed.events,
-                participants: CapsuleReader.participantActorIds(parsed.manifest)
-            )
-            record("chain", chainErrors.isEmpty,
-                   chainErrors.isEmpty
-                       ? "\(parsed.events.count) events"
-                       : chainErrors.joined(separator: "; "))
-            // Envelope-to-chain anchors. These MUST fail closed: an anchor
-            // that is missing or null over a non-empty chain is a failure,
-            // never a silently skipped comparison — in a plain capsule
-            // these anchors are the only envelope-to-chain binding.
-            let envFirst = lookupString(parsed.envelope, ["first_event_hash"])
-            let envEntry = lookupString(parsed.envelope, ["entry_hash"])
             if parsed.events.isEmpty {
                 // Empty chain is LEGAL — the weakest honest shape (a
-                // template or draft capsule, spec/chain.md "Empty
-                // chains") — and then the capsule must not claim chain
-                // anchors it does not have: manifest.first_event_hash,
-                // envelope.first_event_hash and envelope.entry_hash must
-                // all be null. Reported honestly via the note.
-                notes.append("empty chain: no events to walk; envelope anchors checked to be null instead")
-                let firstProblems: [String] = [
-                    envFirst.map { "envelope.first_event_hash must be null when the chain has no events; got \($0)" },
-                    mfFirstClaim.map { "manifest.first_event_hash must be null when the chain has no events; got \($0)" },
-                ].compactMap { $0 }
-                record("first_event_hash", firstProblems.isEmpty,
-                       firstProblems.isEmpty ? "null (empty chain)"
-                                             : firstProblems.joined(separator: "; "))
-                record("entry_hash", envEntry == nil,
-                       envEntry.map { "envelope.entry_hash must be null when the chain has no events; got \($0)" }
-                           ?? "null (empty chain)")
+                // template or draft capsule with no recorded work yet) —
+                // but the capsule must not claim chain anchors it does not
+                // have: with zero events all three anchor claims MUST be
+                // null (or absent), fail-closed. In a plain capsule those
+                // anchors are the ONLY envelope-to-chain binding, so a
+                // verifier that treats an empty chain as "nothing to
+                // check" verifies an unbound capsule (spec/chain.md
+                // "Empty chains").
+                let emptyNote = "empty chain: no events to walk; envelope anchors checked to be null instead"
+                record("chain", true, emptyNote)
+                notes.append(emptyNote)
+                func isNullAnchor(_ v: JCSValue?) -> Bool { v == nil || v == .null }
+                let envFirst = lookupValue(parsed.envelope, ["first_event_hash"])
+                record("first_event_hash", isNullAnchor(envFirst),
+                       isNullAnchor(envFirst)
+                           ? "null (empty chain)"
+                           : "envelope.first_event_hash must be null when the chain has no events")
+                let envEntry = lookupValue(parsed.envelope, ["entry_hash"])
+                record("entry_hash", isNullAnchor(envEntry),
+                       isNullAnchor(envEntry)
+                           ? "null (empty chain)"
+                           : "envelope.entry_hash must be null when the chain has no events")
+                record("manifest_first_event_hash", isNullAnchor(mfFirstHashValue),
+                       isNullAnchor(mfFirstHashValue)
+                           ? "null (empty chain)"
+                           : "manifest.first_event_hash must be null when the chain has no events")
             } else {
+                // Plain-capsule checks: chain integrity (hash linkage plus
+                // the spec/chain.md per-event actor and kind rules) +
+                // envelope anchors. These MUST fail closed: an anchor that
+                // is missing or null over a non-empty chain fails the
+                // comparison like any other mismatch — in a plain capsule
+                // these anchors are the only envelope-to-chain binding.
+                let chainErrors = CapsuleReader.verifyChain(
+                    parsed.events,
+                    participants: CapsuleReader.participantActorIds(parsed.manifest)
+                )
+                record("chain", chainErrors.isEmpty,
+                       chainErrors.isEmpty
+                           ? "\(parsed.events.count) events"
+                           : chainErrors.joined(separator: "; "))
                 let firstEvHash = parsed.events.first.flatMap { lookupString($0, ["hash"]) }
+                let envFirst = lookupString(parsed.envelope, ["first_event_hash"])
+                record("first_event_hash",
+                       firstEvHash != nil && firstEvHash == envFirst,
+                       firstEvHash != nil && firstEvHash == envFirst
+                           ? ""
+                           : "envelope.first_event_hash mismatch: \(envFirst ?? "null") vs \(firstEvHash ?? "null")")
                 let lastEvHash = parsed.events.last.flatMap { lookupString($0, ["hash"]) }
-                let firstOk = firstEvHash != nil && firstEvHash == envFirst
-                record("first_event_hash", firstOk,
-                       firstOk ? "" :
-                       "envelope.first_event_hash mismatch: \(envFirst ?? "null") vs \(firstEvHash ?? "null")")
-                let entryOk = lastEvHash != nil && lastEvHash == envEntry
-                record("entry_hash", entryOk,
-                       entryOk ? "" :
-                       "envelope.entry_hash mismatch: \(envEntry ?? "null") vs \(lastEvHash ?? "null")")
+                let envEntry = lookupString(parsed.envelope, ["entry_hash"])
+                record("entry_hash",
+                       lastEvHash != nil && lastEvHash == envEntry,
+                       lastEvHash != nil && lastEvHash == envEntry
+                           ? ""
+                           : "envelope.entry_hash mismatch: \(envEntry ?? "null") vs \(lastEvHash ?? "null")")
+                var mfFirstIsString = false
+                if case .some(.string) = mfFirstHashValue { mfFirstIsString = true }
+                record("manifest_first_event_hash", mfFirstIsString,
+                       mfFirstIsString
+                           ? ""
+                           : "manifest.first_event_hash must not be null when the chain has events")
             }
-            // Encrypted-blob shape (mirrors verifier-rust). This branch runs
-            // whenever the capsule is NOT in encrypted mode — no blob, or a
-            // blob the signed cipher does not account for. The checks are
-            // keyed off blob PRESENCE, never off "encrypted mode" (cipher
-            // AND blob): that conjunction is false exactly when the two
-            // halves disagree — a smuggled content.enc on a cipher='none'
-            // capsule, or a declared cipher with no blob — which are
-            // precisely the capsules that must fail here.
+            // Encrypted-blob shape (mirrors verifier-rust). This runs for
+            // EVERY capsule that is not in encrypted mode — empty chain
+            // included — covering: no blob, or a blob the signed cipher
+            // does not account for. The checks are keyed off blob
+            // PRESENCE, never off "encrypted mode" (cipher AND blob): that
+            // conjunction is false exactly when the two halves disagree —
+            // a smuggled content.enc on a cipher='none' capsule, or a
+            // declared cipher with no blob — which are precisely the
+            // capsules that must fail here.
             let envCipher = lookupString(parsed.envelope, ["cipher"]) ?? ""
             var shapeProblems: [String] = []
             if let blob = parsed.files["content.enc"] {

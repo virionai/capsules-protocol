@@ -6,7 +6,7 @@ import json
 import re
 from typing import TypedDict
 
-from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256
+from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, loads_strict, sha256
 
 GENESIS_PREV_BYTES: bytes = b"\x00" * 32
 GENESIS_PREV_HEX: str = "0" * 64
@@ -33,6 +33,23 @@ HOST_ACTOR = "system:host"
 def is_valid_event_kind(kind: object) -> bool:
     """True when ``kind`` is one of the five values spec/chain.md allows."""
     return isinstance(kind, str) and kind in _EVENT_KIND_SET
+
+
+#: The normative ``untrusted_payload_fields`` path grammar from spec/chain.md
+#: "Untrusted content"::
+#:
+#:     path    = "payload" 1*( "." segment )
+#:     segment = 1*( ALPHA / DIGIT / "_" / "-" )
+#:
+#: A marking outside the grammar has no defined resolution -- a host cannot
+#: tell which payload member the author marked untrusted -- so writers refuse
+#: to emit it and verifiers reject it fail-closed.
+_UNTRUSTED_PAYLOAD_PATH = re.compile(r"^payload(\.[A-Za-z0-9_-]+)+$")
+
+
+def is_valid_untrusted_payload_path(path: object) -> bool:
+    """True when ``path`` is a well-formed untrusted-payload path."""
+    return isinstance(path, str) and _UNTRUSTED_PAYLOAD_PATH.match(path) is not None
 
 
 def participant_actor_ids(participants: object) -> set[str]:
@@ -129,7 +146,10 @@ def events_from_jsonl(data: bytes) -> list[dict]:
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            # Strict parse: the duplicate-member gate runs during parsing
+            # (spec/canonicalization.md "Objects") before the value can
+            # reach a hash comparison.
+            out.append(loads_strict(line))
         except json.JSONDecodeError as ex:
             raise ValueError(f"chain line {i + 1}: invalid JSON: {ex.msg}") from ex
     return out
@@ -181,6 +201,30 @@ def verify_chain(events: list[dict], *, participants: object = None) -> ChainRes
             )
         if e.get("seq") != i + 1:
             errors.append({"seq": seq, "message": f"seq {e.get('seq')} expected {i + 1}"})
+        # spec/chain.md "Untrusted content" -- when present, every marking
+        # must match the path grammar. An unparseable marking silently
+        # unmarks LLM-authored content for every downstream host.
+        if "untrusted_payload_fields" in e:
+            upf = e["untrusted_payload_fields"]
+            if not isinstance(upf, list):
+                errors.append(
+                    {
+                        "seq": seq,
+                        "message": "untrusted_payload_fields must be an array of payload paths",
+                    }
+                )
+            else:
+                for idx, path in enumerate(upf):
+                    if not is_valid_untrusted_payload_path(path):
+                        errors.append(
+                            {
+                                "seq": seq,
+                                "message": (
+                                    f"untrusted_payload_fields[{idx}] is not a valid "
+                                    f"payload path: {json.dumps(path)}"
+                                ),
+                            }
+                        )
         if not isinstance(e.get("prev_hash"), str) or len(e["prev_hash"]) != 64:
             errors.append({"seq": seq, "message": "prev_hash missing or wrong length"})
             continue

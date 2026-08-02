@@ -112,6 +112,17 @@ public final class CapsuleBuilder {
                     + "before appendEvent (only \"system:host\" may appear without one)"
             )
         }
+        // Writer obligation (spec/chain.md "Untrusted content"): a marking
+        // outside the path grammar has no defined resolution, so refuse it
+        // at the call site that introduced it rather than at some future
+        // reader.
+        for path in untrustedPayloadFields where !Chain.isValidUntrustedPayloadPath(path) {
+            throw CapsuleError.malformed(
+                "appendEvent: untrusted_payload_fields entry \(Chain.debugQuoted(path)) "
+                    + "is not a valid payload path (expected \"payload.<segment>\" "
+                    + "per spec/chain.md)"
+            )
+        }
         bareEvents.append(BareEvent(
             actor: actor, kind: kind, action: action, target: target,
             timestamp: timestamp ?? createdAt,

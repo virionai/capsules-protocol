@@ -14,6 +14,7 @@ from .chain import (
     events_to_jsonl,
     first_and_entry_hash,
     is_valid_event_kind,
+    is_valid_untrusted_payload_path,
     participant_actor_ids,
 )
 from .crypto import (
@@ -154,7 +155,23 @@ class CapsuleBuilder:
             "payload": payload,
         }
         if "untrusted_payload_fields" in event:
-            bare["untrusted_payload_fields"] = event["untrusted_payload_fields"]
+            # Writer obligation (spec/chain.md "Untrusted content"): a
+            # marking outside the path grammar has no defined resolution,
+            # so refuse it at the call site that introduced it rather than
+            # at some future reader.
+            upf = event["untrusted_payload_fields"]
+            if not isinstance(upf, list):
+                raise ValueError(
+                    "append_event: untrusted_payload_fields must be an array of payload paths"
+                )
+            for path in upf:
+                if not is_valid_untrusted_payload_path(path):
+                    raise ValueError(
+                        f"append_event: untrusted_payload_fields entry {json.dumps(path)} "
+                        'is not a valid payload path (expected "payload.<segment>" '
+                        "per spec/chain.md)"
+                    )
+            bare["untrusted_payload_fields"] = upf
         self.bare_events.append(bare)
         return self
 

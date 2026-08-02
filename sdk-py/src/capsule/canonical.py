@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from typing import Any
 
@@ -209,3 +210,28 @@ def bytes_to_hex(data: bytes | bytearray | memoryview) -> str:
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(f"bytes_to_hex: expected bytes-like, got {type(data).__name__}")
     return bytes(data).hex()
+
+
+def _reject_duplicate_pairs(pairs):
+    """object_pairs_hook that refuses duplicate member names (RFC 7493 2.3)."""
+    obj: dict = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"duplicate object member {json.dumps(key)}")
+        obj[key] = value
+    return obj
+
+
+def loads_strict(text: str | bytes):
+    """``json.loads`` with the duplicate-member gate.
+
+    spec/canonicalization.md "Objects": no object, at any depth, may have
+    two members with the same name. Every mainstream parser silently keeps
+    the last value, so the rule must be enforced during parsing — the
+    parsed tree cannot show the duplicate. Every capsule document parse in
+    this SDK goes through here (manifest, envelope, chain event lines,
+    decryption metadata), so a duplicate member never reaches a hash
+    comparison. Python's hook sees names AFTER escape processing, so
+    "a" and "\\u0061" collide as required.
+    """
+    return json.loads(text, object_pairs_hook=_reject_duplicate_pairs)

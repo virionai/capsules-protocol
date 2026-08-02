@@ -29,7 +29,14 @@ import pathlib
 import pytest
 
 from capsule import CapsuleReader, verify_capsule
-from capsule.canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256_hex
+from capsule.canonical import (
+    bytes_to_hex,
+    concat_bytes,
+    hex_to_bytes,
+    jcs,
+    loads_strict,
+    sha256_hex,
+)
 from capsule.crypto import ed25519_verify
 from capsule.envelope import envelope_canonical_payload, envelope_signing_input
 
@@ -49,7 +56,7 @@ IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
-IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate"}
+IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate", "duplicate_member"}
 
 # Per-lane mapping of the registry's normative open-stage reason
 # categories onto this SDK's error messages. Every reader error here is a
@@ -108,9 +115,18 @@ def _allowlist(doc: dict, base: pathlib.Path) -> list[str]:
 
 
 def _collection_params(path: pathlib.Path):
+    """Load an outcome collection, failing LOUDLY on absence or emptiness.
+
+    Returning ``[]`` for a missing registry file (the old behavior) makes
+    pytest silently collect zero tests — a deleted or renamed collection
+    would pass this lane forever. Absence and emptiness are both hard
+    errors (F40): they surface as a collection error for the whole module.
+    """
     if not path.exists():
-        return []
+        raise FileNotFoundError(f"vector registry missing: {path}")
     doc = _load(path)
+    if not doc["vectors"]:
+        raise ValueError(f"vector registry is empty: {path}")
     return [pytest.param(doc, v, path.parent, id=v["name"]) for v in doc["vectors"]]
 
 
@@ -272,8 +288,10 @@ def test_malformed_shape_registry_outcomes(doc: dict, vector: dict, base: pathli
 
 def _ijson_params():
     if not IJSON_ACCEPTANCE.exists():
-        return []
+        raise FileNotFoundError(f"vector registry missing: {IJSON_ACCEPTANCE}")
     doc = _load(IJSON_ACCEPTANCE)
+    if not doc["vectors"]:
+        raise ValueError(f"vector registry is empty: {IJSON_ACCEPTANCE}")
     return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
 
 
@@ -286,7 +304,10 @@ def test_ijson_acceptance_boundary(vector: dict):
     """
     name = vector["name"]
     try:
-        parsed = json.loads(vector["input_json"])
+        # The SDK's strict document parse: json.loads plus the
+        # duplicate-member gate. Rejection here IS the parse-time refusal
+        # the vector contract allows.
+        parsed = loads_strict(vector["input_json"])
     except ValueError:
         assert vector["expect"] == "reject", f"{name}: an accept vector must parse"
         return
@@ -412,8 +433,10 @@ def test_signing_input_pins():
 
 def _key_validation_params():
     if not KEY_VALIDATION.exists():
-        return []
+        raise FileNotFoundError(f"vector registry missing: {KEY_VALIDATION}")
     doc = json.loads(KEY_VALIDATION.read_text())
+    if not doc["vectors"]:
+        raise ValueError(f"vector registry is empty: {KEY_VALIDATION}")
     return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
 
 
@@ -433,6 +456,8 @@ def test_ed25519_key_validation_registry(vector: dict):
 
 def _key_order_params():
     doc = json.loads(KEY_ORDER.read_text())
+    if not doc["vectors"]:
+        raise ValueError(f"vector registry is empty: {KEY_ORDER}")
     return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
 
 

@@ -8,6 +8,8 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - malformed-shape/vectors.json    (manifest/chain document shape rules)
+//   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //   - signer-set/vectors.json         (signer-set binding outcomes)
 //   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //   - chain-rules/vectors.json        (per-event actor + kind field rules)
@@ -15,6 +17,9 @@
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//
+// signing-input.json is consumed by SigningInputVectorTest, and
+// jcs-numbers.json / ed25519-key-validation.json by their own test files.
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -128,16 +133,38 @@ class SpecRegistryTest {
     }
 
     /**
+     * Unknown members in the hashed documents MUST be preserved and hashed
+     * (spec/manifest.md "Unknown members", spec/envelope.md, spec/chain.md).
+     * The positive vector carries x- extension members in manifest.json,
+     * provenance/envelope.json, and a chain event, all covered by the
+     * seal; the tampered variants mutate an unknown member post-seal and
+     * must fail in the pinned area.
+     */
+    @Test
+    fun unknownFieldsRegistryOutcomes() {
+        val file = File(vectorsDir(), "unknown-fields/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "unknown-fields registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
+    /**
      * Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
      * chains"). A chain with zero events is legal — the weakest honest
-     * shape — and then manifest.first_event_hash,
-     * envelope.first_event_hash and envelope.entry_hash MUST all be null
-     * (claiming an anchor over zero events fails closed; those anchors
-     * are the only envelope-to-chain binding in a plain capsule). The
-     * verifier must REPORT that no events were walked (notes pin). And an
-     * event whose stored bytes omit the optional untrusted_payload_fields
-     * member must verify: the hash preimage is the stored line, never a
-     * typed-struct round-trip.
+     * shape — and then manifest.first_event_hash, envelope.first_event_hash
+     * and envelope.entry_hash MUST all be null (claiming an anchor over
+     * zero events fails closed). The verifier must REPORT that no events
+     * were walked (notes pin). An event whose stored bytes omit the
+     * optional untrusted_payload_fields member must verify: the hash
+     * preimage is the stored line, never a typed-struct round-trip.
      */
     @Test
     fun chainBindingRegistryOutcomes() {
@@ -212,6 +239,55 @@ class SpecRegistryTest {
             }
         }
         return skip
+    }
+
+    /**
+     * Manifest / chain document shape rules (spec/manifest.md field rules,
+     * spec/chain.md). Open-stage vectors must be refused by the reader for
+     * the named reason; verify-stage ones open but fail the pinned areas.
+     * manifest-hostile-number is pinned by name: Gson parses 1e999 to a
+     * non-finite double and JCS.assertAcceptable refuses it at the parse
+     * gate, which spec/canonicalization.md blesses ("rejection may happen
+     * at JSON parse time or at the canonicalization gate; both are
+     * conforming") — so the canonicalization-gate wording pinned in
+     * error_includes is asserted as a parse refusal here instead.
+     */
+    @Test
+    fun malformedShapeRegistryOutcomes() {
+        val file = File(vectorsDir(), "malformed-shape/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "malformed-shape registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val expected = v.getAsJsonObject("expected")
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            if (name in SHAPE_PARSE_REJECTED_VECTORS) {
+                val result = verify(bytes, allowlist)
+                assertFalse(result.ok, "$name: fixture must not verify")
+                val parse = result.checks.firstOrNull { it.name == "parse" }
+                assertEquals(false, parse?.ok, "$name: reader must refuse this container")
+                continue
+            }
+            val declaredOpen = expected.has("stage") && expected.get("stage").asString == "open"
+            if (declaredOpen) {
+                val result = verify(bytes, allowlist)
+                assertFalse(result.ok, "$name: open-stage fixture must not verify")
+                val parse = result.checks.firstOrNull { it.name == "parse" }
+                assertEquals(false, parse?.ok, "$name: reader must refuse this container; got ${result.checks}")
+                val reason = expected.get("reason").asString
+                val needles = openReasonNeedles(reason)
+                assertTrue(
+                    needles.any { parse!!.detail.contains(it) },
+                    "$name: expected reason $reason (any of $needles); got ${parse!!.detail}",
+                )
+                continue
+            }
+            assertVerifyOutcome(name, expected, verify(bytes, allowlist))
+        }
     }
 
     @Test
@@ -289,7 +365,7 @@ class SpecRegistryTest {
      */
     @Test
     fun ijsonAcceptanceRegistry() {
-        val reasons = setOf("integer_out_of_range", "unpaired_surrogate")
+        val reasons = setOf("integer_out_of_range", "unpaired_surrogate", "duplicate_member")
         val file = File(vectorsDir(), "ijson-acceptance.json")
         val doc = JsonParser.parseString(file.readText()).asJsonObject
         val vectors = doc.getAsJsonArray("vectors")
@@ -420,6 +496,10 @@ class SpecRegistryTest {
         "missing_required_file" ->
             listOf("missing manifest.json", "missing provenance/envelope.json")
         "invalid_json" -> listOf("failed to parse manifest.json")
+        // Every manifest shape error from CapsuleReader's validation is
+        // prefixed with the offending field path (or names manifest.json
+        // itself), mirroring the JS reference's validateManifestShape.
+        "invalid_manifest_shape" -> listOf("manifest.")
         "duplicate_entry" -> listOf("duplicate entry")
         "unsafe_path" -> listOf("zip path traversal", "zip path: absolute")
         "unsupported_compression" -> listOf("only STORED supported")
@@ -479,6 +559,13 @@ class SpecRegistryTest {
          * of these fails here.
          */
         private val OPEN_REJECTED_VERIFY_VECTORS = setOf("missing-chain", "invalid-chain-json")
+
+        /**
+         * Verify-stage vectors in malformed-shape that THIS lane refuses at
+         * the parse gate (see malformedShapeRegistryOutcomes). Pinned by
+         * name so a lane that starts ACCEPTING the value fails here.
+         */
+        private val SHAPE_PARSE_REJECTED_VECTORS = setOf("manifest-hostile-number")
 
         /** Walk up from the gradle module dir until we find spec/vectors. */
         private fun repoRoot(): File {

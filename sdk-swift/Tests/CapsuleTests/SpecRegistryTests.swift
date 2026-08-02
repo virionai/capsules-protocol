@@ -8,10 +8,17 @@
 //
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+//   - malformed-shape/vectors.json    (manifest/chain document shape rules)
+//   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
 //   - signer-set/vectors.json         (signer-set binding outcomes)
+//   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //   - chain-rules/vectors.json        (per-event actor + kind field rules)
+//   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//
+// signing-input.json is consumed by SigningInputVectorTests, and
+// jcs-numbers.json / ed25519-key-validation.json by their own test files.
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -64,6 +71,11 @@ final class SpecRegistryTests: XCTestCase {
             return ["missing manifest.json", "missing provenance/envelope.json"]
         case "invalid_json":
             return ["failed to parse manifest.json"]
+        case "invalid_manifest_shape":
+            // Every manifest shape error from CapsuleReader's validation is
+            // prefixed with the offending field path (or names manifest.json
+            // itself), mirroring the JS reference's validateManifestShape.
+            return ["manifest."]
         case "duplicate_entry":
             return ["duplicate entry"]
         case "unsafe_path":
@@ -252,31 +264,6 @@ final class SpecRegistryTests: XCTestCase {
         }
     }
 
-    // MARK: - chain-binding/vectors.json
-
-    /// Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
-    /// chains"). A chain with zero events is legal — the weakest honest
-    /// shape — and then manifest.first_event_hash,
-    /// envelope.first_event_hash and envelope.entry_hash MUST all be null
-    /// (claiming an anchor over zero events fails closed; those anchors
-    /// are the only envelope-to-chain binding in a plain capsule). The
-    /// verifier must REPORT that no events were walked (notes pin).
-    func testChainBindingRegistryOutcomes() throws {
-        let path = Self.vectorsDir.appendingPathComponent("chain-binding/vectors.json")
-        let doc = try loadJSON(path)
-        let base = path.deletingLastPathComponent()
-        let keys = try allowlist(doc, base: base)
-        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
-        XCTAssertFalse(vectors.isEmpty, "chain-binding registry is empty")
-        for vector in vectors {
-            let name = vector["name"] as? String ?? "<unnamed>"
-            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
-            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
-            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
-            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
-        }
-    }
-
     // MARK: - semantic-binding/vectors.json
 
     /// Per-lane mapping of the registry's normative verify-stage reason
@@ -393,6 +380,113 @@ final class SpecRegistryTests: XCTestCase {
         }
     }
 
+    // MARK: - malformed-shape/vectors.json
+
+    /// Verify-stage vectors in malformed-shape that THIS lane legitimately
+    /// refuses at parse: Foundation's JSON parser rejects the hostile
+    /// number literal (1e999) before a manifest hash can be recomputed,
+    /// which spec/canonicalization.md blesses explicitly ("rejection may
+    /// happen at JSON parse time or at the canonicalization gate; both are
+    /// conforming"). Pinned by name so a lane that starts ACCEPTING the
+    /// value fails here.
+    private static let shapeParseRejectedVectors: Set<String> = [
+        "manifest-hostile-number",
+    ]
+
+    /// Manifest / chain document shape rules (spec/manifest.md field rules,
+    /// spec/chain.md). Open-stage vectors must be refused by the reader for
+    /// the named reason; verify-stage ones open but fail the pinned areas.
+    func testMalformedShapeRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("malformed-shape/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "malformed-shape registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+
+            if Self.shapeParseRejectedVectors.contains(name) {
+                var thrown: Error?
+                do { _ = try CapsuleReader.parse(bytes) } catch { thrown = error }
+                XCTAssertNotNil(thrown, "\(name): reader must refuse this container")
+                XCTAssertFalse(CapsuleVerifier.verify(bytes, allowlist: keys).ok,
+                               "\(name): fixture must not verify")
+                continue
+            }
+            if (expected["stage"] as? String) == "open" {
+                let reason = try XCTUnwrap(expected["reason"] as? String, "\(name): reason")
+                var thrown: Error?
+                do { _ = try CapsuleReader.parse(bytes) } catch { thrown = error }
+                let err = try XCTUnwrap(thrown, "\(name): reader must refuse this container")
+                let needles = openReasonNeedles(reason)
+                XCTAssertTrue(
+                    needles.contains(where: { "\(err)".contains($0) }),
+                    "\(name): expected reason \(reason) (any of \(needles)); got \(err)"
+                )
+                XCTAssertFalse(CapsuleVerifier.verify(bytes, allowlist: keys).ok,
+                               "\(name): open-stage fixture must not verify")
+                continue
+            }
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - chain-binding/vectors.json
+
+    /// Empty-chain anchor rule + stored-line hashing (spec/chain.md "Empty
+    /// chains"). A chain with zero events is legal — the weakest honest
+    /// shape — and then manifest.first_event_hash, envelope.first_event_hash
+    /// and envelope.entry_hash MUST all be null (claiming an anchor over
+    /// zero events fails closed; those anchors are the only envelope-to-
+    /// chain binding in a plain capsule). The verifier must REPORT that no
+    /// events were walked (notes pin). And an event whose stored bytes omit
+    /// the optional untrusted_payload_fields member must verify: the hash
+    /// preimage is the stored line, never a typed-struct round-trip.
+    func testChainBindingRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("chain-binding/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "chain-binding registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - unknown-fields/vectors.json
+
+    /// Unknown members in the hashed documents MUST be preserved and hashed
+    /// (spec/manifest.md "Unknown members", spec/envelope.md, spec/chain.md).
+    /// The positive vector carries x- extension members in manifest.json,
+    /// provenance/envelope.json, and a chain event, all covered by the seal;
+    /// it must verify ok=true. The tampered variants mutate an unknown
+    /// member post-seal and must fail in the pinned area — proving the
+    /// members are inside the integrity envelope, not decoration.
+    func testUnknownFieldsRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("unknown-fields/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "unknown-fields registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
     // MARK: - jcs-key-order.json
 
     /// RFC 8785 §3.2.3: object members sort on their UTF-16 code-unit
@@ -434,7 +528,7 @@ final class SpecRegistryTests: XCTestCase {
     // MARK: - ijson-acceptance.json
 
     /// Normative reject-reason vocabulary from `ijson-acceptance.json`.
-    private static let ijsonReasons: Set<String> = ["integer_out_of_range", "unpaired_surrogate"]
+    private static let ijsonReasons: Set<String> = ["integer_out_of_range", "unpaired_surrogate", "duplicate_member"]
 
     /// spec/canonicalization.md: the acceptance boundary is identical in
     /// every lane. A reject vector is satisfied by refusal at parse time OR

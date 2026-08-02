@@ -69,19 +69,19 @@ object CapsuleVerifier {
         rec("zip_parse", true, "${parsed.files.size} files")
         rec("json_parse", true)
 
+        // capsule_id derivation. A null (or absent) manifest.first_event_hash
+        // is the legal zero-event shape: capsule_id then derives with 32
+        // zero bytes standing in for first_event_hash_raw (spec/chain.md
+        // "Empty chains", spec/manifest.md "Capsule identity"). Whether the
+        // chain actually HAS zero events is the anchor check's job below.
         val pubHex = CapsuleReader.lookupString(parsed.manifest, listOf("originator", "public_key"))
-        val firstHash = CapsuleReader.lookupString(parsed.manifest, listOf("first_event_hash"))
+        val mfFirstHashValue = (parsed.manifest as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "first_event_hash" }?.second
         val mfId = CapsuleReader.lookupString(parsed.manifest, listOf("id"))
         val envId = CapsuleReader.lookupString(parsed.envelope, listOf("capsule_id"))
         if (pubHex != null && mfId != null && envId != null) {
-            // A null first_event_hash (zero-event capsule, spec/chain.md
-            // "Empty chains") derives with 32 zero bytes standing in
-            // (spec/manifest.md "id"); whether null is LEGAL here is
-            // decided by the anchor checks below, fail-closed.
-            val expected = Manifest.computeCapsuleId(
-                CapsuleCrypto.hexToBytes(pubHex),
-                firstHash ?: "0".repeat(64),
-            )
+            val firstHash = (mfFirstHashValue as? JCSValue.Str)?.v ?: "0".repeat(64)
+            val expected = Manifest.computeCapsuleId(CapsuleCrypto.hexToBytes(pubHex), firstHash)
             rec("capsule_id", expected == mfId && expected == envId, expected.take(12) + "…")
         } else rec("capsule_id", false, "missing fields")
 
@@ -91,19 +91,28 @@ object CapsuleVerifier {
         // pin them to the hash of chain event 1, so they must agree —
         // otherwise capsule_id names a chain this capsule does not carry.
         // null==null is the legal empty-chain shape, enforced against the
-        // event count below.
+        // event count below (manifest_first_event_hash), where a non-string
+        // non-null value also fails closed.
+        val mfFirstClaim = (mfFirstHashValue as? JCSValue.Str)?.v
         val envFirstClaim = CapsuleReader.lookupString(parsed.envelope, listOf("first_event_hash"))
         rec(
             "first_event_hash_binding",
-            firstHash == envFirstClaim,
-            if (firstHash == envFirstClaim) (firstHash ?: "null")
-            else "manifest.first_event_hash mismatch: ${firstHash ?: "null"} " +
+            mfFirstClaim == envFirstClaim,
+            if (mfFirstClaim == envFirstClaim) (mfFirstClaim ?: "null")
+            else "manifest.first_event_hash mismatch: ${mfFirstClaim ?: "null"} " +
                 "vs envelope.first_event_hash ${envFirstClaim ?: "null"}",
         )
 
-        val mh = Manifest.hash(parsed.manifest)
-        val storedMh = CapsuleReader.lookupString(parsed.envelope, listOf("manifest_hash"))
-        rec("manifest_hash", mh == storedMh, mh.take(12) + "…")
+        // Unknown members are hashed too (spec/manifest.md), so a hostile
+        // value in one must surface as a recompute failure — never an
+        // uncaught exception, and never a report that reads as tampering.
+        try {
+            val mh = Manifest.hash(parsed.manifest)
+            val storedMh = CapsuleReader.lookupString(parsed.envelope, listOf("manifest_hash"))
+            rec("manifest_hash", mh == storedMh, mh.take(12) + "…")
+        } catch (e: IllegalArgumentException) {
+            rec("manifest_hash", false, "manifest hash recompute failed: ${e.message}")
+        }
 
         // `content.enc` drops out of the index only when the SIGNED envelope
         // declares a cipher (it is bound instead by
@@ -163,7 +172,8 @@ object CapsuleVerifier {
         // the two halves disagree, which are the capsules that must fail
         // here. Without this check a cipher-declaring capsule with no blob
         // falls through to the plain path and verifies a chain it claims
-        // to have encrypted — fail-open.
+        // to have encrypted — fail-open. Runs for EVERY capsule, empty
+        // chain included.
         val rawCipher = CapsuleReader.lookupString(parsed.envelope, listOf("cipher"))
         val storedBlobHash =
             CapsuleReader.lookupString(parsed.envelope, listOf("encrypted_blob_hash"))
@@ -198,75 +208,80 @@ object CapsuleVerifier {
             if (blobProblems.isEmpty()) (rawCipher ?: "none") else blobProblems.joinToString("; "),
         )
 
-        // Chain integrity: hash linkage plus the spec/chain.md per-event
-        // actor (step 6, conditional on declared participants) and kind
-        // rules.
-        val chainErrors = verifyChain(
-            parsed.events,
-            CapsuleReader.participantActorIds(parsed.manifest),
-        )
-        rec(
-            "chain",
-            chainErrors.isEmpty(),
-            if (chainErrors.isEmpty()) "${parsed.events.size} events"
-            else chainErrors.joinToString("; "),
-        )
-
-        // Envelope-to-chain anchors. These MUST fail closed: an anchor
-        // that is missing or null over a non-empty chain is a failure,
-        // never a silently skipped comparison — in a plain capsule these
-        // anchors are the only envelope-to-chain binding.
-        val envFirst = CapsuleReader.lookupString(parsed.envelope, listOf("first_event_hash"))
-        val envEntry = CapsuleReader.lookupString(parsed.envelope, listOf("entry_hash"))
         if (parsed.events.isEmpty()) {
             // Empty chain is LEGAL — the weakest honest shape (a template
-            // or draft capsule, spec/chain.md "Empty chains") — and then
-            // the capsule must not claim chain anchors it does not have:
-            // manifest.first_event_hash, envelope.first_event_hash and
-            // envelope.entry_hash must all be null. Reported honestly via
-            // the note.
-            notes += "empty chain: no events to walk; envelope anchors checked to be null instead"
-            val firstProblems = mutableListOf<String>()
-            if (envFirst != null) {
-                firstProblems +=
-                    "envelope.first_event_hash must be null when the chain has no events; got $envFirst"
-            }
-            if (firstHash != null) {
-                firstProblems +=
-                    "manifest.first_event_hash must be null when the chain has no events; got $firstHash"
-            }
+            // or draft capsule with no recorded work yet) — but the capsule
+            // must not claim chain anchors it does not have: with zero
+            // events all three anchor claims MUST be null (or absent),
+            // fail-closed. In a plain capsule those anchors are the ONLY
+            // envelope-to-chain binding, so a verifier that treats an empty
+            // chain as "nothing to check" verifies an unbound capsule
+            // (spec/chain.md "Empty chains").
+            val emptyNote = "empty chain: no events to walk; envelope anchors checked to be null instead"
+            rec("chain", true, emptyNote)
+            notes += emptyNote
+            fun isNullAnchor(v: JCSValue?): Boolean = v == null || v == JCSValue.Null
+            val envPairs = (parsed.envelope as? JCSValue.Obj)?.pairs
+            val envFirstV = envPairs?.firstOrNull { it.first == "first_event_hash" }?.second
             rec(
-                "first_event_hash",
-                firstProblems.isEmpty(),
-                if (firstProblems.isEmpty()) "null (empty chain)"
-                else firstProblems.joinToString("; "),
+                "first_event_hash", isNullAnchor(envFirstV),
+                if (isNullAnchor(envFirstV)) "null (empty chain)"
+                else "envelope.first_event_hash must be null when the chain has no events",
+            )
+            val envEntryV = envPairs?.firstOrNull { it.first == "entry_hash" }?.second
+            rec(
+                "entry_hash", isNullAnchor(envEntryV),
+                if (isNullAnchor(envEntryV)) "null (empty chain)"
+                else "envelope.entry_hash must be null when the chain has no events",
             )
             rec(
-                "entry_hash",
-                envEntry == null,
-                if (envEntry == null) "null (empty chain)"
-                else "envelope.entry_hash must be null when the chain has no events; got $envEntry",
+                "manifest_first_event_hash", isNullAnchor(mfFirstHashValue),
+                if (isNullAnchor(mfFirstHashValue)) "null (empty chain)"
+                else "manifest.first_event_hash must be null when the chain has no events",
             )
         } else {
-            val firstEvHash = parsed.events.first().let {
+            // Chain integrity: hash linkage plus the spec/chain.md per-event
+            // actor (step 6, conditional on declared participants) and kind
+            // rules. A null (or missing) anchor over a non-empty chain fails
+            // the comparison like any other mismatch — in a plain capsule
+            // these anchors are the only envelope-to-chain binding.
+            val chainErrors = verifyChain(
+                parsed.events,
+                CapsuleReader.participantActorIds(parsed.manifest),
+            )
+            rec(
+                "chain",
+                chainErrors.isEmpty(),
+                if (chainErrors.isEmpty()) "${parsed.events.size} events"
+                else chainErrors.joinToString("; "),
+            )
+
+            val firstEvHash = parsed.events.firstOrNull()?.let {
                 CapsuleReader.lookupString(it, listOf("hash"))
             }
-            val lastEvHash = parsed.events.last().let {
-                CapsuleReader.lookupString(it, listOf("hash"))
-            }
-            val firstOk = firstEvHash != null && firstEvHash == envFirst
+            val envFirst = CapsuleReader.lookupString(parsed.envelope, listOf("first_event_hash"))
             rec(
                 "first_event_hash",
-                firstOk,
-                if (firstOk) ""
+                firstEvHash != null && firstEvHash == envFirst,
+                if (firstEvHash != null && firstEvHash == envFirst) ""
                 else "envelope.first_event_hash mismatch: ${envFirst ?: "null"} vs ${firstEvHash ?: "null"}",
             )
-            val entryOk = lastEvHash != null && lastEvHash == envEntry
+
+            val lastEvHash = parsed.events.lastOrNull()?.let {
+                CapsuleReader.lookupString(it, listOf("hash"))
+            }
+            val envEntry = CapsuleReader.lookupString(parsed.envelope, listOf("entry_hash"))
             rec(
                 "entry_hash",
-                entryOk,
-                if (entryOk) ""
+                lastEvHash != null && lastEvHash == envEntry,
+                if (lastEvHash != null && lastEvHash == envEntry) ""
                 else "envelope.entry_hash mismatch: ${envEntry ?: "null"} vs ${lastEvHash ?: "null"}",
+            )
+            val mfFirstIsString = mfFirstHashValue is JCSValue.Str
+            rec(
+                "manifest_first_event_hash", mfFirstIsString,
+                if (mfFirstIsString) ""
+                else "manifest.first_event_hash must not be null when the chain has events",
             )
         }
 
@@ -536,6 +551,40 @@ object CapsuleVerifier {
             if (!Chain.isValidEventKind(kind)) {
                 errors += "seq $seq: kind ${Chain.debugQuoted(kind)} is not one of " +
                     Chain.EVENT_KINDS.joinToString(", ")
+            }
+            // spec/chain.md verification step 5 — `seq` is strictly
+            // monotonic from 1. The stored value must equal the event's
+            // 1-based position; trusting the stored seq (or merely
+            // counting events) accepts a renumbered chain.
+            val seqValue = obj.pairs.firstOrNull { it.first == "seq" }?.second
+            val storedSeq = (seqValue as? JCSValue.Integer)?.v
+            if (storedSeq != seq.toLong()) {
+                val rendered = when (seqValue) {
+                    is JCSValue.Integer -> seqValue.v.toString()
+                    is JCSValue.Str -> Chain.debugQuoted(seqValue.v)
+                    null -> "undefined"
+                    else -> "non-integer"
+                }
+                errors += "seq $seq: seq $rendered expected $seq"
+            }
+            // spec/chain.md "Untrusted content" — when present, every
+            // marking must match the path grammar. An unparseable marking
+            // silently unmarks LLM-authored content for every host.
+            val upfValue = obj.pairs.firstOrNull { it.first == "untrusted_payload_fields" }?.second
+            if (upfValue != null) {
+                val items = (upfValue as? JCSValue.Arr)?.items
+                if (items == null) {
+                    errors += "seq $seq: untrusted_payload_fields must be an array of payload paths"
+                } else {
+                    items.forEachIndexed { idx, item ->
+                        val p = (item as? JCSValue.Str)?.v
+                        if (p == null || !Chain.isValidUntrustedPayloadPath(p)) {
+                            val rendered2 = if (p != null) Chain.debugQuoted(p) else "non-string"
+                            errors += "seq $seq: untrusted_payload_fields[$idx] is not a " +
+                                "valid payload path: $rendered2"
+                        }
+                    }
+                }
             }
 
             var stored: String? = null

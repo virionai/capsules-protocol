@@ -1,6 +1,6 @@
 // Event chain: hashing with raw bytes, no hex strings as inputs.
 
-import { bytesToHex, concatBytes, hexToBytes, jcs, sha256 } from "./canonical.js";
+import { bytesToHex, concatBytes, hexToBytes, jcs, parseJsonStrict, sha256 } from "./canonical.js";
 
 const GENESIS_PREV = Buffer.alloc(32, 0);
 
@@ -29,6 +29,24 @@ export const HOST_ACTOR = "system:host";
 /** True when `kind` is one of the five values spec/chain.md allows. */
 export function isValidEventKind(kind) {
   return EVENT_KIND_SET.has(kind);
+}
+
+/**
+ * The normative `untrusted_payload_fields` path grammar from spec/chain.md
+ * "Untrusted content":
+ *
+ *   path    = "payload" 1*( "." segment )
+ *   segment = 1*( ALPHA / DIGIT / "_" / "-" )
+ *
+ * A marking outside the grammar has no defined resolution — a host cannot
+ * tell which payload member the author marked untrusted — so writers refuse
+ * to emit it and verifiers reject it fail-closed.
+ */
+const UNTRUSTED_PAYLOAD_PATH = /^payload(\.[A-Za-z0-9_-]+)+$/;
+
+/** True when `path` is a well-formed untrusted-payload path. */
+export function isValidUntrustedPayloadPath(path) {
+  return typeof path === "string" && UNTRUSTED_PAYLOAD_PATH.test(path);
 }
 
 /**
@@ -109,7 +127,10 @@ export function eventsFromJsonl(bytes) {
   const lines = text.split("\n").filter((l) => l.length > 0);
   return lines.map((line, i) => {
     try {
-      return JSON.parse(line);
+      // Strict parse: the duplicate-member gate runs over the raw line
+      // (spec/canonicalization.md "Objects") before the value can reach
+      // a hash comparison.
+      return parseJsonStrict(line, "event");
     } catch (err) {
       throw new Error(`chain line ${i + 1}: invalid JSON: ${err.message}`);
     }
@@ -154,6 +175,23 @@ export function verifyChain(events, options = {}) {
     }
     if (e.seq !== i + 1) {
       errors.push({ seq, message: `seq ${e.seq} expected ${i + 1}` });
+    }
+    // spec/chain.md "Untrusted content" — when present, every marking must
+    // match the path grammar. An unparseable marking silently unmarks
+    // LLM-authored content for every downstream host.
+    if (e.untrusted_payload_fields !== undefined) {
+      if (!Array.isArray(e.untrusted_payload_fields)) {
+        errors.push({ seq, message: "untrusted_payload_fields must be an array of payload paths" });
+      } else {
+        e.untrusted_payload_fields.forEach((p, idx) => {
+          if (!isValidUntrustedPayloadPath(p)) {
+            errors.push({
+              seq,
+              message: `untrusted_payload_fields[${idx}] is not a valid payload path: ${JSON.stringify(p)}`,
+            });
+          }
+        });
+      }
     }
     if (typeof e.prev_hash !== "string" || e.prev_hash.length !== 64) {
       errors.push({ seq, message: "prev_hash missing or wrong length" });

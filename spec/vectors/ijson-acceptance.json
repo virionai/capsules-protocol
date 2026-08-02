@@ -91,6 +91,27 @@
       "input_json": "{\"payload\":{\"summary\":\"ok \\ud83d\"}}",
       "expect": "reject",
       "reason": "unpaired_surrogate"
+    },
+    {
+      "name": "duplicate-member-basic",
+      "input_json": "{\"a\":1,\"a\":2}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "RFC 7493 2.3: objects must not have members with duplicate names. Every mainstream parser silently keeps the last value, so two different byte sequences share one canonical form — a smuggling primitive. Refusal at parse time or at the canonicalization gate both conform."
+    },
+    {
+      "name": "duplicate-member-nested",
+      "input_json": "{\"o\":{\"k\":1,\"k\":2}}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "The rule applies at every depth, not just the top-level object."
+    },
+    {
+      "name": "duplicate-member-escaped-name",
+      "input_json": "{\"a\":1,\"\\u0061\":2}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "Names compare AFTER escape processing: \\u0061 is the same member name as a. A text-level duplicate detector that compares raw escape sequences misses this pair."
     }
   ]
 }

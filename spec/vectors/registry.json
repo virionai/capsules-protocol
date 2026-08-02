@@ -1,0 +1,203 @@
+{
+  "meta": {
+    "kind": "vector-registry",
+    "spec_version": "0.6",
+    "description": "Machine-readable manifest of every conformance vector collection under spec/vectors/ and the SET OF LANES REQUIRED TO CONSUME each one. This file exists to close a meta-pattern: registry consumption used to be opt-in per lane, by hardcoded filename, so a new collection was invisible to four of the five lanes by default — which is exactly how the malformed-layout vectors shipped unconsumed by Swift and Kotlin. tools/check-vector-registry.mjs (a required conformance target) fails when a vector file exists on disk but is not listed here, when a listed file is missing, when a collection is empty, when a collection's reason/failing vocabulary drifts from the declaration here, or when a required lane's declared consumer file does not reference the collection. Lanes that legitimately do not consume a collection carry an explicit exempt reason — silent omission is not expressible.",
+    "checker": "tools/check-vector-registry.mjs",
+    "no_warranty": "Conformance metadata only; not production templates or advice."
+  },
+  "lanes": {
+    "js": "Reference lane. tools/check-spec-vectors.mjs walks spec/vectors/ and fails closed on unrecognized or empty files (mode 'walker'); dedicated sdk-js tests are the witness where they exist.",
+    "python": "sdk-py pytest suite (PYTHONPATH=src python3 -m pytest).",
+    "rust": "verifier-rust cargo test workspace.",
+    "swift": "sdk-swift XCTest suite (requires DEVELOPER_DIR pointing at full Xcode).",
+    "kotlin": "sdk-kotlin JUnit suite (./gradlew :core:test; JVM-only, runs in CI)."
+  },
+  "collections": {
+    "chain-binding/vectors.json": {
+      "kind": "outcome-collection",
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "chain-rules/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "ed25519-key-validation.json": {
+      "kind": "ed25519-verify",
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/Ed25519KeyValidationTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/Ed25519KeyValidationVectorTest.kt" }
+      }
+    },
+    "identity-attestation/vectors.json": {
+      "kind": "identity-attestation",
+      "lanes": {
+        "js": { "consumer": "sdk-js/test/federation.test.js" },
+        "python": { "exempt": "sdk-py has no federation/attestation layer (spec/federation.md is implemented only by sdk-js in v0.6); when the lane grows one, replace this exemption with a consumer" },
+        "rust": { "exempt": "verifier-rust has no federation/attestation layer; when the lane grows one, replace this exemption with a consumer" },
+        "swift": { "exempt": "sdk-swift has no federation/attestation layer; when the lane grows one, replace this exemption with a consumer" },
+        "kotlin": { "exempt": "sdk-kotlin has no federation/attestation layer; when the lane grows one, replace this exemption with a consumer" }
+      }
+    },
+    "ijson-acceptance.json": {
+      "kind": "ijson-acceptance",
+      "reject_reasons": ["duplicate_member", "integer_out_of_range", "unpaired_surrogate"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "jcs-key-order.json": {
+      "kind": "jcs-key-order",
+      "lanes": {
+        "js": { "consumer": "sdk-js/test/jcs-key-order.test.js" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "jcs-numbers.json": {
+      "kind": "jcs-number-set",
+      "lanes": {
+        "js": { "consumer": "sdk-js/test/jcs-numbers.test.js" },
+        "python": { "consumer": "sdk-py/tests/test_canonical.py" },
+        "rust": { "consumer": "verifier-rust/crates/capsule-verify/src/jcs.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/JCSNumbersVectorTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/JcsNumbersVectorTest.kt" }
+      }
+    },
+    "malformed-layout/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain", "content_index"],
+      "open_reasons": [
+        "directory_marker_shape",
+        "duplicate_entry",
+        "invalid_json",
+        "local_central_name_mismatch",
+        "missing_required_file",
+        "symlink_entry",
+        "unsafe_path",
+        "unsupported_compression"
+      ],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "malformed-shape/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain", "content_index", "envelope"],
+      "open_reasons": ["invalid_manifest_shape"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "plain-basic.json": {
+      "kind": "embedded-capsule",
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "via": "signing-input.json" },
+        "rust": { "via": "signing-input.json" },
+        "swift": { "via": "signing-input.json" },
+        "kotlin": { "via": "signing-input.json" }
+      }
+    },
+    "semantic-binding/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain", "content_index"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      },
+      "notes": [
+        "The walker additionally enforces the collection's reason categories and decrypts the decryptable_with fixtures; sdk-js/test/semantic-binding.test.js re-derives the same attacks programmatically. Vectors tagged \"requires\": [\"encryption\"] are meaningful only to lanes with an X25519/ChaCha20 path — sdk-kotlin core (plain-only L2) skips them per the collection's own notes."
+      ]
+    },
+    "signer-set/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["envelope", "originator_binding", "signer_set"],
+      "lanes": {
+        "js": { "consumer": "sdk-js/test/signer-set.test.js" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "signing-input.json": {
+      "kind": "signing-input",
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SigningInputVectorTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SigningInputVectorTest.kt" }
+      }
+    },
+    "tamper-detection/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain", "content_index", "encrypted_blob", "envelope"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      },
+      "notes": [
+        "sdk-kotlin core is a plain-capsule (L2) verifier with no encryption path: its consumer pins the two encrypted fixtures by name (clean-encrypted, tampered-blob) to the documented plain-only refusal instead of the registry outcome. The collection is still consumed in full."
+      ]
+    },
+    "unicode-boundary/vectors.json": {
+      "kind": "outcome-collection",
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    },
+    "unknown-fields/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["chain", "content_index", "envelope"],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      }
+    }
+  }
+}

@@ -1,6 +1,20 @@
 # Capsule v0.6 Vectors
 
-This directory contains checked-in protocol vectors. Eight shapes exist, all
+This directory contains checked-in protocol vectors.
+
+**`registry.json` is the lane × collection coverage manifest.** It lists
+every collection in this directory and the set of lanes REQUIRED to
+consume it — with an explicit, reasoned exemption where a collection
+legitimately does not apply to a lane. `tools/check-vector-registry.mjs`
+(the `vector-registry` conformance target) fails when a vector file
+exists on disk but is not listed there, when a listed file is missing or
+empty, when a collection's reason/failing vocabulary drifts from the
+declaration, or when a required lane's declared consumer file does not
+reference the collection. **When you add a collection, add it to
+registry.json in the same change** — the checker will not let it land
+half-wired.
+
+Eight vector shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 

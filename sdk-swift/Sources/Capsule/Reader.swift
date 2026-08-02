@@ -97,6 +97,13 @@ public enum CapsuleReader {
         }
         let manifest = try parseJSONFile(mfBytes, name: "manifest.json")
         let envelope = try parseJSONFile(envBytes, name: "provenance/envelope.json")
+        // Shape check at the parse boundary (mirrors the JS reference's
+        // validateManifestShape / validateEnvelopeShape): full integrity is
+        // the verifier's job, but a caller reading manifest fields without
+        // verifying first can rely on the basic shapes, and verification
+        // stays total over whatever the reader hands back.
+        try validateManifestShape(manifest)
+        try validateEnvelopeShape(envelope)
 
         // Detect encrypted-outer from the SIGNED envelope.cipher plus the
         // presence of the blob — never from the manifest's own claim. The
@@ -312,6 +319,106 @@ public enum CapsuleReader {
         return try parse(innerZip)
     }
 
+    /// Lowercase 64-hex predicate, per the spec's canonical-hex rule.
+    static func isHex64(_ s: String) -> Bool {
+        s.count == 64 && s.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) }
+    }
+
+    /// Lightweight shape check on the manifest (spec/manifest.md field
+    /// rules). Error messages carry the offending field path, prefixed
+    /// `manifest.`, mirroring the JS reference's validateManifestShape —
+    /// the registry's `invalid_manifest_shape` reason maps onto that
+    /// prefix in this lane.
+    static func validateManifestShape(_ manifest: JCSValue) throws {
+        guard case .object(let pairs) = manifest else {
+            throw CapsuleError.malformed("manifest.json is not a JSON object")
+        }
+        func member(_ key: String) -> JCSValue? { pairs.first(where: { $0.0 == key })?.1 }
+        var version: String? = nil
+        if case .object(let fmt)? = member("format"),
+           case .string(let v)? = fmt.first(where: { $0.0 == "version" })?.1 {
+            version = v
+        }
+        guard version == "0.6" else {
+            throw CapsuleError.malformed(
+                "manifest.format.version: expected '0.6', got \(Chain.debugQuoted(version))")
+        }
+        guard case .string(let id)? = member("id"), isHex64(id) else {
+            throw CapsuleError.malformed("manifest.id is not a 64-char lowercase hex string")
+        }
+        var origPub: String? = nil
+        if case .object(let orig)? = member("originator"),
+           case .string(let pk)? = orig.first(where: { $0.0 == "public_key" })?.1 {
+            origPub = pk
+        }
+        guard let op = origPub, isHex64(op) else {
+            throw CapsuleError.malformed(
+                "manifest.originator.public_key must be a 64-char lowercase hex string")
+        }
+        // null is the legal empty-chain shape (spec/chain.md "Empty
+        // chains"): a zero-event capsule has no first event to hash. The
+        // verifier enforces the null-anchor / event-count consistency; the
+        // reader only rejects values that are neither null nor hex.
+        switch member("first_event_hash") {
+        case nil, .some(.null):
+            break
+        case .some(.string(let s)) where isHex64(s):
+            break
+        default:
+            throw CapsuleError.malformed(
+                "manifest.first_event_hash must be a 64-char lowercase hex string or null")
+        }
+        try validateContentIndexShape(member("content_index"))
+    }
+
+    static func validateContentIndexShape(_ index: JCSValue?) throws {
+        guard case .object(let pairs)? = index else {
+            throw CapsuleError.malformed("manifest.content_index must be a JSON object")
+        }
+        guard case .string(let ih)? = pairs.first(where: { $0.0 == "index_hash" })?.1,
+              isHex64(ih)
+        else {
+            throw CapsuleError.malformed(
+                "manifest.content_index.index_hash must be a 64-char lowercase hex string")
+        }
+        guard case .array(let files)? = pairs.first(where: { $0.0 == "files" })?.1 else {
+            throw CapsuleError.malformed("manifest.content_index.files must be an array")
+        }
+        for (i, f) in files.enumerated() {
+            guard case .object(let cols) = f else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)] must be a JSON object")
+            }
+            guard case .string(let p)? = cols.first(where: { $0.0 == "path" })?.1, !p.isEmpty else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)].path must be a non-empty string")
+            }
+            guard case .string(let h)? = cols.first(where: { $0.0 == "sha256" })?.1, isHex64(h) else {
+                throw CapsuleError.malformed(
+                    "manifest.content_index.files[\(i)].sha256 must be a 64-char lowercase hex string")
+            }
+        }
+    }
+
+    static func validateEnvelopeShape(_ envelope: JCSValue) throws {
+        guard case .object(let pairs) = envelope else {
+            throw CapsuleError.malformed("envelope.json is not a JSON object")
+        }
+        guard case .string("0.6")? = pairs.first(where: { $0.0 == "version" })?.1 else {
+            throw CapsuleError.malformed("envelope.version: expected '0.6'")
+        }
+        guard case .string(let cid)? = pairs.first(where: { $0.0 == "capsule_id" })?.1,
+              isHex64(cid)
+        else {
+            throw CapsuleError.malformed("envelope.capsule_id must be a 64-char lowercase hex string")
+        }
+        guard case .array(let signers)? = pairs.first(where: { $0.0 == "signers" })?.1,
+              !signers.isEmpty
+        else {
+            throw CapsuleError.malformed("envelope.signers must be a non-empty array")
+        }
+    }
+
     private static func lookupString(_ v: JCSValue, _ keys: String...) -> String? {
         var cur = v
         for k in keys {
@@ -366,6 +473,57 @@ public enum CapsuleReader {
                     "seq \(seq): kind \(Chain.debugQuoted(kind)) is not one of "
                         + Chain.EVENT_KINDS.joined(separator: ", ")
                 )
+            }
+            // spec/chain.md verification step 5 — `seq` is strictly
+            // monotonic from 1. The stored value must equal the event's
+            // 1-based position; trusting the stored seq (or merely
+            // counting events) accepts a renumbered chain.
+            let seqValue = pairs.first(where: { $0.0 == "seq" })?.1
+            var storedSeq: Int64? = nil
+            var seqRendered = "undefined"
+            switch seqValue {
+            case .some(.integer(let n)):
+                storedSeq = n
+                seqRendered = String(n)
+            case .some(.string(let s)):
+                seqRendered = Chain.debugQuoted(s)
+            case .some(.decimal(let d)):
+                seqRendered = String(d)
+            case .some:
+                seqRendered = "non-integer"
+            case nil:
+                break
+            }
+            if storedSeq != Int64(seq) {
+                errors.append("seq \(seq): seq \(seqRendered) expected \(seq)")
+            }
+            // spec/chain.md "Untrusted content" — when present, every
+            // marking must match the path grammar. An unparseable marking
+            // silently unmarks LLM-authored content for every host.
+            if let upfValue = pairs.first(where: { $0.0 == "untrusted_payload_fields" })?.1 {
+                if case .array(let items) = upfValue {
+                    for (idx, item) in items.enumerated() {
+                        let ok: Bool
+                        let rendered: String
+                        if case .string(let p) = item {
+                            ok = Chain.isValidUntrustedPayloadPath(p)
+                            rendered = Chain.debugQuoted(p)
+                        } else {
+                            ok = false
+                            rendered = "non-string"
+                        }
+                        if !ok {
+                            errors.append(
+                                "seq \(seq): untrusted_payload_fields[\(idx)] is not a "
+                                    + "valid payload path: \(rendered)"
+                            )
+                        }
+                    }
+                } else {
+                    errors.append(
+                        "seq \(seq): untrusted_payload_fields must be an array of payload paths"
+                    )
+                }
             }
             var withoutHash: [(String, JCSValue)] = []
             var stored: String?
@@ -427,6 +585,128 @@ public enum CapsuleReader {
         return out
     }
 
+
+    /// Reject JSON text carrying duplicate object member names, at any
+    /// depth (spec/canonicalization.md "Objects"; RFC 7493 §2.3). Names
+    /// compare AFTER escape processing ("a" and "\u0061" are the same
+    /// name), as sequences of UTF-16 code units.
+    ///
+    /// This is a rule about the TEXT: JSONSerialization silently keeps the
+    /// last duplicate, so the parsed tree cannot show it. The scanner
+    /// assumes syntactically valid JSON — callers run JSONSerialization
+    /// first, so syntax errors surface as parse errors.
+    static func assertNoDuplicateMembers(_ text: String, name: String) throws {
+        let chars = Array(text.unicodeScalars)
+        let n = chars.count
+        var i = 0
+        func fail(_ message: String) throws -> Never {
+            throw CapsuleError.malformed("\(name): \(message)")
+        }
+        func skipWs() {
+            while i < n, chars[i] == " " || chars[i] == "\t"
+                || chars[i] == "\n" || chars[i] == "\r" { i += 1 }
+        }
+        func parseString() throws -> String {
+            i += 1  // opening quote
+            var units: [UInt16] = []
+            while i < n {
+                let c = chars[i]
+                if c == "\"" {
+                    i += 1
+                    return String(decoding: units, as: UTF16.self)
+                }
+                if c == "\\" {
+                    guard i + 1 < n else { try fail("unterminated escape") }
+                    let e = chars[i + 1]
+                    i += 2
+                    switch e {
+                    case "\"": units.append(0x22)
+                    case "\\": units.append(0x5C)
+                    case "/": units.append(0x2F)
+                    case "b": units.append(0x08)
+                    case "f": units.append(0x0C)
+                    case "n": units.append(0x0A)
+                    case "r": units.append(0x0D)
+                    case "t": units.append(0x09)
+                    case "u":
+                        guard i + 4 <= n else { try fail("truncated unicode escape") }
+                        var v: UInt16 = 0
+                        for k in 0..<4 {
+                            let s = chars[i + k]
+                            let d: UInt16
+                            switch s {
+                            case "0"..."9": d = UInt16(s.value - 0x30)
+                            case "a"..."f": d = UInt16(s.value - 0x61 + 10)
+                            case "A"..."F": d = UInt16(s.value - 0x41 + 10)
+                            default: try fail("invalid unicode escape")
+                            }
+                            v = v << 4 | d
+                        }
+                        i += 4
+                        units.append(v)
+                    default:
+                        try fail("invalid escape in string")
+                    }
+                } else {
+                    units.append(contentsOf: Array(String(c).utf16))
+                    i += 1
+                }
+            }
+            try fail("unterminated string")
+        }
+        func parseValue() throws {
+            skipWs()
+            guard i < n else { return }
+            switch chars[i] {
+            case "{": try parseObject()
+            case "[": try parseArray()
+            case "\"": _ = try parseString()
+            default:
+                while i < n, chars[i] != ",", chars[i] != "}", chars[i] != "]",
+                      chars[i] != " ", chars[i] != "\t", chars[i] != "\n", chars[i] != "\r" {
+                    i += 1
+                }
+            }
+        }
+        func parseObject() throws {
+            i += 1  // {
+            var seen = Set<String>()
+            skipWs()
+            if i < n, chars[i] == "}" { i += 1; return }
+            while true {
+                skipWs()
+                guard i < n, chars[i] == "\"" else { try fail("expected member name") }
+                let member = try parseString()
+                if !seen.insert(member).inserted {
+                    try fail("duplicate object member \(Chain.debugQuoted(member))")
+                }
+                skipWs()
+                guard i < n, chars[i] == ":" else { try fail("expected ':' after member name") }
+                i += 1
+                try parseValue()
+                skipWs()
+                guard i < n else { try fail("unterminated object") }
+                if chars[i] == "," { i += 1; continue }
+                if chars[i] == "}" { i += 1; return }
+                try fail("expected ',' or '}' in object")
+            }
+        }
+        func parseArray() throws {
+            i += 1  // [
+            skipWs()
+            if i < n, chars[i] == "]" { i += 1; return }
+            while true {
+                try parseValue()
+                skipWs()
+                guard i < n else { try fail("unterminated array") }
+                if chars[i] == "," { i += 1; continue }
+                if chars[i] == "]" { i += 1; return }
+                try fail("expected ',' or ']' in array")
+            }
+        }
+        try parseValue()
+    }
+
     /// `parseJSON` with the offending file named in the error, so a reader
     /// rejection can be attributed to a specific document (mirrors the Rust
     /// verifier's "failed to parse manifest.json").
@@ -434,6 +714,11 @@ public enum CapsuleReader {
         let any: Any
         do { any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) }
         catch { throw CapsuleError.malformed("failed to parse \(name)") }
+        // Duplicate-member gate over the raw text (spec/canonicalization.md
+        // "Objects"): JSONSerialization silently keeps the last duplicate,
+        // so the rule must be checked on the text, before the value is
+        // handed to anything that hashes.
+        try assertNoDuplicateMembers(String(decoding: data, as: UTF8.self), name: name)
         let value = convert(any)
         // I-JSON acceptance boundary (spec/canonicalization.md). Reported in
         // its own words, NOT as "failed to parse": the JSON is syntactically
@@ -449,6 +734,8 @@ public enum CapsuleReader {
 
     static func parseJSON(_ data: Data) throws -> JCSValue {
         let any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+        // Duplicate-member gate over the raw text; see parseJSONFile.
+        try assertNoDuplicateMembers(String(decoding: data, as: UTF8.self), name: "JSON")
         let value = convert(any)
         // I-JSON acceptance boundary (spec/canonicalization.md). Rejecting
         // here means an unacceptable value never reaches a hash comparison,

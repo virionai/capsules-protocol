@@ -109,7 +109,7 @@
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "42c49394332073f757ac8508e9eb0f0b679bdb9cade975b848a571606adf6e85"
+        "sha256": "1976b01fc935912b68a7b3822b73f065f51c86a025a71b1452ddcbfc17a73ed8"
       },
       {
         "path": "spec/envelope.md",

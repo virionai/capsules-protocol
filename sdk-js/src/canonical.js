@@ -91,6 +91,122 @@ function assertWellFormedUnicode(s, path) {
 }
 
 /** JCS-canonicalize an object and return UTF-8 bytes. */
+/**
+ * Reject JSON text carrying duplicate object member names, at any depth
+ * (spec/canonicalization.md "Objects"; RFC 7493 2.3). Names compare AFTER
+ * escape processing ("a" and "\u0061" are the same name), as sequences of
+ * UTF-16 code units.
+ *
+ * This is a rule about the TEXT: every mainstream parser silently keeps
+ * the last value, so it cannot be checked on the parsed tree. The scanner
+ * assumes syntactically valid JSON — call JSON.parse first (parseJsonStrict
+ * does) so syntax errors surface as parse errors, not scanner confusion.
+ */
+export function assertNoDuplicateMembers(text, label = "JSON") {
+  let i = 0;
+  const n = text.length;
+  const fail = (message) => {
+    throw new Error(`${label}: ${message}`);
+  };
+  const skipWs = () => {
+    while (i < n && (text[i] === " " || text[i] === "\t" || text[i] === "\n" || text[i] === "\r")) i++;
+  };
+  const parseString = () => {
+    i++; // opening quote
+    let out = "";
+    while (i < n) {
+      const c = text[i];
+      if (c === '"') { i++; return out; }
+      if (c === "\\") {
+        const e = text[i + 1];
+        i += 2;
+        switch (e) {
+          case '"': out += '"'; break;
+          case "\\": out += "\\"; break;
+          case "/": out += "/"; break;
+          case "b": out += "\b"; break;
+          case "f": out += "\f"; break;
+          case "n": out += "\n"; break;
+          case "r": out += "\r"; break;
+          case "t": out += "\t"; break;
+          case "u":
+            out += String.fromCharCode(parseInt(text.slice(i, i + 4), 16));
+            i += 4;
+            break;
+          default:
+            fail("invalid escape in string");
+        }
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    fail("unterminated string");
+    return "";
+  };
+  const parseValue = () => {
+    skipWs();
+    const c = text[i];
+    if (c === "{") { parseObject(); return; }
+    if (c === "[") { parseArray(); return; }
+    if (c === '"') { parseString(); return; }
+    while (i < n && !",}] \t\n\r".includes(text[i])) i++;
+  };
+  const parseObject = () => {
+    i++; // {
+    const seen = new Set();
+    skipWs();
+    if (text[i] === "}") { i++; return; }
+    for (;;) {
+      skipWs();
+      if (text[i] !== '"') fail("expected member name");
+      const name = parseString();
+      if (seen.has(name)) {
+        fail(`duplicate object member ${JSON.stringify(name)}`);
+      }
+      seen.add(name);
+      skipWs();
+      if (text[i] !== ":") fail("expected ':' after member name");
+      i++;
+      parseValue();
+      skipWs();
+      if (text[i] === ",") { i++; continue; }
+      if (text[i] === "}") { i++; return; }
+      fail("expected ',' or '}' in object");
+    }
+  };
+  const parseArray = () => {
+    i++; // [
+    skipWs();
+    if (text[i] === "]") { i++; return; }
+    for (;;) {
+      parseValue();
+      skipWs();
+      if (text[i] === ",") { i++; continue; }
+      if (text[i] === "]") { i++; return; }
+      fail("expected ',' or ']' in array");
+    }
+  };
+  parseValue();
+}
+
+const strictDecoder = new TextDecoder();
+
+/**
+ * Parse JSON text (or UTF-8 bytes) destined for hashing: JSON.parse for
+ * syntax, then the duplicate-member gate over the raw text. Every capsule
+ * document parse in this SDK goes through here — manifest, envelope, chain
+ * event lines, skills, decryption metadata — so a duplicate member never
+ * reaches a hash comparison (spec/canonicalization.md "Objects").
+ */
+export function parseJsonStrict(textOrBytes, label = "JSON") {
+  const text =
+    typeof textOrBytes === "string" ? textOrBytes : strictDecoder.decode(textOrBytes);
+  const value = JSON.parse(text);
+  assertNoDuplicateMembers(text, label);
+  return value;
+}
+
 export function jcs(obj) {
   assertIJson(obj);
   const s = canonicalize(obj);

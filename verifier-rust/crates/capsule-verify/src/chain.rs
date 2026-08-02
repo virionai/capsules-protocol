@@ -35,6 +35,36 @@ pub fn is_valid_event_kind(kind: &str) -> bool {
     EVENT_KINDS.contains(&kind)
 }
 
+/// The normative `untrusted_payload_fields` path grammar from `chain.md`
+/// "Untrusted content":
+///
+/// ```text
+/// path    = "payload" 1*( "." segment )
+/// segment = 1*( ALPHA / DIGIT / "_" / "-" )
+/// ```
+///
+/// A marking outside the grammar has no defined resolution — a host cannot
+/// tell which payload member the author marked untrusted — so verifiers
+/// reject it fail-closed (vector `chain-rules/invalid-untrusted-path`).
+pub fn is_valid_untrusted_payload_path(path: &str) -> bool {
+    let mut segments = path.split('.');
+    if segments.next() != Some("payload") {
+        return false;
+    }
+    let mut any = false;
+    for seg in segments {
+        any = true;
+        if seg.is_empty()
+            || !seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return false;
+        }
+    }
+    any
+}
+
 /// One human-readable error from a chain walk. The message is prefixed with
 /// the event sequence number to match the JS reference's error shape, which
 /// reports `{ seq, message }` per error. Top-level callers concatenate as

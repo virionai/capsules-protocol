@@ -68,6 +68,7 @@ import {
   concatBytes,
   hexToBytes,
   jcs,
+  parseJsonStrict,
   sha256,
 } from "../sdk-js/src/canonical.js";
 import { envelopeCanonicalPayload, envelopeSigningInput } from "../sdk-js/src/envelope.js";
@@ -201,6 +202,14 @@ const VERIFY_REASON = {
 const KNOWN_REQUIREMENTS = new Set(["encryption"]);
 
 async function checkCollection(path, doc) {
+  // F40: an empty collection is a hard failure, not a silent no-op. A
+  // registry emptied by a bad merge would otherwise still pass — the only
+  // zero-guard used to be the global `checked === 0` at the bottom, which
+  // a single surviving collection satisfies.
+  if (doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
   // capsule_file / keys_file paths are relative to the collection file.
   const base = dirname(path);
   // Resolve the allowlist origin: an inline hex key, or the originator key in
@@ -585,7 +594,7 @@ function isIJsonAcceptanceSet(doc) {
 // parsers refuse lone-surrogate escapes outright, others accept them and the
 // canonicalizer refuses. What is normative is that the value never reaches a
 // hash.
-const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate"]);
+const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate", "duplicate_member"]);
 
 function checkIJsonAcceptance(path, doc) {
   if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
@@ -602,7 +611,10 @@ function checkIJsonAcceptance(path, doc) {
     let parsed;
     let parseFailed = false;
     try {
-      parsed = JSON.parse(v.input_json);
+      // The SDK's strict document parse: JSON.parse plus the raw-text
+      // duplicate-member gate. Rejection here IS the parse-time refusal
+      // the vector contract allows.
+      parsed = parseJsonStrict(v.input_json);
     } catch {
       parseFailed = true;
     }
@@ -743,6 +755,11 @@ async function checkFile(path) {
     fail(`${path}: cannot parse JSON: ${err.message}`);
     return;
   }
+  // The lane × collection coverage manifest is metadata, not a vector set;
+  // tools/check-vector-registry.mjs (its own conformance target) validates
+  // it. Recognized here only so the walker's fail-closed rule below does
+  // not misreport it as an unknown vector document.
+  if (doc?.meta?.kind === "vector-registry") return;
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
   // Must sit before isCollection, which would otherwise swallow the file
   // (it also carries a `vectors` array).

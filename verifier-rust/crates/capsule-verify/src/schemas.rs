@@ -75,11 +75,20 @@ pub struct Originator {
 
 /// Participant entry: a non-originator party whose role is recorded in the
 /// manifest for trust and audit purposes.
+///
+/// `label` is advisory display text and OPTIONAL on the wire: the base spec
+/// (manifest.md field rules) requires only the `actor_id` pattern. This lane
+/// used to demand `label` in the typed view, refusing a spec-valid capsule
+/// that every other lane verified (addendum A12); conformance vector
+/// `chain-rules/participant-without-label` pins the fix. This struct is a
+/// VIEW, never a hashing input, so `skip_serializing_if` cannot change any
+/// hashed bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Participant {
     pub actor_id: String,
     pub role: String,
-    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// One row of the content index: a path inside the capsule and the SHA-256
@@ -244,6 +253,11 @@ pub enum ChainParseError {
         #[source]
         source: serde_json::Error,
     },
+    /// A line parsed as JSON but is not an object. Reported with the JS
+    /// reference's per-event wording ("event is not a JSON object") so the
+    /// registry's pinned `error_includes` reads identically across lanes.
+    #[error("chain line {line}: event is not a JSON object")]
+    NotAnObject { line: usize },
     /// The bytes were not valid UTF-8.
     #[error("chain bytes are not valid UTF-8: {0}")]
     Utf8(#[from] std::str::Utf8Error),
@@ -272,8 +286,17 @@ pub fn parse_chain_jsonl(bytes: &[u8]) -> Result<Vec<ParsedEvent>, ChainParseErr
             // line numbering.
             continue;
         }
-        let value: serde_json::Value = serde_json::from_str(raw)
+        // Strict parse: the duplicate-member gate runs during
+        // deserialization (spec/canonicalization.md "Objects") before the
+        // value can reach a hash comparison.
+        let value: serde_json::Value = crate::jcs::parse_json_strict(raw.as_bytes())
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
+        // A line that parses but is not an object gets the JS reference's
+        // per-event wording rather than a serde type error, so the pinned
+        // cross-lane message ("event is not a JSON object") holds here too.
+        if !value.is_object() {
+            return Err(ChainParseError::NotAnObject { line: i + 1 });
+        }
         let event: ChainEvent = serde_json::from_value(value.clone())
             .map_err(|source| ChainParseError::LineParse { line: i + 1, source })?;
         events.push(ParsedEvent { event, raw: value });

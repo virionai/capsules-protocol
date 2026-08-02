@@ -49,6 +49,30 @@ object Chain {
     fun isValidEventKind(kind: String?): Boolean = kind != null && kind in EVENT_KINDS
 
     /**
+     * The normative `untrusted_payload_fields` path grammar from
+     * spec/chain.md "Untrusted content":
+     *
+     *     path    = "payload" 1*( "." segment )
+     *     segment = 1*( ALPHA / DIGIT / "_" / "-" )
+     *
+     * A marking outside the grammar has no defined resolution — a host
+     * cannot tell which payload member the author marked untrusted — so
+     * writers refuse to emit it and verifiers reject it fail-closed
+     * (vector chain-rules/invalid-untrusted-path).
+     */
+    fun isValidUntrustedPayloadPath(path: String): Boolean {
+        val segments = path.split('.')
+        if (segments.size < 2 || segments[0] != "payload") return false
+        for (seg in segments.drop(1)) {
+            if (seg.isEmpty()) return false
+            if (!seg.all { it in '0'..'9' || it in 'a'..'z' || it in 'A'..'Z' || it == '_' || it == '-' }) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
      * Render a string the way Rust's `{:?}` renders a `String` (and JS's
      * `JSON.stringify` a plain-ASCII one), so all five lanes emit
      * byte-identical verifier messages. `null` renders as `null` (a

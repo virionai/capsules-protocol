@@ -126,6 +126,82 @@ fn check_number(n: &serde_json::Number, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+
+/// Parse JSON bytes destined for hashing, refusing duplicate object member
+/// names at any depth (spec/canonicalization.md "Objects", RFC 7493 §2.3).
+///
+/// `serde_json::Value` silently keeps the LAST duplicate, so the rule cannot
+/// be checked on the parsed tree (`check_ijson` never sees it): it must be
+/// enforced DURING deserialization. This walks the input with a visitor that
+/// builds the same `Value` tree but errors on a repeated member name. Names
+/// compare after escape processing (`"a"` and `"\u0061"` collide), because
+/// serde hands the visitor decoded keys.
+pub fn parse_json_strict(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+
+    struct Checked(Value);
+
+    impl<'de> Deserialize<'de> for Checked {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> Visitor<'de> for V {
+                type Value = Checked;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("any JSON value")
+                }
+                fn visit_bool<E: de::Error>(self, v: bool) -> Result<Checked, E> {
+                    Ok(Checked(Value::Bool(v)))
+                }
+                fn visit_i64<E: de::Error>(self, v: i64) -> Result<Checked, E> {
+                    Ok(Checked(Value::from(v)))
+                }
+                fn visit_u64<E: de::Error>(self, v: u64) -> Result<Checked, E> {
+                    Ok(Checked(Value::from(v)))
+                }
+                fn visit_f64<E: de::Error>(self, v: f64) -> Result<Checked, E> {
+                    serde_json::Number::from_f64(v)
+                        .map(|n| Checked(Value::Number(n)))
+                        .ok_or_else(|| E::custom("non-finite number"))
+                }
+                fn visit_str<E: de::Error>(self, v: &str) -> Result<Checked, E> {
+                    Ok(Checked(Value::String(v.to_owned())))
+                }
+                fn visit_string<E: de::Error>(self, v: String) -> Result<Checked, E> {
+                    Ok(Checked(Value::String(v)))
+                }
+                fn visit_unit<E: de::Error>(self) -> Result<Checked, E> {
+                    Ok(Checked(Value::Null))
+                }
+                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Checked, A::Error> {
+                    let mut out = Vec::new();
+                    while let Some(Checked(v)) = seq.next_element::<Checked>()? {
+                        out.push(v);
+                    }
+                    Ok(Checked(Value::Array(out)))
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Checked, A::Error> {
+                    let mut out = serde_json::Map::new();
+                    while let Some(key) = map.next_key::<String>()? {
+                        let Checked(value) = map.next_value::<Checked>()?;
+                        if out.insert(key.clone(), value).is_some() {
+                            return Err(de::Error::custom(format!(
+                                "duplicate object member {key:?}"
+                            )));
+                        }
+                    }
+                    Ok(Checked(Value::Object(out)))
+                }
+            }
+            d.deserialize_any(V)
+        }
+    }
+
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    let value = Checked::deserialize(&mut de)?;
+    de.end()?;
+    Ok(value.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
