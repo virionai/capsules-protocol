@@ -91,6 +91,16 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "malformed-shape-fixtures-regen",
+    name: "malformed-shape fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-malformed-shape-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "ed25519-key-validation-regen",
     name: "ed25519-key-validation vector regeneration check",
     language: "javascript",

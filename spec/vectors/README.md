@@ -38,10 +38,16 @@ lane):
      category vocabulary (including reserved categories that do not have
      checked-in fixtures yet).
 
+   `malformed-shape/vectors.json` uses both stages for capsules whose ZIP
+   container is well-formed but whose manifest or chain documents violate
+   the required field shapes (including an unknown manifest member whose
+   value is `1e999`). No fixture in that collection may make a verifier
+   raise an unhandled exception: verification is a total function.
+
    Independent implementations SHOULD reproduce these outcomes; the Python
-   (`sdk-py/tests/test_spec_registry.py`) and Rust
-   (`verifier-rust/tests/spec_registry.rs`) lanes consume these collections
-   directly.
+   (`sdk-py/tests/test_spec_registry.py`) lane consumes all of these
+   collections and the Rust (`verifier-rust/tests/spec_registry.rs`) lane
+   consumes all but `malformed-shape`.
 
 3. **Byte-level signing-input vector** (`signing-input.json`, detected by
    `meta.kind: "signing-input"`) — pins the exact bytes being signed,
@@ -94,6 +100,8 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-tamper-fixtures.mjs` → `tamper-detection/output/`
 - `sdk-js/tools/generate-malformed-fixtures.mjs` → `malformed-layout/output/`
   (derived from the tamper-detection clean fixture)
+- `sdk-js/tools/generate-malformed-shape-fixtures.mjs` →
+  `malformed-shape/output/` (derived from the same clean fixture)
 - `sdk-js/tools/generate-unknown-fields-fixtures.mjs` → `unknown-fields/output/`
   (fixed throwaway TEST keypair; byte-stable, supports `--check`)
 - `sdk-js/tools/generate-signer-set-fixtures.mjs` → `signer-set/output/`

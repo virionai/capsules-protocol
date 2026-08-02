@@ -156,6 +156,9 @@ const FAILING_AREA = {
 const OPEN_REASON = {
   missing_required_file: /missing (manifest\.json|provenance\/envelope\.json)/,
   invalid_json: /JSON/,
+  // Every manifest shape error from reader.js validateManifestShape is
+  // prefixed with the offending field path.
+  invalid_manifest_shape: /^manifest\./,
   duplicate_entry: /duplicate entry/,
   unsafe_path: /(parent traversal|absolute|NUL)/,
   unsupported_compression: /only STORED supported/,

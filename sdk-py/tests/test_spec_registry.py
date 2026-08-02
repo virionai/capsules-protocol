@@ -6,6 +6,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
 
   - tamper-detection/vectors.json   (verify-stage outcomes)
   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
+  - malformed-shape/vectors.json    (open-stage reasons + verify-stage)
   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
   - signer-set/vectors.json         (signer-set binding outcomes)
   - signing-input.json              (byte-level signing/hashing pins)
@@ -30,6 +31,7 @@ from capsule.envelope import envelope_canonical_payload, envelope_signing_input
 VECTORS = pathlib.Path(__file__).resolve().parents[2] / "spec" / "vectors"
 TAMPER = VECTORS / "tamper-detection" / "vectors.json"
 MALFORMED = VECTORS / "malformed-layout" / "vectors.json"
+MALFORMED_SHAPE = VECTORS / "malformed-shape" / "vectors.json"
 UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
@@ -41,6 +43,9 @@ KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 OPEN_REASON_PATTERNS = {
     "missing_required_file": r"missing (manifest\.json|provenance/envelope\.json)",
     "invalid_json": r"parse",
+    # Every manifest shape error from reader._validate_manifest_shape is
+    # prefixed with the offending field path.
+    "invalid_manifest_shape": r"^manifest\.",
     "duplicate_entry": r"duplicate entry",
     "unsafe_path": r"(parent traversal|absolute)",
     "unsupported_compression": r"only STORED",
@@ -144,8 +149,8 @@ def test_signer_set_registry_outcomes(doc: dict, vector: dict, base: pathlib.Pat
     _assert_verify_outcome(vector["name"], vector["expected"], result)
 
 
-@pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED))
-def test_malformed_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None:
+    """Open-stage vectors must be refused by the reader; the rest verify."""
     data = (base / vector["capsule_file"]).read_bytes()
     expected = vector["expected"]
     if expected.get("stage") == "open":
@@ -153,10 +158,23 @@ def test_malformed_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path
         assert pattern is not None, f"unknown open-stage reason {expected['reason']!r}"
         with pytest.raises(ValueError, match=pattern):
             CapsuleReader.from_bytes(data)
+        # verify_capsule is total: the same bytes must fail closed, not raise.
+        result = verify_capsule(data, allowlist=_allowlist(doc, base))
+        assert result["ok"] is False, f"{vector['name']}: expected a fail-closed result"
         return
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
     _assert_verify_outcome(vector["name"], expected, result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED))
+def test_malformed_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED_SHAPE))
+def test_malformed_shape_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    _assert_registry_vector(doc, vector, base)
 
 
 def test_signing_input_pins():

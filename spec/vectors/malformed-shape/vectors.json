@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "name": "malformed-shape",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected outcomes for capsules whose ZIP container is well-formed but whose manifest or chain documents violate the required field shapes. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the document before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false. No fixture here may make a verifier raise an unhandled exception.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "generator": "sdk-js/tools/generate-malformed-shape-fixtures.mjs (derived from ../tamper-detection/output/clean.capsule)",
+  "keys_file": "../tamper-detection/output/keys.json",
+  "reasons": {
+    "invalid_manifest_shape": "manifest.json parses as JSON but a required field is absent or has the wrong type/format (not an object, no content_index, content_index.files not an array, a files[] entry without a 64-char lowercase hex sha256)"
+  },
+  "notes": [
+    "The 'reason' field is normative: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
+    "uppercase-event-hash and chain-event-not-object open successfully — the shape violation is inside chain/events.jsonl, so it surfaces at the verify stage. A verifier that feeds the stored hash to a strict hex decoder without a canonical-form guard, or indexes into a non-object event, raises instead of reporting, which these vectors exist to catch.",
+    "manifest-hostile-number carries an unknown manifest member whose value is 1e999 (Infinity after JSON parsing). Unknown members are inside the integrity envelope, so the manifest-hash recompute must run over them — and must report the non-canonicalizable number as a verification failure, never raise."
+  ],
+  "vectors": [
+    {
+      "name": "manifest-not-object",
+      "capsule_file": "output/manifest-not-object.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.json is not a JSON object" }
+    },
+    {
+      "name": "missing-content-index",
+      "capsule_file": "output/missing-content-index.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index" }
+    },
+    {
+      "name": "content-index-files-not-array",
+      "capsule_file": "output/content-index-files-not-array.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index.files" }
+    },
+    {
+      "name": "content-index-entry-missing-sha256",
+      "capsule_file": "output/content-index-entry-missing-sha256.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index.files[0].sha256" }
+    },
+    {
+      "name": "uppercase-event-hash",
+      "capsule_file": "output/uppercase-event-hash.capsule",
+      "expected": { "ok": false, "failing": ["chain", "content_index"] }
+    },
+    {
+      "name": "chain-event-not-object",
+      "capsule_file": "output/chain-event-not-object.capsule",
+      "expected": { "ok": false, "failing": ["chain", "content_index"], "error_includes": "event is not a JSON object" }
+    },
+    {
+      "name": "manifest-hostile-number",
+      "capsule_file": "output/manifest-hostile-number.capsule",
+      "expected": { "ok": false, "error_includes": "manifest hash recompute failed" }
+    }
+  ]
+}
