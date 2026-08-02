@@ -141,6 +141,17 @@ pub fn verify_chain(events: &[ParsedEvent]) -> Vec<ChainErr> {
         if let Some(map) = event_value.as_object_mut() {
             map.remove("hash");
         }
+        // I-JSON acceptance boundary (spec/canonicalization.md). Reported as
+        // its own error rather than folded into a hash mismatch, so an
+        // out-of-range number reads as a canonicalization refusal instead of
+        // looking like tampering.
+        if let Err(message) = crate::jcs::check_ijson(&event_value) {
+            errors.push(ChainErr {
+                seq: seq_for_msg,
+                message,
+            });
+            continue;
+        }
         let recomputed = match hash_event_value(&event_value) {
             Some(h) => h,
             None => {
@@ -246,6 +257,27 @@ mod tests {
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e.message.starts_with("seq 99 expected 1")));
         assert!(errors.iter().any(|e| e.message.starts_with("hash mismatch")));
+    }
+
+    #[test]
+    fn rejects_event_payload_outside_ijson_acceptance_boundary() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let jsonl = map.get("chain/events.jsonl").unwrap();
+        let mut events = parse_chain_jsonl(jsonl).unwrap();
+        // A nanosecond timestamp: plausible payload, 19 digits, > 2^53 - 1.
+        events[0].raw["payload"] = serde_json::json!({ "ts_ns": 1_700_000_000_000_000_000u64 });
+        let errors = verify_chain(&events);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer outside IEEE-754 exact range")),
+            "expected an I-JSON acceptance error, got: {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.message.starts_with("hash mismatch")),
+            "a canonicalization refusal must not also be reported as tampering: {errors:?}"
+        );
     }
 
     #[test]

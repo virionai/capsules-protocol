@@ -153,6 +153,13 @@ def test_jcs_numbers_match_spec_vectors():
     assert vectors, "vector file is empty"
     for entry in vectors:
         value = struct.unpack(">d", bytes.fromhex(entry["ieee_hex"]))[0]
+        if entry.get("accepted") is False:
+            # Outside the I-JSON acceptance boundary (spec/canonicalization.md):
+            # "expected" records the Number::toString layout, but the value must
+            # never reach a canonical serialization.
+            with pytest.raises(ValueError, match="integer outside IEEE-754 exact range"):
+                jcs(value)
+            continue
         got = jcs(value).decode("utf-8")
         assert got == entry["expected"], f"bits {entry['ieee_hex']}"
 
@@ -179,3 +186,51 @@ def test_utf16_sort_key_orders_supplementary_below_high_bmp():
     assert utf16_sort_key(EMOJI) < utf16_sort_key(PUA) < utf16_sort_key(NONCHAR)
     # ...and that is NOT code-point order, which reverses the first pair.
     assert ord(EMOJI) > ord(PUA)
+
+
+def test_jcs_rejects_unpaired_surrogates():
+    with pytest.raises(ValueError, match="unpaired surrogate U\\+D83D"):
+        jcs({"summary": "a\ud83d"})
+    with pytest.raises(ValueError, match="unpaired surrogate U\\+DC00"):
+        jcs({"summary": "\udc00b"})
+    # Object keys are canonicalized through the same encoder.
+    with pytest.raises(ValueError, match="unpaired surrogate U\\+D800"):
+        jcs({"k\ud800": 1})
+
+
+def test_jcs_accepts_well_formed_astral_pair():
+    assert jcs({"s": "a\U0001F642"}) == '{"s":"a\U0001F642"}'.encode()
+
+
+def test_jcs_rejects_float_that_serializes_as_out_of_range_integer_literal():
+    # A float, not an int, so the existing int guard never sees it. Its
+    # canonical token is the 20-digit literal 10000000000000000000.
+    with pytest.raises(ValueError, match="integer outside IEEE-754 exact range"):
+        jcs(1e19)
+    with pytest.raises(ValueError, match="integer outside IEEE-754 exact range"):
+        jcs(1.7e18)
+    # Exponent-form tokens round-trip through every lane and stay accepted.
+    assert jcs(1e21) == b"1e+21"
+    assert jcs(float(2**53 - 1)) == b"9007199254740991"
+
+
+def test_verify_chain_reports_a_surrogate_as_a_canonicalization_refusal():
+    # The failure must name the encoder fault, not read like tampering.
+    from capsule.chain import verify_chain
+
+    event = {
+        "seq": 1,
+        "event_id": "evt_001",
+        "actor": "human:alice",
+        "kind": "observation",
+        "action": "note",
+        "target": "capsule",
+        "timestamp": "2026-05-07T12:00:00Z",
+        "payload": {"summary": "x\ud83d"},
+        "untrusted_payload_fields": ["payload.summary"],
+        "prev_hash": "0" * 64,
+        "hash": "0" * 64,
+    }
+    result = verify_chain([event])
+    assert result["ok"] is False
+    assert "unpaired surrogate" in result["errors"][0]["message"]

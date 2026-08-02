@@ -90,6 +90,8 @@ procedure.
 ## Document index
 
 - [format.md](format.md) — file layout
+- [canonicalization.md](canonicalization.md) — JCS input domain: the
+  I-JSON acceptance boundary every implementation enforces identically
 - [manifest.md](manifest.md) — manifest.json schema and capsule identity
 - [chain.md](chain.md) — event format and hash linkage
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption

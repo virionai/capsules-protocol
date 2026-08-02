@@ -4,6 +4,7 @@ import com.google.gson.JsonParser
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -25,6 +26,15 @@ class JcsNumbersVectorTest {
             val expected = v.get("expected").asString
             val bits = java.lang.Long.parseUnsignedLong(hex, 16)
             val value = java.lang.Double.longBitsToDouble(bits)
+            if (v.has("accepted") && !v.get("accepted").asBoolean) {
+                // Outside the I-JSON acceptance boundary
+                // (spec/canonicalization.md): "expected" documents the
+                // Number::toString layout, but the value must be refused.
+                assertFailsWith<IllegalArgumentException>(
+                    "bits $hex (would serialize as $expected) must be rejected"
+                ) { JCS.assertAcceptable(JCSValue.Decimal(value)) }
+                continue
+            }
             assertEquals(expected, JCS.canonical(JCSValue.Decimal(value)), "bits $hex")
         }
     }

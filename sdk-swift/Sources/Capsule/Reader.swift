@@ -426,13 +426,30 @@ public enum CapsuleReader {
     /// rejection can be attributed to a specific document (mirrors the Rust
     /// verifier's "failed to parse manifest.json").
     static func parseJSONFile(_ data: Data, name: String) throws -> JCSValue {
-        do { return try parseJSON(data) }
+        let any: Any
+        do { any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) }
         catch { throw CapsuleError.malformed("failed to parse \(name)") }
+        let value = convert(any)
+        // I-JSON acceptance boundary (spec/canonicalization.md). Reported in
+        // its own words, NOT as "failed to parse": the JSON is syntactically
+        // fine, it is the value that lies outside the canonicalization input
+        // domain, and the operator must be able to tell that apart from both
+        // a syntax error and a hash mismatch.
+        do { try JCS.assertAcceptable(value) }
+        catch CapsuleError.malformed(let message) {
+            throw CapsuleError.malformed("\(name): \(message)")
+        }
+        return value
     }
 
     static func parseJSON(_ data: Data) throws -> JCSValue {
         let any = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
-        return convert(any)
+        let value = convert(any)
+        // I-JSON acceptance boundary (spec/canonicalization.md). Rejecting
+        // here means an unacceptable value never reaches a hash comparison,
+        // and the refusal names the path rather than reading as a mismatch.
+        try JCS.assertAcceptable(value)
+        return value
     }
 
     static func convert(_ any: Any) -> JCSValue {

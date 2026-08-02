@@ -427,6 +427,12 @@ public final class CapsuleBuilder {
                 untrustedPayloadFields: []
             ))
         }
+        // I-JSON acceptance boundary (spec/canonicalization.md): refuse to
+        // seal a payload that cannot be canonicalized identically in every
+        // lane, rather than emitting a capsule only this lane can verify.
+        for (i, event) in bare.enumerated() {
+            try JCS.assertAcceptable(event.payload, path: "event[\(i)].payload")
+        }
         let events = try Chain.build(bare)
         guard let firstHash = events.first?.hash, let entryHash = events.last?.hash else {
             throw CapsuleError.malformed("empty chain after build")

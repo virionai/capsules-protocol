@@ -259,6 +259,12 @@ export function verifyCapsule(
 // Lower-level protocol primitives (verifiers, tooling, conformance)
 // ---------------------------------------------------------------------
 
+/**
+ * Throws if `value` is outside the I-JSON acceptance boundary
+ * (spec/canonicalization.md): a plain integer literal beyond ±(2^53 - 1),
+ * a non-finite number, or an unpaired surrogate in any string or key.
+ */
+export function assertIJson(value: unknown, path?: string): void;
 export function jcs(value: unknown): Uint8Array;
 export function sha256(bytes: Uint8Array): Uint8Array;
 export function sha256Hex(bytes: Uint8Array): string;

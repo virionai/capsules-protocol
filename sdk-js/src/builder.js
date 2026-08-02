@@ -1,6 +1,6 @@
 // CapsuleBuilder: assembles a v0.6 capsule and seals it.
 
-import { jcs, sha256, sha256Hex } from "./canonical.js";
+import { assertIJson, jcs, sha256, sha256Hex } from "./canonical.js";
 import {
   buildChainEvents,
   eventsToJsonl,
@@ -129,6 +129,14 @@ export class CapsuleBuilder {
     const applyPith = options.pith !== false && this.pith;
     const rawPayload = event.payload ?? {};
     const payload = applyPith ? compressEventPayload(rawPayload) : rawPayload;
+    // Fail here, not at seal(): a payload outside the I-JSON acceptance
+    // boundary (spec/canonicalization.md) cannot be canonicalized, and the
+    // caller still has the offending value in scope at this point.
+    try {
+      assertIJson(payload, `event[${this.bareEvents.length}].payload`);
+    } catch (err) {
+      throw new Error(`appendEvent: ${err.message}`);
+    }
     this.bareEvents.push({
       actor: event.actor,
       kind,

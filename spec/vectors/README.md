@@ -1,6 +1,6 @@
 # Capsule v0.6 Vectors
 
-This directory contains checked-in protocol vectors. Seven shapes exist, all
+This directory contains checked-in protocol vectors. Eight shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 
@@ -44,6 +44,13 @@ lane):
    value is `1e999`). No fixture in that collection may make a verifier
    raise an unhandled exception: verification is a total function.
 
+   `unicode-boundary/vectors.json` is a positive collection: a capsule whose
+   event summary is 200 astral code points, long enough that the Pith
+   normalizer must truncate it. Every implementation MUST verify it
+   `ok: true`. Before the surrogate-pair-safe cut it verified only in the
+   lane that produced it and failed everywhere else with a chain-hash error
+   that read like tampering (`spec/canonicalization.md`, `spec/pith.md`).
+
    Independent implementations SHOULD reproduce these outcomes; the Python
    (`sdk-py/tests/test_spec_registry.py`) lane consumes all of these
    collections and the Rust (`verifier-rust/tests/spec_registry.rs`) lane
@@ -60,10 +67,13 @@ lane):
    signature over the reconstructed signing input.
 
 4. **JCS number-serialization set** (`jcs-numbers.json`): a `vectors` array
-   of `{ ieee_hex, expected }` entries, where `ieee_hex` is the big-endian
-   IEEE-754 binary64 bit pattern of the input and `expected` its canonical
-   RFC 8785 serialization. Implementations must parse the bit pattern (not
-   the expected string) and serialize it.
+   of `{ ieee_hex, expected, accepted? }` entries, where `ieee_hex` is the
+   big-endian IEEE-754 binary64 bit pattern of the input and `expected` its
+   canonical RFC 8785 serialization. Implementations must parse the bit
+   pattern (not the expected string) and serialize it. `accepted: false`
+   marks a bit pattern outside the I-JSON acceptance boundary
+   (`spec/canonicalization.md`): `expected` records the `Number::toString`
+   layout for reference, but canonicalization MUST refuse the value.
 
 5. **Ed25519 key/signature validation set** (`ed25519-key-validation.json`,
    detected by `meta.kind: "ed25519-verify"`) — a `vectors` array of
@@ -108,6 +118,20 @@ lane):
    (`test_jcs_key_order_registry`), Rust (`jcs_key_order_registry`), Swift
    (`testJcsKeyOrderRegistry`) and Kotlin (`jcsKeyOrderRegistry`).
 
+8. **I-JSON acceptance set** (`ijson-acceptance.json`, detected by
+   `meta.kind: "ijson-acceptance"`) — a `vectors` array of
+   `{ name, input_json, expect, canonical?, reason? }` entries. `input_json`
+   is raw JSON text; each implementation feeds it to its own parser and then
+   canonicalizes. `expect: "accept"` pins the canonical output.
+   `expect: "reject"` is satisfied by refusal at parse time OR at
+   canonicalization time — both are conforming; what is normative is that the
+   value never reaches a hash. The `reason` categories
+   (`integer_out_of_range`, `unpaired_surrogate`) are normative; exact error
+   strings are implementation-defined. All five lanes consume this set: JS
+   (the checker itself), Python (`test_ijson_acceptance_boundary`), Rust
+   (`ijson_acceptance_boundary`), Swift (`testIJsonAcceptanceRegistry`) and
+   Kotlin (`ijsonAcceptanceRegistry`). See `spec/canonicalization.md`.
+
 Other JSON here (e.g. `tamper-detection/output/keys.json`,
 `unknown-fields/output/keys.json`, and `signer-set/output/keys.json`) is
 supporting material, not a vector, and is ignored by the checker.
@@ -132,6 +156,10 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-jcs-key-order-vector.mjs` → `jcs-key-order.json`
   (self-contained; the case list lives in the generator, and the output is
   pure ASCII with surrogate halves escaped individually)
+- `sdk-js/tools/generate-unicode-boundary-fixture.mjs` →
+  `unicode-boundary/output/` (fixed throwaway TEST keypair; byte-stable,
+  supports `--check`). Builds through `CapsuleBuilder.appendEvent`, so the
+  Pith truncation path is the thing under test.
 - `sdk-js/tools/generate-attestation-vectors.mjs` →
   `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
   byte-stable, supports `--check`)

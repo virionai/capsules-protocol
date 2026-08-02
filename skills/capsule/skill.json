@@ -94,7 +94,7 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "0f97015f92543066afd4bf9c601f7dcb080b0f787624fc350928aee0307e1027"
+        "sha256": "fd56a22f941d9b30680b8d9c7b787b2836b6c6009212fd0f5b9917907fba7ecd"
       },
       {
         "path": "spec/format.md",
@@ -109,7 +109,7 @@
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "c590f9949201f9debcdb10e6132430cf0848adbe44e683420d02a237e8990d2e"
+        "sha256": "42c49394332073f757ac8508e9eb0f0b679bdb9cade975b848a571606adf6e85"
       },
       {
         "path": "spec/envelope.md",
@@ -124,7 +124,7 @@
       {
         "path": "spec/pith.md",
         "title": "Pith context style",
-        "sha256": "adb8e133420028e7b41ab7bfcc647540e675c11616722ef63090051259b40a51"
+        "sha256": "bc689802da6a74b1eb5ad420fe24443272ff94dfc7f46b323d458c47af50fbd9"
       },
       {
         "path": "skills/capsule/SKILL.md",

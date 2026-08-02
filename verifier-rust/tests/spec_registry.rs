@@ -13,6 +13,8 @@
 //!   - chain-rules/vectors.json        (per-event actor + kind field rules)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
+//!   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
+//!   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 //!
 //! The registry's `reason` categories are normative; the substring tables
 //! below map each category onto this lane's error messages.
@@ -22,7 +24,8 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use capsule_verify::{
-    ed25519_verify, jcs, sha256_hex, unpack_zip, verify_capsule, VerifyOptions, VerifyResult,
+    check_ijson, ed25519_verify, jcs, sha256_hex, unpack_zip, verify_capsule, VerifyOptions,
+    VerifyResult,
 };
 use serde_json::Value;
 
@@ -264,6 +267,72 @@ fn chain_rule_registry_outcomes() {
         let name = v["name"].as_str().expect("name");
         let result = verify_fixture(&base, &allowlist, v);
         assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// A JS-built capsule carrying Pith-truncated astral text must verify here.
+/// A failure means this lane's canonicalization disagrees on well-formed
+/// astral text — not that the capsule was tampered with.
+#[test]
+fn unicode_boundary_registry_outcomes() {
+    let path = vectors_dir().join("unicode-boundary/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Normative reject-reason vocabulary from `ijson-acceptance.json`.
+const IJSON_REASONS: &[&str] = &["integer_out_of_range", "unpaired_surrogate"];
+
+/// `spec/canonicalization.md`: the acceptance boundary is identical in every
+/// lane. A reject vector is satisfied by refusal at parse time OR at the
+/// canonicalization gate — whichever this lane reaches first. In Rust
+/// `serde_json` refuses lone-surrogate escapes at parse; `check_ijson`
+/// refuses out-of-range integer literals.
+#[test]
+fn ijson_acceptance_boundary() {
+    let path = vectors_dir().join("ijson-acceptance.json");
+    let doc = load_json(&path);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let text = v["input_json"].as_str().expect("input_json");
+        let expect = v["expect"].as_str().expect("expect");
+        let parsed: Value = match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(e) => {
+                assert_eq!(expect, "reject", "{name}: an accept vector must parse ({e})");
+                continue;
+            }
+        };
+        if expect == "accept" {
+            check_ijson(&parsed).unwrap_or_else(|e| panic!("{name}: must be accepted: {e}"));
+            let canonical = v["canonical"].as_str().expect("canonical");
+            assert_eq!(
+                String::from_utf8(jcs(&parsed)).expect("utf8"),
+                canonical,
+                "{name}"
+            );
+            continue;
+        }
+        assert_eq!(expect, "reject", "{name}: expect must be accept or reject");
+        let reason = v["reason"].as_str().expect("reason");
+        assert!(
+            IJSON_REASONS.contains(&reason),
+            "{name}: unknown reason {reason:?}"
+        );
+        assert!(
+            check_ijson(&parsed).is_err(),
+            "{name}: parsed, so the canonicalization gate must refuse it"
+        );
     }
 }
 

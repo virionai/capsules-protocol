@@ -67,6 +67,24 @@ tune. Two implementations producing the same JSON event after
 normalization are considered conformant; byte-for-byte identical
 normalized output across implementations is *not* a v0.6 promise.
 
+## Truncation and the canonicalization boundary
+
+Normalized text is canonicalized and hashed. The normalizer therefore MUST
+NOT produce a string that JCS cannot accept.
+
+Concretely: `maxChars` counts characters, and a truncating implementation
+MUST cut on a Unicode code-point boundary. Cutting at a UTF-16 code-unit
+index splits surrogate pairs — with the default `maxChars` of 280 the cut
+index is odd, so ordinary text containing emoji lands mid-pair — and the
+resulting unpaired surrogate is outside the acceptance boundary in
+[canonicalization.md](canonicalization.md). The capsule then seals in the
+implementation that produced it and fails to verify everywhere else, with
+an error that reads like tampering.
+
+This is a MUST even though byte-identical normalizer output is not a v0.6
+promise: what varies across implementations is *where* the cut lands, not
+*whether* the result is well-formed Unicode.
+
 ## Opting out
 
 Per-builder:
