@@ -89,6 +89,32 @@ incompatible wire changes ship as `0.7`).
 
 ### Changed
 
+- **Federation identity attestations now bind to something.**
+  `verifyIdentityAttestation` requires the caller to supply `capsuleId`,
+  `signerPublicKeyHex`, and `expectedIssuer` (plus `audience` for the JWT
+  profile) and rejects any attestation whose `capsule_id` /
+  `signer_public_key` / `signer_role` binding claims are absent — a raw
+  provider session token, which carries no `cap` object, previously
+  verified with a fully populated subject. `verifyJwt` requires an
+  expected issuer and audience instead of checking `iss` against a field
+  of the same untrusted wrapper. `kid` now selects exactly one trust root
+  or none, instead of falling back to any cached key with a matching
+  `alg`. An Ed25519 OKP JWK is decoded into raw key bytes, so an issuer
+  publishing its native trust root as a standard JWKS is consumable. An
+  unparseable or absent `expires_at` is a rejection rather than "never
+  expires" (and a garbage JWT `exp` no longer crashes the verifier).
+  `evaluateSignerPolicy` takes a required `{ capsuleId }` and drops
+  attestations bound to another capsule. Every result carries a
+  machine-readable `status` from `spec/federation.md`'s own vocabulary
+  (`attestation_verified` / `attestation_unverified` /
+  `attestation_rejected`), pinned by the new
+  `spec/vectors/identity-attestation/` registry, and the subject/claims
+  projection is nested under `identity` — non-null only when verified —
+  so a caller can never read a claim without its basis.
+  `fetchIssuerMetadata` requires `issuer` to match the fetch origin and
+  `loadTrustRoots` requires `jwks_uri` to share it. `spec/federation.md`
+  and `spec/profiles/clerk.md` state these as normative verifier rules.
+  Wire format unchanged; the overlay API is a breaking change.
 - **Container strictness is now uniform and checked against the raw
   central directory.** All readers reject duplicate entry names (a ZIP
   parser differential); the JS reference reader now rejects non-STORED

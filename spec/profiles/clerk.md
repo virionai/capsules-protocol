@@ -33,6 +33,7 @@ Sealing flow (authoring time):
 ```jsonc
 {
   "iss": "https://clerk.<instance>",   // or the app issuer
+  "aud": "<verifying host's attestation audience>",
   "sub": "user_123",                    // Clerk user id
   "org_id": "org_456",
   "org_role": "admin",
@@ -52,15 +53,34 @@ Sealing flow (authoring time):
    sidecar.
 
 Verifying (offline, given the cached Clerk JWKS): `verifyIdentityAttestation`
-verifies the JWT signature against the JWKS, checks `exp`, and confirms the
-`cap` binding matches the capsule and signer being verified. A verifier
-without the JWKS still verifies the capsule math and reports the signer as
-identity-unverified.
+verifies the JWT signature against the JWKS and requires the caller to supply
+the capsule id, the signer key, the expected issuer, and the expected
+audience. It then checks `exp`, checks `iss`/`aud` against those
+caller-supplied values, and requires the `cap` binding to be present and to
+match the capsule and signer being verified:
+
+```js
+const res = federation.verifyIdentityAttestation(attestation, {
+  trustRoots: clerkJwks,          // cached out-of-band
+  capsuleId,                      // the capsule being verified
+  signerPublicKeyHex,             // the signer being checked
+  expectedIssuer: "https://clerk.<instance>",
+  audience: "<this host's attestation audience>",
+});
+// res.status is "attestation_verified" | "attestation_unverified" | "attestation_rejected"
+// res.identity is { status, subject, claims } ONLY when verified; null otherwise —
+// the subject is never readable without its verification basis.
+```
+
+A verifier without the JWKS still verifies the capsule math and reports
+`attestation_unverified` — *unknown*, not a negative signal.
 
 > Clerk session tokens are short-lived and audience-bound to the app; they are
 > not themselves capsule attestations. The backend mints a **purpose-scoped**
 > attestation JWT (a Clerk JWT template, or the app's own issuer key published
-> in the issuer metadata JWKS). Never embed a raw end-user session token.
+> in the issuer metadata JWKS) carrying `cap` and an `aud` naming the
+> verifying host. Never embed a raw end-user session token: it has no `cap`
+> binding, so verification rejects it.
 
 ## Encryption: recipients from the Clerk directory
 
@@ -96,19 +116,28 @@ const policy = { issuer, required: [
   { role: "originator", org_role: "admin" },
   { role: "reviewer",  quorum: 2 },
 ]};
-const decision = federation.evaluateSignerPolicy(verifyResult, attestedSigners, policy);
+const decision = federation.evaluateSignerPolicy(
+  verifyResult, attestedSigners, policy, { capsuleId });
 ```
 
-`attestedSigners` are the claims of attestations already verified with
-`verifyIdentityAttestation`. The check is offline and does not alter the
-cryptographic verification result.
+`attestedSigners` are the verified identity claims of attestations already
+checked with `verifyIdentityAttestation` (each result's `identity.claims`,
+non-null only when the attestation verified), including their `capsule_id`.
+Policy re-checks that binding against `capsuleId`, so an attestation minted
+for another capsule cannot satisfy a requirement here. The check is offline
+and does not alter the cryptographic verification result.
 
 ## Security notes
 
 - The JWKS is a **trust root**: obtain it out-of-band and pin/cache it. Clerk
-  rotates signing keys; refresh on the host's schedule (`kid` selects the key).
-- Attestations bind exactly one `capsule_id` + `signer_public_key`; they cannot
-  be replayed onto another capsule.
+  rotates signing keys; refresh on the host's schedule. `kid` selects the key
+  and selection fails closed: an unknown `kid` resolves to no key rather than
+  falling back to another key in the cached set, so a cached multi-key or
+  multi-issuer JWKS cannot be used to accept an attestation signed by any key
+  in it.
+- Attestations bind exactly one `capsule_id` + `signer_public_key`, and both
+  the attestation check and the policy check re-verify that binding against
+  the capsule in hand; they cannot be replayed onto another capsule.
 - Publishing an X25519 key in public metadata is intentional and safe — it is
   an encryption public key, never a secret.
 - This profile adds **no** revocation. A compromised Clerk key is contained by
