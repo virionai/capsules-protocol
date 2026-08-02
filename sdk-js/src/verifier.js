@@ -175,6 +175,19 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     errors.push(`capsule_id derivation failed: ${err.message}`);
   }
 
+  // Semantic binding: manifest.first_event_hash is the capsule_id input;
+  // envelope.first_event_hash is what the chain walk below is checked
+  // against. spec/manifest.md and spec/envelope.md both pin them to the
+  // hash of chain event 1, so they must be equal — otherwise capsule_id
+  // (the identity federation attestations bind to) names a chain the
+  // capsule does not carry. Null==null is the legal empty-chain shape;
+  // the chain walk enforces anchor/event-count consistency separately.
+  if ((manifest.first_event_hash ?? null) !== (envelope.first_event_hash ?? null)) {
+    errors.push(
+      `manifest.first_event_hash mismatch: ${manifest.first_event_hash} vs envelope.first_event_hash ${envelope.first_event_hash}`,
+    );
+  }
+
   // Manifest hash. Unknown members are hashed too (spec/manifest.md), so a
   // hostile value in one — 1e999 parses as Infinity, which JCS refuses —
   // must surface as a recompute failure, not an exception. Mirrors sdk-py.
@@ -249,6 +262,38 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     }
     if (envelope.cipher !== "none") {
       errors.push(`plain capsule must have cipher='none', got '${envelope.cipher}'`);
+    }
+  }
+
+  // Encryption declaration. spec/manifest.md fixes manifest.encryption as
+  // null for plain capsules and { metadata_path, cipher } for encrypted
+  // ones. The SIGNED envelope.cipher is authoritative; the manifest
+  // declaration must agree with it, and the declared metadata_path must
+  // resolve to a file that exists AND is covered by the content index.
+  const declaredEncryption = manifest.encryption ?? null;
+  if (envelope.cipher === "none") {
+    if (declaredEncryption !== null) {
+      errors.push("manifest.encryption must be null when envelope.cipher is 'none'");
+    }
+  } else if (declaredEncryption === null || typeof declaredEncryption !== "object") {
+    errors.push(
+      `manifest.encryption must be an object when envelope.cipher is '${envelope.cipher}'`,
+    );
+  } else {
+    if (declaredEncryption.cipher !== envelope.cipher) {
+      errors.push(
+        `manifest.encryption.cipher mismatch: ${JSON.stringify(declaredEncryption.cipher)} vs envelope.cipher '${envelope.cipher}'`,
+      );
+    }
+    const metadataPath = declaredEncryption.metadata_path;
+    if (typeof metadataPath !== "string" || metadataPath.length === 0) {
+      errors.push("manifest.encryption.metadata_path must be a non-empty string");
+    } else if (!files.has(metadataPath)) {
+      errors.push(`manifest.encryption.metadata_path missing from capsule: ${metadataPath}`);
+    } else if (!manifest.content_index.files.some((f) => f.path === metadataPath)) {
+      errors.push(
+        `manifest.encryption.metadata_path not covered by content index: ${metadataPath}`,
+      );
     }
   }
 
