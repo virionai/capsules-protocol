@@ -1,6 +1,7 @@
 // JCS — RFC 8785 canonicalization, ported from the JavaScript reference SDK.
 //
-// Object keys sorted by UTF-16 code units. Numbers via shortest-roundtrip,
+// Object keys sorted by UTF-16 code units (JCS.utf16Less, NOT Swift's
+// `String <`). Numbers via shortest-roundtrip,
 // rejecting NaN/Infinity. Strings escape only RFC 8259 mandatory chars and
 // U+0000..U+001F. Arrays preserve order.
 
@@ -63,11 +64,15 @@ public enum JCS {
         case .array(let arr):
             return "[" + (try arr.map(canonical).joined(separator: ",")) + "]"
         case .object(let pairs):
-            // Sort by key; UTF-16 code-unit order is the default for Swift's
-            // String comparison when both sides are pure-BMP. For correctness
-            // beyond BMP we'd compare code-unit views explicitly; chain keys
-            // are ASCII so this is exact.
-            let sorted = pairs.sorted { $0.0 < $1.0 }
+            // RFC 8785 §3.2.3: members sort on their UTF-16 code-unit
+            // sequences. Swift's `String <` compares normalized Unicode
+            // scalars and disagrees twice over: a supplementary-plane key
+            // (U+10000+, lead surrogate 0xD800..0xDBFF) sorts BELOW
+            // U+E000..U+FFFF in UTF-16 but above it by scalar value, and
+            // canonically equivalent keys ("e" + U+0301 vs U+00E9) compare
+            // EQUAL, leaving their relative order to the sort's unspecified
+            // stability. Pinned by spec/vectors/jcs-key-order.json.
+            let sorted = pairs.sorted { utf16Less($0.0, $1.0) }
             return "{" + (try sorted.map { try encodeString($0.0) + ":" + canonical($0.1) }
                 .joined(separator: ",")) + "}"
         }
@@ -75,6 +80,19 @@ public enum JCS {
 
     public static func bytes(_ v: JCSValue) throws -> Data {
         return Data(try canonical(v).utf8)
+    }
+
+    /// Strict UTF-16 code-unit ordering, per RFC 8785 §3.2.3.
+    ///
+    /// `String.UTF16View.Element` is `UInt16`, so a lexicographic
+    /// comparison of the two views is a comparison of code-unit sequences —
+    /// exactly what the spec asks for, with no normalization and no
+    /// collation. Also the comparator for content-index entry order
+    /// (`Manifest.buildContentIndex`) and ZIP entry order
+    /// (`CapsuleZip.pack`), both of which must agree with the JS reference
+    /// lane, where `a < b` on a JS string already IS UTF-16 order.
+    internal static func utf16Less(_ a: String, _ b: String) -> Bool {
+        return a.utf16.lexicographicallyPrecedes(b.utf16)
     }
 
     /// RFC 8785 §3.2.2.3: serialize per ECMAScript Number::toString
