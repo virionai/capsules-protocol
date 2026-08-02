@@ -236,9 +236,10 @@ export interface VerifyResult {
 }
 
 /**
- * Verify a capsule. Accepts a CapsuleReader or the raw .capsule bytes;
- * given bytes, an unopenable container returns a fail-closed result
- * instead of throwing.
+ * Verify a capsule. Accepts a CapsuleReader or the raw .capsule bytes.
+ * Total: never throws, for any input. An unopenable container, a
+ * malformed manifest, and a malformed chain all come back as a
+ * fail-closed result with the reason in `errors`.
  */
 export function verifyCapsule(
   readerOrBytes: CapsuleReader | Uint8Array | ArrayBuffer,

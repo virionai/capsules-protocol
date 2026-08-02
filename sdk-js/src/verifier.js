@@ -21,6 +21,21 @@ import { verifyEnvelopeSignatures } from "./envelope.js";
 import { CapsuleReader } from "./reader.js";
 import { toKeyHex } from "./keys.js";
 
+/** The documented fail-closed result: every channel present, nothing trusted. */
+function failClosed(message, level) {
+  return {
+    ok: false,
+    level,
+    errors: [message],
+    chain: { ok: false, errors: [] },
+    contentIndex: { ok: false, errors: [] },
+    envelope: { ok: false, signers: [] },
+    signerSet: { bound: false, ok: false, errors: [] },
+    trustedSignerCount: 0,
+    notes: [],
+  };
+}
+
 /**
  * verifyCapsule(readerOrBytes, options)
  *
@@ -28,6 +43,10 @@ import { toKeyHex } from "./keys.js";
  * a container that cannot even be opened (malformed ZIP, missing or
  * invalid manifest/envelope) returns a fail-closed result — app code
  * needs no separate try/catch around opening.
+ *
+ * This function is total: it never throws, for any input. A capsule that
+ * cannot be fully evaluated comes back as a fail-closed result with the
+ * underlying message in `errors`.
  *
  * options:
  *   allowlist:     signer public keys to trust (hex strings or 32-byte
@@ -58,6 +77,18 @@ import { toKeyHex } from "./keys.js";
  * trustedSignerCount counts DISTINCT trusted public keys, not signer rows.
  */
 export async function verifyCapsule(readerOrBytes, options = {}) {
+  const level = options?.outerEnvelope ? "L3" : "L2";
+  try {
+    return await verifyCapsuleInner(readerOrBytes, options);
+  } catch (err) {
+    // The contract above promises callers a result, not an exception, for
+    // every input. Anything that escapes the checks below is a capsule we
+    // could not fully evaluate, which is a verification failure.
+    return failClosed(`verification failed: ${err?.message ?? String(err)}`, level);
+  }
+}
+
+async function verifyCapsuleInner(readerOrBytes, options = {}) {
   let reader = readerOrBytes;
   if (reader instanceof Uint8Array || reader instanceof ArrayBuffer) {
     try {
@@ -65,17 +96,7 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
         reader instanceof ArrayBuffer ? new Uint8Array(reader) : reader,
       );
     } catch (err) {
-      return {
-        ok: false,
-        level: "L2",
-        errors: [`capsule cannot be opened: ${err.message}`],
-        chain: { ok: false, errors: [] },
-        contentIndex: { ok: false, errors: [] },
-        envelope: { ok: false, signers: [] },
-        signerSet: { bound: false, ok: false, errors: [] },
-        trustedSignerCount: 0,
-        notes: [],
-      };
+      return failClosed(`capsule cannot be opened: ${err.message}`, "L2");
     }
   }
   const errors = [];
@@ -129,12 +150,18 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
     errors.push(`capsule_id derivation failed: ${err.message}`);
   }
 
-  // Manifest hash
-  const expectedManifestHash = manifestHash(manifest);
-  if (expectedManifestHash !== envelope.manifest_hash) {
-    errors.push(
-      `envelope.manifest_hash mismatch: ${envelope.manifest_hash} vs recomputed ${expectedManifestHash}`,
-    );
+  // Manifest hash. Unknown members are hashed too (spec/manifest.md), so a
+  // hostile value in one — 1e999 parses as Infinity, which JCS refuses —
+  // must surface as a recompute failure, not an exception. Mirrors sdk-py.
+  try {
+    const expectedManifestHash = manifestHash(manifest);
+    if (expectedManifestHash !== envelope.manifest_hash) {
+      errors.push(
+        `envelope.manifest_hash mismatch: ${envelope.manifest_hash} vs recomputed ${expectedManifestHash}`,
+      );
+    }
+  } catch (err) {
+    errors.push(`manifest hash recompute failed: ${err.message}`);
   }
 
   // Content index. content.enc is excluded only when the capsule declares a
@@ -210,10 +237,14 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
       result.chain = { ok: false, errors: [{ seq: 0, message: err.message }] };
     }
     if (events.length === 0) {
-      result.chain ??= {
-        ok: false,
-        errors: [{ seq: 0, message: "chain/events.jsonl missing or empty" }],
-      };
+      // ??= would never fire here (result.chain is always an object), so a
+      // missing chain file used to fail with NO displayable message.
+      if (result.chain.errors.length === 0) {
+        result.chain = {
+          ok: false,
+          errors: [{ seq: 0, message: "chain/events.jsonl missing or empty" }],
+        };
+      }
     } else {
       result.chain = verifyChain(events);
       const { firstEventHash, entryHash } = firstAndEntryHash(events);
