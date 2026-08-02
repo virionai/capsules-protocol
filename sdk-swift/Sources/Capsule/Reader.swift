@@ -469,6 +469,29 @@ public enum CapsuleReader {
                         + Chain.EVENT_KINDS.joined(separator: ", ")
                 )
             }
+            // spec/chain.md verification step 5 — `seq` is strictly
+            // monotonic from 1. The stored value must equal the event's
+            // 1-based position; trusting the stored seq (or merely
+            // counting events) accepts a renumbered chain.
+            let seqValue = pairs.first(where: { $0.0 == "seq" })?.1
+            var storedSeq: Int64? = nil
+            var seqRendered = "undefined"
+            switch seqValue {
+            case .some(.integer(let n)):
+                storedSeq = n
+                seqRendered = String(n)
+            case .some(.string(let s)):
+                seqRendered = Chain.debugQuoted(s)
+            case .some(.decimal(let d)):
+                seqRendered = String(d)
+            case .some:
+                seqRendered = "non-integer"
+            case nil:
+                break
+            }
+            if storedSeq != Int64(seq) {
+                errors.append("seq \(seq): seq \(seqRendered) expected \(seq)")
+            }
             var withoutHash: [(String, JCSValue)] = []
             var stored: String?
             for (k, v) in pairs {

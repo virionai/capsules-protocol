@@ -133,6 +133,26 @@ async function main() {
   unboundBuilder.appendEvent(bareEvent());
   const unboundActors = await seal(unboundBuilder, originator);
 
+  // (4) non-contiguous-seq: the single event carries seq=2 (bare-event
+  // fields override the builder's assignment), correctly hashed and
+  // signed — so ONLY spec/chain.md verification step 5 ("seq is strictly
+  // monotonic from 1") decides it. A verifier that trusts the stored seq
+  // or only counts events reports ok=true and fails the registry.
+  const seqBuilder = newBuilder(originator, DECLARED);
+  seqBuilder.bareEvents.push(bareEvent({ seq: 2 }));
+  const nonContiguousSeq = await seal(seqBuilder, originator);
+
+  // (5) participant-without-label (positive control): the declared
+  // participant carries only actor_id + role. The base spec requires
+  // actor_id (pattern) and nothing else — `label` is advisory — so this
+  // MUST verify with the actor set bound. A lane whose typed manifest
+  // view demands `label` refuses a spec-valid capsule (addendum A12).
+  const noLabelBuilder = newBuilder(originator, [
+    { actor_id: "human:origin", role: "originator" },
+  ]);
+  noLabelBuilder.appendEvent(bareEvent());
+  const participantWithoutLabel = await seal(noLabelBuilder, originator);
+
   const keys = {
     originator: {
       publicKey: originator.publicKeyHex,
@@ -144,6 +164,8 @@ async function main() {
     ["actor-not-participant.capsule", actorNotParticipant],
     ["unknown-kind.capsule", unknownKind],
     ["unbound-actors.capsule", unboundActors],
+    ["non-contiguous-seq.capsule", nonContiguousSeq],
+    ["participant-without-label.capsule", participantWithoutLabel],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

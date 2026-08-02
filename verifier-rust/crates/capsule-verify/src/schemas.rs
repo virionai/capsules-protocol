@@ -75,11 +75,20 @@ pub struct Originator {
 
 /// Participant entry: a non-originator party whose role is recorded in the
 /// manifest for trust and audit purposes.
+///
+/// `label` is advisory display text and OPTIONAL on the wire: the base spec
+/// (manifest.md field rules) requires only the `actor_id` pattern. This lane
+/// used to demand `label` in the typed view, refusing a spec-valid capsule
+/// that every other lane verified (addendum A12); conformance vector
+/// `chain-rules/participant-without-label` pins the fix. This struct is a
+/// VIEW, never a hashing input, so `skip_serializing_if` cannot change any
+/// hashed bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Participant {
     pub actor_id: String,
     pub role: String,
-    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// One row of the content index: a path inside the capsule and the SHA-256

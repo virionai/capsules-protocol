@@ -43,6 +43,25 @@
         "notes_includes": "chain actors are not bound to a declared participant set"
       },
       "note": "Positive control: participants[] is EMPTY and the single event names human:origin anyway. Absence is a weaker claim made honestly — the verifier MUST verify this capsule and MUST report the unbound actor set, never an unqualified pass and never a rejection."
+    },
+    {
+      "name": "non-contiguous-seq",
+      "capsule_file": "output/non-contiguous-seq.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["chain"],
+        "error_includes": "seq 2 expected 1"
+      },
+      "note": "chain.md verification step 5: seq is strictly monotonic from 1. The single event carries seq=2, correctly hashed and signed, so only the seq rule can fail it. A verifier that trusts the stored seq or merely counts events reports ok=true."
+    },
+    {
+      "name": "participant-without-label",
+      "capsule_file": "output/participant-without-label.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the declared participant carries only actor_id + role. The base spec (manifest.md field rules) requires the actor_id pattern and nothing else — label is advisory display text — so every lane MUST verify this capsule with the actor set bound. A lane whose typed manifest view demands label refuses a spec-valid capsule (addendum A12)."
     }
   ]
 }

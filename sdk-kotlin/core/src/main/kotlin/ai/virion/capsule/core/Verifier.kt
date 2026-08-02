@@ -426,6 +426,21 @@ object CapsuleVerifier {
                 errors += "seq $seq: kind ${Chain.debugQuoted(kind)} is not one of " +
                     Chain.EVENT_KINDS.joinToString(", ")
             }
+            // spec/chain.md verification step 5 — `seq` is strictly
+            // monotonic from 1. The stored value must equal the event's
+            // 1-based position; trusting the stored seq (or merely
+            // counting events) accepts a renumbered chain.
+            val seqValue = obj.pairs.firstOrNull { it.first == "seq" }?.second
+            val storedSeq = (seqValue as? JCSValue.Integer)?.v
+            if (storedSeq != seq.toLong()) {
+                val rendered = when (seqValue) {
+                    is JCSValue.Integer -> seqValue.v.toString()
+                    is JCSValue.Str -> Chain.debugQuoted(seqValue.v)
+                    null -> "undefined"
+                    else -> "non-integer"
+                }
+                errors += "seq $seq: seq $rendered expected $seq"
+            }
 
             var stored: String? = null
             val withoutHash = mutableListOf<Pair<String, JCSValue>>()
