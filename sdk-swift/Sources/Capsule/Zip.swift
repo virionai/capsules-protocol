@@ -148,6 +148,11 @@ public enum CapsuleZip {
         let cdEnd = eocd
         var out: [(String, Data)] = []
         var totalBytes = 0
+        // Entry-name and entry-shape checks run on the name as stored in the
+        // central directory, before any map/dictionary collapse — a reader
+        // that dedupes on load silently accepts archives other readers reject
+        // (spec/format.md "Container properties").
+        var seen = Set<String>()
         var p = cdOffset
         while p < cdEnd {
             guard p + 46 <= cdEnd else {
@@ -164,6 +169,7 @@ public enum CapsuleZip {
             let nameLen = Int(try read16(b, p + 28))
             let extraLen = Int(try read16(b, p + 30))
             let commentLen = Int(try read16(b, p + 32))
+            let externalAttrs = try read32(b, p + 38)
             let localOff = Int(try read32(b, p + 42))
             guard compression == 0 else {
                 throw CapsuleError.malformed("zip: only STORED supported")
@@ -181,6 +187,18 @@ public enum CapsuleZip {
             }
             let name = String(decoding: b[(p + 46)..<(p + 46 + nameLen)], as: UTF8.self)
             try assertSafePath(name)
+            // Duplicate names are a parser differential (ZIP libraries
+            // disagree on which copy wins), so a signed capsule must never
+            // contain one.
+            guard !seen.contains(name) else {
+                throw CapsuleError.malformed("zip: duplicate entry: \(name)")
+            }
+            seen.insert(name)
+            // Unix mode bits live in the high 16 bits of the external attrs.
+            let mode = (externalAttrs >> 16) & 0xFFFF
+            if (mode & 0o170000) == 0o120000 {
+                throw CapsuleError.malformed("zip entry is a symlink: \(name)")
+            }
             p = next
 
             // Local header + entry data must live entirely before the
