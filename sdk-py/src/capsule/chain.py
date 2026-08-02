@@ -11,6 +11,46 @@ from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs, sha256
 GENESIS_PREV_BYTES: bytes = b"\x00" * 32
 GENESIS_PREV_HEX: str = "0" * 64
 
+#: The closed ``kind`` enum from spec/chain.md "Field rules". Readers reject
+#: unknown kinds and builders refuse to append them — in every tier, because
+#: a custom kind is not a weaker claim, it is unreadable to the foreign LLM
+#: reader the format serves.
+EVENT_KINDS: tuple[str, ...] = (
+    "decision",
+    "observation",
+    "mutation",
+    "session",
+    "checkpoint",
+)
+
+_EVENT_KIND_SET = frozenset(EVENT_KINDS)
+
+#: The one actor a chain event may always name without a matching manifest
+#: participant — backstop events emitted by the host runtime.
+HOST_ACTOR = "system:host"
+
+
+def is_valid_event_kind(kind: object) -> bool:
+    """True when ``kind`` is one of the five values spec/chain.md allows."""
+    return isinstance(kind, str) and kind in _EVENT_KIND_SET
+
+
+def participant_actor_ids(participants: object) -> set[str]:
+    """Normalize a manifest ``participants[]`` list into a set of actor ids.
+
+    Accepts participant mappings (``{"actor_id": ...}``) or bare actor-id
+    strings; anything else is ignored.
+    """
+    out: set[str] = set()
+    if not isinstance(participants, (list, tuple)):
+        return out
+    for p in participants:
+        if isinstance(p, str):
+            out.add(p)
+        elif isinstance(p, dict) and isinstance(p.get("actor_id"), str):
+            out.add(p["actor_id"])
+    return out
+
 # Chain-bound hex is lowercase per spec/chain.md. verify_chain feeds a
 # stored hash straight into hex_to_bytes to seed the next link, so the
 # canonical-form check has to happen before that call, not inside it.
@@ -95,15 +135,50 @@ def events_from_jsonl(data: bytes) -> list[dict]:
     return out
 
 
-def verify_chain(events: list[dict]) -> ChainResult:
-    """Verify a chain. Returns ChainResult with ok and collected errors."""
+def verify_chain(events: list[dict], *, participants: object = None) -> ChainResult:
+    """Verify a chain. Returns ChainResult with ok and collected errors.
+
+    ``participants`` is the manifest's ``participants[]``. The
+    spec/chain.md step-6 actor rule is CONDITIONAL on that claim: when the
+    set is non-empty, every event actor must be a member or the literal
+    ``"system:host"`` (fail-closed); when it is empty or absent, the
+    manifest binds no actor set and the walk accepts any actor — the
+    CALLER (``verify_capsule``) reports the reduced assurance. The
+    ``kind`` enum is enforced unconditionally.
+    """
     errors: list[ChainError] = []
+    participant_ids = participant_actor_ids(participants)
     prev = GENESIS_PREV_BYTES
     for i, e in enumerate(events):
         if not isinstance(e, dict):
             errors.append({"seq": i + 1, "message": "event is not a JSON object"})
             continue
         seq = e.get("seq", i + 1)
+        # spec/chain.md step 6 — when the manifest declares participants,
+        # the actor must be one of them or the host. An empty set is no
+        # claim.
+        actor = e.get("actor")
+        if participant_ids and actor != HOST_ACTOR and actor not in participant_ids:
+            errors.append(
+                {
+                    "seq": seq,
+                    "message": (
+                        f"actor {json.dumps(actor)} not in manifest.participants "
+                        "and not system:host"
+                    ),
+                }
+            )
+        # spec/chain.md "Field rules" — `kind` is a closed enum.
+        if not is_valid_event_kind(e.get("kind")):
+            errors.append(
+                {
+                    "seq": seq,
+                    "message": (
+                        f"kind {json.dumps(e.get('kind'))} is not one of "
+                        + ", ".join(EVENT_KINDS)
+                    ),
+                }
+            )
         if e.get("seq") != i + 1:
             errors.append({"seq": seq, "message": f"seq {e.get('seq')} expected {i + 1}"})
         if not isinstance(e.get("prev_hash"), str) or len(e["prev_hash"]) != 64:

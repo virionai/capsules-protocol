@@ -7,7 +7,15 @@ import re
 from dataclasses import dataclass
 
 from .canonical import bytes_to_hex, hex_to_bytes, jcs, sha256_hex
-from .chain import build_chain_events, events_to_jsonl, first_and_entry_hash
+from .chain import (
+    EVENT_KINDS,
+    HOST_ACTOR,
+    build_chain_events,
+    events_to_jsonl,
+    first_and_entry_hash,
+    is_valid_event_kind,
+    participant_actor_ids,
+)
 from .crypto import (
     chacha20_poly1305_encrypt,
     generate_x25519,
@@ -103,16 +111,41 @@ class CapsuleBuilder:
         ``actor`` and ``action`` are required; ``kind`` defaults to
         "observation", ``target`` to "capsule", and ``timestamp`` to the
         builder's ``created_at`` value.
+
+        Rejects (spec/chain.md):
+          - a ``kind`` outside the closed enum, always, and
+          - when the builder declares a non-empty ``participants``, an
+            ``actor`` that is neither ``"system:host"`` nor a declared
+            participant. The builder never auto-registers participants —
+            declaring who may act is the caller's decision. A builder
+            with NO declared participants accepts any actor: that capsule
+            makes a visibly weaker claim (verifiers report the actor set
+            as unbound).
         """
         for required in ("actor", "action"):
             if not event.get(required):
                 raise ValueError(f"event requires {required}")
+        kind = event.get("kind", "observation")
+        if not is_valid_event_kind(kind):
+            raise ValueError(
+                f"event kind {json.dumps(kind)} is not one of " + ", ".join(EVENT_KINDS)
+            )
+        actor = event["actor"]
+        # Recomputed on every call so mutating builder.participants between
+        # appends behaves predictably.
+        declared = participant_actor_ids(self.participants)
+        if declared and actor != HOST_ACTOR and actor not in declared:
+            raise ValueError(
+                f"event actor {json.dumps(actor)} is not a declared participant: add "
+                f'{{"actor_id": {json.dumps(actor)}, "role": "..."}} to the builder\'s '
+                'participants[] (only "system:host" may appear without one)'
+            )
         apply_pith = self.pith if pith is None else (self.pith and pith)
         raw_payload = event.get("payload", {})
         payload = compress_event_payload(raw_payload) if apply_pith else raw_payload
         bare = {
-            "actor": event["actor"],
-            "kind": event.get("kind", "observation"),
+            "actor": actor,
+            "kind": kind,
             "action": event["action"],
             "target": event.get("target", "capsule"),
             "timestamp": (

@@ -6,7 +6,7 @@ from typing import TypedDict
 from zipfile import BadZipFile
 
 from .canonical import hex_to_bytes, sha256_hex
-from .chain import first_and_entry_hash, verify_chain
+from .chain import first_and_entry_hash, participant_actor_ids, verify_chain
 from .envelope import verify_envelope_signatures
 from .keys import to_key_hex
 from .manifest import (
@@ -36,6 +36,10 @@ class _SignerSetResult(TypedDict):
     errors: list[str]
 
 
+class _ActorSetResult(TypedDict):
+    bound: bool
+
+
 class VerifyResult(TypedDict):
     ok: bool
     level: str
@@ -44,6 +48,7 @@ class VerifyResult(TypedDict):
     content_index: _ContentIndexResult
     envelope: _EnvelopeSummary
     signer_set: _SignerSetResult
+    actor_set: _ActorSetResult
     trusted_signer_count: int
     notes: list[str]
 
@@ -58,6 +63,7 @@ def _fail_closed(message: str, level: str) -> VerifyResult:
         "content_index": {"ok": False, "errors": []},
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": False, "errors": []},
+        "actor_set": {"bound": False},
         "trusted_signer_count": 0,
         "notes": [],
     }
@@ -121,12 +127,27 @@ def _verify_capsule_impl(
         "content_index": {"ok": False, "errors": []},
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": True, "errors": []},
+        "actor_set": {"bound": False},
         "trusted_signer_count": 0,
         "notes": notes,
     }
 
     manifest = reader.manifest()
     envelope = reader.envelope()
+
+    # Actor-set binding: like signer_commitment, PRESENCE BINDS, ABSENCE
+    # REPORTS. A non-empty manifest.participants[] binds every chain event
+    # actor to the declared set (enforced in the chain walk below,
+    # fail-closed — participants is covered by manifest_hash inside the
+    # signed payload, so an attacker cannot empty it without breaking the
+    # signature). An empty set is a visibly weaker claim made honestly:
+    # verification proceeds and the reduced assurance is reported.
+    result["actor_set"]["bound"] = bool(participant_actor_ids(manifest.get("participants")))
+    if not result["actor_set"]["bound"]:
+        notes.append(
+            "manifest.participants empty: chain actors are not bound to a "
+            "declared participant set"
+        )
 
     # Format / version checks
     if manifest.get("format", {}).get("version") != "0.6":
@@ -279,7 +300,9 @@ def _verify_capsule_impl(
                     f"events; got {manifest.get('first_event_hash')}"
                 )
         elif events is not None:
-            result["chain"] = verify_chain(events)
+            result["chain"] = verify_chain(
+                events, participants=manifest.get("participants")
+            )
             first_eh, entry_h = first_and_entry_hash(events)
             if first_eh != envelope.get("first_event_hash"):
                 errors.append(

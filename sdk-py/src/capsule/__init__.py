@@ -14,11 +14,15 @@ from .canonical import (
     sha256_hex,
 )
 from .chain import (
+    EVENT_KINDS,
+    HOST_ACTOR,
     build_chain_events,
     events_from_jsonl,
     events_to_jsonl,
     first_and_entry_hash,
     hash_event,
+    is_valid_event_kind,
+    participant_actor_ids,
     verify_chain,
 )
 from .crypto import (
@@ -63,6 +67,8 @@ SPEC_VERSION = "0.6"
 
 __all__ = [
     "CONTENT_INDEX_EXCLUDED",
+    "EVENT_KINDS",
+    "HOST_ACTOR",
     "PITH_VERSION",
     "SPEC_VERSION",
     "STRUCTURAL_EXCLUDED",
@@ -98,10 +104,12 @@ __all__ = [
     "hash_event",
     "hex_to_bytes",
     "hkdf_sha256",
+    "is_valid_event_kind",
     "jcs",
     "manifest_bytes",
     "manifest_hash",
     "pack_zip",
+    "participant_actor_ids",
     "random_key32",
     "random_nonce12",
     "sha256",
