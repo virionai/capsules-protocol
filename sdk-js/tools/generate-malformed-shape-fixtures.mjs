@@ -83,6 +83,17 @@ async function main() {
     "utf8",
   );
 
+  // Uppercase the envelope signer's public_key. The key decodes to the same
+  // 32 bytes, and the signers[] array sits OUTSIDE the canonical payload, so
+  // a lane with a case-insensitive hex decoder still sees a valid signature
+  // and verifies the capsule — the cross-lane differential of addendum A11.
+  // Canonical hex is lowercase (spec/envelope.md); strict lanes reject it.
+  const envelopeDoc = readJson(base, "provenance/envelope.json");
+  envelopeDoc.signers = envelopeDoc.signers.map((s, i) =>
+    i === 0 ? { ...s, public_key: s.public_key.toUpperCase() } : s,
+  );
+  const uppercasedSignerEnvelope = writeJson(envelopeDoc);
+
   // Inject an unknown member whose value JSON parses to Infinity. This has
   // to be a TEXT edit: JSON.stringify cannot emit 1e999.
   const manifestText = readEntry(base, "manifest.json").data.toString("utf8");
@@ -118,6 +129,14 @@ async function main() {
 
     // Stored event hash in uppercase hex: 64 chars, non-canonical.
     "uppercase-event-hash.capsule": replaceData(base, "chain/events.jsonl", uppercasedJsonl),
+
+    // Envelope signer public_key in uppercase hex: same 32 bytes, outside
+    // the canonical payload, accepted by any case-insensitive decoder.
+    "uppercase-signer-key-hex.capsule": replaceData(
+      base,
+      "provenance/envelope.json",
+      uppercasedSignerEnvelope,
+    ),
 
     // A chain document whose single line parses to a JSON string, not an
     // object: verifiers that index into it raise instead of reporting.

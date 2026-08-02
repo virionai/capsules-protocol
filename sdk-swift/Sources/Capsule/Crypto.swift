@@ -50,19 +50,35 @@ public enum Bytes {
     /// of a caller-supplied `.capsule` file). For internal, SDK-controlled
     /// inputs (round-trip seal paths, builder-side hex) the non-throwing
     /// `fromHex` is fine and gives clearer crashes on programmer error.
+    ///
+    /// STRICT LOWERCASE, matching the JS reference's hexToBytes and the
+    /// Rust verifier's hex_to_bytes: uppercase hex is non-canonical on
+    /// every hashed or signed surface, and a case-insensitive decoder here
+    /// made this lane accept envelope signer keys the strict lanes reject
+    /// (addendum A11; vector malformed-shape/uppercase-signer-key-hex).
     public static func fromHexThrowing(_ hex: String, label: String = "hex") throws -> Data {
         guard hex.count % 2 == 0 else {
             throw CapsuleError.malformed("\(label): odd-length hex (\(hex.count) chars)")
         }
         var out = Data(capacity: hex.count / 2)
-        var idx = hex.startIndex
-        while idx < hex.endIndex {
-            let next = hex.index(idx, offsetBy: 2)
-            guard let byte = UInt8(hex[idx..<next], radix: 16) else {
-                throw CapsuleError.malformed("\(label): non-hex character in '\(hex[idx..<next])'")
+        var pending: UInt8? = nil
+        for scalar in hex.unicodeScalars {
+            let nibble: UInt8
+            switch scalar {
+            case "0"..."9": nibble = UInt8(scalar.value - 0x30)
+            case "a"..."f": nibble = UInt8(scalar.value - 0x61 + 10)
+            case "A"..."F":
+                throw CapsuleError.malformed(
+                    "\(label): uppercase hex is non-canonical; use lowercase")
+            default:
+                throw CapsuleError.malformed("\(label): non-hex character in '\(scalar)'")
             }
-            out.append(byte)
-            idx = next
+            if let high = pending {
+                out.append(high << 4 | nibble)
+                pending = nil
+            } else {
+                pending = nibble
+            }
         }
         return out
     }

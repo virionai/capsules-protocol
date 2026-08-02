@@ -42,6 +42,12 @@
       "expected": { "ok": false, "failing": ["chain", "content_index"] }
     },
     {
+      "name": "uppercase-signer-key-hex",
+      "capsule_file": "output/uppercase-signer-key-hex.capsule",
+      "expected": { "ok": false, "failing": ["envelope"] },
+      "note": "The envelope signer's public_key is uppercased post-seal. It decodes to the same 32 key bytes, and signers[] sits outside the canonical payload, so a lane with a case-insensitive hex decoder still sees a valid signature and reports ok=true — the addendum-A11 differential. Canonical hex is lowercase on every hashed or signed surface: verifiers MUST treat a non-canonical signer key as an invalid signature (fail-closed, never an exception)."
+    },
+    {
       "name": "chain-event-not-object",
       "capsule_file": "output/chain-event-not-object.capsule",
       "expected": { "ok": false, "failing": ["chain", "content_index"], "error_includes": "event is not a JSON object" }

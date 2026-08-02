@@ -105,10 +105,18 @@ object Envelope {
             val pk = (sObj.pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v
             val sig = (sObj.pairs.firstOrNull { it.first == "signature" }?.second as? JCSValue.Str)?.v
             if (role == null || pk == null || sig == null) { allValid = false; continue }
-            val input = signingInput(envelope, role)
-            val valid = CapsuleCrypto.ed25519Verify(
-                CapsuleCrypto.hexToBytes(pk), input, CapsuleCrypto.hexToBytes(sig)
-            )
+            // Hex strings on the wire are attacker-controlled — a malformed
+            // (or non-canonical uppercase) key or signature is an INVALID
+            // signature, never an exception through verify(). The signing
+            // input itself can also refuse canonicalization; same idiom.
+            val valid = try {
+                val input = signingInput(envelope, role)
+                CapsuleCrypto.ed25519Verify(
+                    CapsuleCrypto.hexToBytes(pk), input, CapsuleCrypto.hexToBytes(sig)
+                )
+            } catch (_: IllegalArgumentException) {
+                false
+            }
             if (!valid) allValid = false
             results += Triple(role, pk, valid)
         }
