@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from .canonical import bytes_to_hex, hex_to_bytes, jcs
 from .chain import events_from_jsonl
@@ -14,6 +15,83 @@ from .zip_io import unpack_zip
 
 class MalformedCapsuleError(ValueError):
     pass
+
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_hex64(value) -> bool:
+    return isinstance(value, str) and _HEX64.match(value) is not None
+
+
+def _validate_manifest_shape(manifest) -> None:
+    """Shape check on manifest.json. Mirrors sdk-js reader.js.
+
+    Full integrity is the verifier's job; this catches obvious
+    malformation at the parse boundary so a caller that reads
+    ``reader.manifest()["id"]`` without verifying can rely on the field
+    being 64-char lowercase hex per spec, and so ``verify_capsule``
+    stays a total function over whatever the reader hands back.
+    """
+    if not isinstance(manifest, dict):
+        raise MalformedCapsuleError("manifest.json is not a JSON object")
+    fmt = manifest.get("format")
+    version = fmt.get("version") if isinstance(fmt, dict) else None
+    if version != "0.6":
+        raise MalformedCapsuleError(f"manifest.format.version: expected '0.6', got {version!r}")
+    if not _is_hex64(manifest.get("id")):
+        raise MalformedCapsuleError(
+            f"manifest.id is not a 64-char lowercase hex string: {manifest.get('id')!r}"
+        )
+    originator = manifest.get("originator")
+    if not isinstance(originator, dict) or not _is_hex64(originator.get("public_key")):
+        raise MalformedCapsuleError(
+            "manifest.originator.public_key must be a 64-char lowercase hex string"
+        )
+    if not _is_hex64(manifest.get("first_event_hash")):
+        raise MalformedCapsuleError(
+            "manifest.first_event_hash must be a 64-char lowercase hex string"
+        )
+    _validate_content_index_shape(manifest.get("content_index"))
+
+
+def _validate_content_index_shape(index) -> None:
+    if not isinstance(index, dict):
+        raise MalformedCapsuleError("manifest.content_index must be a JSON object")
+    if not _is_hex64(index.get("index_hash")):
+        raise MalformedCapsuleError(
+            "manifest.content_index.index_hash must be a 64-char lowercase hex string"
+        )
+    files = index.get("files")
+    if not isinstance(files, list):
+        raise MalformedCapsuleError("manifest.content_index.files must be an array")
+    for i, f in enumerate(files):
+        if not isinstance(f, dict):
+            raise MalformedCapsuleError(f"manifest.content_index.files[{i}] must be a JSON object")
+        path = f.get("path")
+        if not isinstance(path, str) or not path:
+            raise MalformedCapsuleError(
+                f"manifest.content_index.files[{i}].path must be a non-empty string"
+            )
+        if not _is_hex64(f.get("sha256")):
+            raise MalformedCapsuleError(
+                f"manifest.content_index.files[{i}].sha256 must be a 64-char lowercase hex string"
+            )
+
+
+def _validate_envelope_shape(envelope) -> None:
+    """Shape check on provenance/envelope.json. Mirrors sdk-js reader.js."""
+    if not isinstance(envelope, dict):
+        raise MalformedCapsuleError("envelope.json is not a JSON object")
+    if envelope.get("version") != "0.6":
+        raise MalformedCapsuleError(
+            f"envelope.version: expected '0.6', got {envelope.get('version')!r}"
+        )
+    if not _is_hex64(envelope.get("capsule_id")):
+        raise MalformedCapsuleError("envelope.capsule_id must be a 64-char lowercase hex string")
+    signers = envelope.get("signers")
+    if not isinstance(signers, list) or not signers:
+        raise MalformedCapsuleError("envelope.signers must be a non-empty array")
 
 
 class CapsuleReader:
@@ -34,6 +112,8 @@ class CapsuleReader:
             envelope = json.loads(files["provenance/envelope.json"].decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"manifest/envelope parse: {e}") from e
+        _validate_manifest_shape(manifest)
+        _validate_envelope_shape(envelope)
         return cls(files, manifest, envelope)
 
     def manifest(self) -> dict:
@@ -153,8 +233,13 @@ class CapsuleReader:
         inner_files = unpack_zip(inner_zip_bytes)
         if "manifest.json" not in inner_files or "provenance/envelope.json" not in inner_files:
             raise MalformedCapsuleError("decrypted inner capsule missing manifest or envelope")
-        inner_manifest = json.loads(inner_files["manifest.json"].decode("utf-8"))
-        inner_envelope = json.loads(inner_files["provenance/envelope.json"].decode("utf-8"))
+        try:
+            inner_manifest = json.loads(inner_files["manifest.json"].decode("utf-8"))
+            inner_envelope = json.loads(inner_files["provenance/envelope.json"].decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise MalformedCapsuleError(f"decrypted manifest/envelope parse: {e}") from e
+        _validate_manifest_shape(inner_manifest)
+        _validate_envelope_shape(inner_envelope)
         return CapsuleReader(inner_files, inner_manifest, inner_envelope)
 
     def _require_plain(self) -> None:

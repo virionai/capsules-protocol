@@ -82,9 +82,18 @@ def test_is_encrypted_when_manifest_has_encryption():
 
     manifest = {
         "format": {"version": "0.6"},
+        "id": "11" * 32,
+        "originator": {"public_key": "22" * 32, "label": "Acme"},
+        "first_event_hash": "33" * 32,
+        "content_index": {"files": [], "index_hash": "44" * 32},
         "encryption": {"metadata_path": "x", "cipher": "ChaCha20-Poly1305"},
     }
-    envelope = {"version": "0.6", "cipher": "ChaCha20-Poly1305", "signers": []}
+    envelope = {
+        "version": "0.6",
+        "capsule_id": "11" * 32,
+        "cipher": "ChaCha20-Poly1305",
+        "signers": [{"role": "originator", "public_key": "22" * 32, "signature": "55" * 64}],
+    }
     zip_bytes = pack_zip(
         {
             "manifest.json": json.dumps(manifest).encode(),
