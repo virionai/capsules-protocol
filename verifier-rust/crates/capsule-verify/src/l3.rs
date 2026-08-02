@@ -27,7 +27,7 @@ use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::verifier::{
     anchor_or_null, chain_walk_into, check_signer_set, originator_binding_error,
     verify_content_index, verify_envelope_signatures, ChainCheck, ContentIndexCheck,
-    EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions,
+    EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope,
 };
 use crate::zip_reader::unpack_zip;
 
@@ -65,7 +65,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     outer_envelope: &Envelope,
     outer_manifest: &Manifest,
     outer_files: &BTreeMap<String, Vec<u8>>,
-    options: &VerifyOptions,
+    allowlist: &[String],
     chain_check: &mut ChainCheck,
     inner_envelope_check: &mut Option<EnvelopeCheck>,
     inner_content_index_check: &mut Option<ContentIndexCheck>,
@@ -268,7 +268,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // that even if the chain walk or cross-checks push errors, the
     // inner-envelope verification still surfaces in `result.inner_envelope`.
     let inner_check =
-        verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &options.allowlist);
+        verify_envelope_signatures(&inner_envelope, &inner_envelope_value, allowlist);
     // Inner signer-set invariants, mirroring outer steps 10-10c with the
     // "L3 inner: " message prefix. Inner commitment absence is reported
     // (not failed) by the signer-set semantics; inner duplicate signers

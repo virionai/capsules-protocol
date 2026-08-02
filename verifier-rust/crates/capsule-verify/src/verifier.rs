@@ -156,10 +156,18 @@ impl fmt::Display for TopError {
 /// Caller-supplied verification configuration.
 #[derive(Debug, Default, Clone)]
 pub struct VerifyOptions {
-    /// Trusted Ed25519 public keys (lowercase hex, 64 chars). A signer is
+    /// Trusted Ed25519 public keys (64 hex chars; any case, normalized to
+    /// lowercase — matching the JS reference's `toKeyHex`). A signer is
     /// marked `trusted` only when its key appears here AND its signature
-    /// verifies. An empty allowlist surfaces an advisory note in
-    /// [`VerifyResult::notes`].
+    /// verifies.
+    ///
+    /// Entries are validated: anything that is not exactly 64 hex chars
+    /// cannot be a 32-byte Ed25519 key, so it is dropped and reported
+    /// per-entry in [`VerifyResult::notes`]. The "no allowlist provided"
+    /// advisory is keyed off the *well-formed* entries, so an allowlist
+    /// made up entirely of malformed values still raises it; and an
+    /// allowlist that matched no signer at all raises its own advisory —
+    /// a PASS with `trusted=false` is never silent about why.
     pub allowlist: Vec<String>,
     /// Recipient's X25519 32-byte secret. When `Some` and the capsule is
     /// encrypted, the verifier will decrypt `content.enc`, parse the inner
@@ -290,6 +298,20 @@ pub struct SignerOutcome {
 pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     let mut errors: Vec<TopError> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+
+    // ---- (0) allowlist hygiene ------------------------------------------
+    // A caller-supplied key that is not 64 hex chars can never match a
+    // signer's public key. Silently keeping it in the vector loses the
+    // operator's intent AND suppresses the "no allowlist provided"
+    // advisory below (the vector is non-empty), so a truncated
+    // --allowlist used to report PASS with trusted=false and an empty
+    // notes array — no diagnostic at all (F44). Report each bad entry
+    // and match only the well-formed ones (normalized to lowercase,
+    // matching the JS reference's toKeyHex).
+    let (allowlist, allowlist_notes) = normalize_allowlist(&options.allowlist);
+    notes.extend(allowlist_notes);
+    let no_allowlist = allowlist.is_empty();
+
     let mut chain_check = ChainCheck::default();
     let mut content_index_check = ContentIndexCheck::default();
     let mut envelope_check = EnvelopeCheck::default();
@@ -320,7 +342,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -344,7 +366,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -370,7 +392,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -392,7 +414,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -415,7 +437,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -440,7 +462,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -462,7 +484,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -692,7 +714,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 &envelope,
                 &manifest,
                 &files,
-                options,
+                &allowlist,
                 &mut chain_check,
                 &mut inner_envelope_check,
                 &mut inner_content_index_check,
@@ -704,7 +726,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (10) envelope signature verification ---------------------------
-    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &options.allowlist);
+    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &allowlist);
     // Duplicate (role, public_key) signer entries are malformed — surface
     // the envelope-check note as a categorized top-level error too, so
     // structured consumers and the registry haystack both see it.
@@ -750,13 +772,28 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // quorum.
     let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
 
-    // ---- (12) advisory note ---------------------------------------------
-    let no_allowlist = options.allowlist.is_empty();
+    // ---- (12) advisory notes --------------------------------------------
+    // `no_allowlist` came from step 0 and counts only well-formed entries,
+    // so an allowlist made up entirely of malformed values still gets the
+    // advisory on top of its per-entry notes. And an allowlist that
+    // matched nothing says so: a PASS with trusted=false is never silent
+    // about why.
     if no_allowlist {
         notes.push(
             "no allowlist provided; trusted=false for all signers regardless of signature validity"
                 .to_string(),
         );
+    } else {
+        let any_trusted = trusted_signer_count > 0
+            || inner_envelope_check
+                .as_ref()
+                .is_some_and(|e| e.signers.iter().any(|s| s.trusted));
+        if !any_trusted {
+            notes.push(
+                "allowlist provided but matched no signer; trusted=false for all signers"
+                    .to_string(),
+            );
+        }
     }
 
     // ---- (13) final ok --------------------------------------------------
@@ -1245,6 +1282,32 @@ pub(crate) fn verify_envelope_signatures(
         envelope_check.ok = all_valid;
     }
     envelope_check
+}
+
+/// Split a caller-supplied allowlist into the normalized (lowercase hex)
+/// entries this verifier will actually match against, plus one
+/// human-readable note per rejected entry.
+///
+/// An Ed25519 public key is 32 raw bytes — exactly 64 hex characters
+/// (accepted in any case, normalized to lowercase, matching the JS
+/// reference's `toKeyHex`). Anything else — a truncated paste, a `0x`
+/// prefix, a base64 blob, a file path — can never equal a signer's
+/// `public_key`, so keeping it would silently mean "allowlist supplied,
+/// nothing trusted, no explanation" (F44).
+pub(crate) fn normalize_allowlist(allowlist: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut valid: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for (i, entry) in allowlist.iter().enumerate() {
+        if entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit()) {
+            valid.push(entry.to_lowercase());
+        } else {
+            notes.push(format!(
+                "ignored invalid allowlist[{i}]: must be a 64-char hex string \
+                 (32-byte Ed25519 public key); got {entry:?}"
+            ));
+        }
+    }
+    (valid, notes)
 }
 
 /// Build a final `VerifyResult` from the accumulated state. Used by the
@@ -2849,6 +2912,142 @@ mod tests {
             &envelope,
         );
         assert!(null_commitment.bound && !null_commitment.ok);
+    }
+
+    /// A truncated or otherwise malformed allowlist entry can never match
+    /// a 32-byte Ed25519 public key, but because the vector was non-empty
+    /// the "no allowlist provided" advisory used to be suppressed —
+    /// leaving a PASS with trusted=false and no diagnostic anywhere in the
+    /// result (F44). Malformed entries must be reported per-entry in
+    /// `notes` and must not count as an allowlist for the advisory.
+    #[test]
+    fn malformed_allowlist_entry_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                // Truncated: 32 hex chars where 64 are required.
+                allowlist: vec!["cc76ce271ed61e515b598d73290a2b39".to_string()],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(
+            result.ok,
+            "a malformed allowlist must not fail the capsule itself; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.trusted_signer_count, 0, "nothing can be trusted");
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an all-malformed allowlist must still raise the no-allowlist advisory; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// The sibling case: a well-formed entry alongside a malformed one
+    /// still trusts the good key, and only the bad entry is reported.
+    #[test]
+    fn malformed_allowlist_entry_does_not_suppress_valid_one() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk = manifest.originator.public_key.clone();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["not-hex".to_string(), pk],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "the well-formed key must still be honoured, got {}",
+            result.trusted_signer_count
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "one valid entry means the allowlist is NOT empty; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("matched no signer")),
+            "a trusted signer means the no-match advisory must not fire; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// A syntactically valid allowlist that simply matches no signer must
+    /// say so: silence there is how an operator misreads PASS +
+    /// trusted=false as "trusted".
+    #[test]
+    fn allowlist_with_no_matching_signer_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["ab".repeat(32)],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.trusted_signer_count, 0);
+        assert!(
+            result.notes.iter().any(|n| n.contains("matched no signer")),
+            "expected the matched-no-signer advisory; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an allowlist WAS provided; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// JS-reference parity (`toKeyHex`): a 64-hex entry in ANY case is a
+    /// valid key and is normalized to lowercase, not dropped.
+    #[test]
+    fn uppercase_allowlist_entry_still_matches() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk_upper = manifest.originator.public_key.to_uppercase();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![pk_upper],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "uppercase hex is a valid key; got {} trusted",
+            result.trusted_signer_count
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "uppercase hex must not be dropped; got: {:?}",
+            result.notes
+        );
     }
 
     /// A zero-event chain is LEGAL when the capsule claims no anchors
