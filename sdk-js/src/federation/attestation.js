@@ -89,13 +89,30 @@ export function signIdentityAttestation({
 function normalizeTrustRoots(trustRoots) {
   if (!trustRoots) return [];
   const keys = Array.isArray(trustRoots) ? trustRoots : trustRoots.keys ?? [];
-  return keys.map((k) => {
-    // A raw JWKS entry (from Clerk's /.well-known/jwks.json) has kty/kid/alg.
-    if (k.kty && !k.public_key_hex && !k.jwk) {
-      return { kid: k.kid, alg: k.alg ?? (k.kty === "OKP" ? "ed25519-jcs" : "ES256"), jwk: k };
+  const out = [];
+  for (const k of keys) {
+    if (!k || typeof k !== "object") continue;
+    // Already a native entry ({kid, alg, public_key_hex}) or a pre-wrapped
+    // JWK entry ({kid, alg, jwk}).
+    if (k.public_key_hex || k.jwk) {
+      out.push(k);
+      continue;
     }
-    return k;
-  });
+    if (!k.kty) continue;
+    // A raw JWKS entry: Clerk's /.well-known/jwks.json, or a conforming
+    // issuer publishing its NATIVE ed25519-jcs trust root as a standard
+    // RFC 8037 OKP JWK. The native verify path needs raw key bytes, so
+    // decode the base64url `x` coordinate into public_key_hex here.
+    if (k.kty === "OKP") {
+      if (k.crv !== "Ed25519") continue; // X25519/Ed448 are not attestation keys
+      const raw = b64uToBuf(typeof k.x === "string" ? k.x : "");
+      if (raw.length !== 32) continue;
+      out.push({ kid: k.kid, alg: "ed25519-jcs", public_key_hex: bytesToHex(raw), jwk: k });
+      continue;
+    }
+    out.push({ kid: k.kid, alg: k.alg ?? "ES256", jwk: k });
+  }
+  return out;
 }
 
 // `kid` selects the key (spec/profiles/clerk.md "Security notes"). A cached

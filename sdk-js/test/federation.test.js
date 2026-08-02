@@ -680,3 +680,64 @@ test("ed25519-jcs: an unknown kid does not fall back to another issuer's key", (
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("no trust-root key for kid=issuer-key-retired")));
 });
+
+// --------------------------------------------------------------------------
+// Native trust roots published as standard JWKs (RFC 8037 OKP)
+// --------------------------------------------------------------------------
+
+test("a native trust root published as a standard Ed25519 OKP JWK is consumable", () => {
+  const { issuer, kid, ed } = makeIssuer();
+  const signer = generateEd25519();
+  // What loadTrustRoots() hands back when a conforming issuer publishes its
+  // native attestation key as an RFC 8037 OKP JWK.
+  const jwks = {
+    keys: [
+      {
+        kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid,
+        x: Buffer.from(ed.publicKeyHex, "hex").toString("base64url"),
+      },
+    ],
+  };
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: { clerk_user_id: "user_1" },
+      issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: jwks, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
+  });
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+  assert.equal(res.subject.clerk_user_id, "user_1");
+});
+
+test("an X25519 OKP JWK is never usable as an attestation key", () => {
+  const { issuer, kid, ed } = makeIssuer();
+  const signer = generateEd25519();
+  const jwks = {
+    keys: [
+      {
+        kty: "OKP", crv: "X25519", kid,
+        x: Buffer.from(ed.publicKeyHex, "hex").toString("base64url"),
+      },
+    ],
+  };
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: jwks, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("no trust-root key")));
+});
