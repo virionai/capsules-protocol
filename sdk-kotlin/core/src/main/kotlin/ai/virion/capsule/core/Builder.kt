@@ -92,6 +92,12 @@ class CapsuleBuilder(
                 "note" to JCSValue.Str("host emitted backstop event before seal")
             )),
         )) else bareEvents
+        // I-JSON acceptance boundary (spec/canonicalization.md): refuse to
+        // seal a payload that cannot be canonicalized identically in every
+        // lane, rather than emitting a capsule only this lane can verify.
+        bare.forEachIndexed { i, event ->
+            JCS.assertAcceptable(event.payload, "event[$i].payload")
+        }
         val events = Chain.build(bare)
         val firstHash = events.first().hash
         val entryHash = events.last().hash

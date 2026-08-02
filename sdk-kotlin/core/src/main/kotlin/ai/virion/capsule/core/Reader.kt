@@ -70,16 +70,34 @@ object CapsuleReader {
      * rejection can be attributed to a specific document (mirrors the Rust
      * verifier's "failed to parse manifest.json").
      */
-    fun parseJsonFile(bytes: ByteArray, name: String): JCSValue =
-        try {
-            parseJson(bytes)
+    fun parseJsonFile(bytes: ByteArray, name: String): JCSValue {
+        val value = try {
+            convert(JsonParser.parseString(String(bytes, Charsets.UTF_8)))
         } catch (_: Exception) {
             throw CapsuleException("failed to parse $name")
         }
+        // I-JSON acceptance boundary (spec/canonicalization.md). Reported in
+        // its own words, NOT as "failed to parse": the JSON is syntactically
+        // fine, it is the value that lies outside the canonicalization input
+        // domain, and the operator must be able to tell that apart from both
+        // a syntax error and a hash mismatch.
+        try {
+            JCS.assertAcceptable(value)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalArgumentException("$name: ${e.message}", e)
+        }
+        return value
+    }
 
     /** Parse JSON bytes via Gson, then convert to JCSValue keeping insertion order. */
-    fun parseJson(bytes: ByteArray): JCSValue =
-        convert(JsonParser.parseString(String(bytes, Charsets.UTF_8)))
+    fun parseJson(bytes: ByteArray): JCSValue {
+        val value = convert(JsonParser.parseString(String(bytes, Charsets.UTF_8)))
+        // I-JSON acceptance boundary (spec/canonicalization.md). Gson accepts
+        // lone-surrogate escapes and oversized integer literals; neither has
+        // a canonical form, so refuse before anything is hashed.
+        JCS.assertAcceptable(value)
+        return value
+    }
 
     private fun convert(e: JsonElement): JCSValue {
         if (e.isJsonNull) return JCSValue.Null
