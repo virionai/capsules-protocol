@@ -104,6 +104,29 @@ function selectKey(roots, kid, alg) {
   return pool.find((k) => k.alg === alg) ?? null;
 }
 
+// Claim timestamps are RFC 3339 instants (spec/federation.md: "issued_at /
+// expires_at are ISO-8601 UTC"). `Date.parse` returns NaN for garbage and
+// every comparison against NaN is false — so an unparseable `expires_at`
+// silently becomes "never expires". Parse strictly and fail closed.
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+function parseInstant(value) {
+  if (typeof value !== "string" || !RFC3339.test(value)) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Project a JWT NumericDate (seconds since epoch) into an RFC 3339 instant.
+// Anything that is not a representable finite number is passed through as a
+// string so parseInstant rejects it — never crash on attacker-shaped input
+// (Date#toISOString throws on out-of-range or NaN dates).
+function jwtInstant(value) {
+  if (value == null) return undefined;
+  if (typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e12) {
+    return new Date(value * 1000).toISOString();
+  }
+  return String(value);
+}
+
 const JWT_ALG_TO_NODE = {
   ES256: { dsaEncoding: "ieee-p1363", hash: "sha256" },
   ES384: { dsaEncoding: "ieee-p1363", hash: "sha384" },
@@ -261,8 +284,8 @@ export function verifyIdentityAttestation(attestation, options = {}) {
       capsule_id: binding.capsule_id,
       signer_public_key: binding.signer_public_key,
       signer_role: binding.signer_role,
-      issued_at: res.claims?.iat != null ? new Date(res.claims.iat * 1000).toISOString() : undefined,
-      expires_at: res.claims?.exp != null ? new Date(res.claims.exp * 1000).toISOString() : undefined,
+      issued_at: jwtInstant(res.claims?.iat),
+      expires_at: jwtInstant(res.claims?.exp),
       subject: {
         clerk_user_id: res.claims?.sub,
         clerk_org_id: res.claims?.org_id,
@@ -274,10 +297,26 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     return { ok: false, subject: null, claims: null, errors: [`unsupported attestation alg ${attestation.alg}`] };
   }
 
-  // Expiry (ed25519-jcs carries ISO timestamps in claims).
-  if (claims.expires_at && now >= Date.parse(claims.expires_at)) errors.push("attestation expired");
-  if (claims.issued_at && Date.parse(claims.issued_at) - now > 5 * 60 * 1000) {
-    errors.push("attestation issued in the future");
+  // Expiry (ed25519-jcs carries ISO instants in claims; the JWT profile
+  // reprojects iat/exp). An attestation with no expiry, or with an
+  // unparseable one, is REJECTED — never treated as "never expires".
+  if (claims.expires_at == null) {
+    errors.push("attestation missing required claim 'expires_at'");
+  } else {
+    const expiresAt = parseInstant(claims.expires_at);
+    if (expiresAt === null) {
+      errors.push(`attestation expires_at is not an RFC 3339 instant: ${claims.expires_at}`);
+    } else if (now >= expiresAt) {
+      errors.push("attestation expired");
+    }
+  }
+  if (claims.issued_at != null) {
+    const issuedAt = parseInstant(claims.issued_at);
+    if (issuedAt === null) {
+      errors.push(`attestation issued_at is not an RFC 3339 instant: ${claims.issued_at}`);
+    } else if (issuedAt - now > 5 * 60 * 1000) {
+      errors.push("attestation issued in the future");
+    }
   }
 
   // The binding claims are MANDATORY (spec/federation.md "Identity

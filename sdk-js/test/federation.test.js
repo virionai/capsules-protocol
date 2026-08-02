@@ -543,3 +543,88 @@ test("verifyJwt refuses to run without an expected issuer and audience", () => {
     /requires an expected audience/,
   );
 });
+
+// --------------------------------------------------------------------------
+// Timestamps are strict: unparseable or absent expiry is a rejection
+// --------------------------------------------------------------------------
+
+test("an unparseable expires_at is an error, not an absent expiry", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {},
+      issued_at: TS, expires_at: "whenever",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
+  });
+  assert.equal(res.ok, false, "NaN must never read as 'never expires'");
+  assert.ok(res.errors.some((e) => e.includes("expires_at is not an RFC 3339 instant")));
+});
+
+test("an unparseable issued_at is an error, not an absent freshness check", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {},
+      issued_at: "2026-13-45T99:99:99Z", expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("issued_at is not an RFC 3339 instant")));
+});
+
+test("an attestation with no expiry is rejected", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS,
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: issuer,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("missing required claim 'expires_at'")));
+});
+
+test("a JWT attestation with a garbage exp is rejected, not crashed on", () => {
+  const clerk = makeClerkInstance();
+  const signer = generateEd25519();
+  const capsuleId = "c".repeat(64);
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  // A validly-signed token whose exp is not a number: previously the
+  // claims projection threw a RangeError from Date#toISOString.
+  const jwt = clerk.mintJwt({
+    iss: "https://clerk.acme.example", sub: "user_42", aud: AUD,
+    iat: nowSec, exp: "never",
+    cap: { capsule_id: capsuleId, signer_public_key: signer.publicKeyHex, signer_role: "originator" },
+  });
+  const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: clerk.jwks, now: new Date(TS), capsuleId,
+    signerPublicKeyHex: signer.publicKeyHex,
+    expectedIssuer: "https://clerk.acme.example", audience: AUD,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("expires_at is not an RFC 3339 instant")));
+});
