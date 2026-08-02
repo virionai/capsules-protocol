@@ -85,7 +85,16 @@ here.
   `provenance/envelope.json` (it commits to the index hash), plus — **only
   when the envelope declares a cipher other than `none`** — `content.enc`,
   which is bound instead by `envelope.encrypted_blob_hash`.
-  - Sorted by `path`, ASCII order.
+  - Sorted by `path` on **UTF-16 code-unit sequences** — the same ordering
+    RFC 8785 §3.2.3 applies to object members. `content_index.files` is a
+    JSON array, so this order is inside the bytes `index_hash` covers.
+    This is NOT Unicode code-point order: the two disagree whenever a
+    supplementary-plane path (>= U+10000, UTF-16 lead surrogate
+    0xD800..0xDBFF) is compared against a path in U+E000..U+FFFF. Nor is it
+    a normalization- or collation-aware order: canonically equivalent paths
+    are distinct entries and MUST be strictly ordered. For ASCII-only paths
+    every candidate ordering coincides. Pinned by
+    `spec/vectors/jcs-key-order.json`.
   - `sha256` is over the raw file bytes as stored in the ZIP.
   - The `content.enc` exclusion is conditional on the *signed*
     `envelope.cipher`, not on file presence. In a plain capsule

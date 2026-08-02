@@ -23,7 +23,9 @@ public enum CapsuleZip {
 
     public static func pack(_ files: [(path: String, data: Data)]) -> Data {
         precondition(files.count <= MAX_ENTRIES, "zip: too many entries")
-        let entries = files.sorted { $0.path < $1.path }
+        // Entry order is this container's determinism guarantee; use the
+        // same UTF-16 code-unit comparator every other lane uses.
+        let entries = files.sorted { JCS.utf16Less($0.path, $1.path) }
         for e in entries { try! assertSafePath(e.path) }
         var out = Data()
         var localOffsets: [UInt32] = []

@@ -6,6 +6,11 @@ import io
 import zipfile
 from collections.abc import Mapping
 
+# Entry order is this container's determinism guarantee, and it must be the
+# same order every other lane uses. Acyclic: canonical.py imports only
+# hashlib, math and typing.
+from .canonical import utf16_sort_key
+
 MAX_ENTRIES = 10_000
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _FIXED_DATE = (1980, 1, 1, 0, 0, 0)
@@ -195,7 +200,7 @@ def pack_zip(files: Mapping[str, bytes]) -> bytes:
     """Pack a mapping of path → bytes into a deterministic STORED ZIP."""
     if len(files) > MAX_ENTRIES:
         raise ValueError(f"zip pack: too many entries ({len(files)})")
-    sorted_items = sorted(files.items(), key=lambda kv: kv[0])
+    sorted_items = sorted(files.items(), key=lambda kv: utf16_sort_key(kv[0]))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
         for path, data in sorted_items:
@@ -219,7 +224,7 @@ def unpack_zip(data: bytes) -> dict[str, bytes]:
     out: dict[str, bytes] = {}
     total = 0
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for zi in sorted(zf.infolist(), key=lambda x: x.filename):
+        for zi in sorted(zf.infolist(), key=lambda x: utf16_sort_key(x.filename)):
             if zi.filename.endswith("/"):
                 continue  # directory marker (scan already validated its shape)
             if zi.filename not in expected:

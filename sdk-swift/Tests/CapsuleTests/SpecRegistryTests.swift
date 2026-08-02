@@ -222,4 +222,56 @@ final class SpecRegistryTests: XCTestCase {
             assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
         }
     }
+
+    // MARK: - jcs-key-order.json
+
+    /// RFC 8785 §3.2.3: object members sort on their UTF-16 code-unit
+    /// sequences.
+    ///
+    /// Swift's `String <` is NOT that order, twice over: it compares
+    /// canonically-equivalent, normalization-aware sequences of Unicode
+    /// scalars, so a supplementary-plane key (>= U+10000, UTF-16 lead
+    /// surrogate 0xD800..0xDBFF) sorts *above* U+E000..U+FFFF instead of
+    /// below it, and canonically equivalent keys ("e" + U+0301 vs
+    /// precomposed U+00E9) compare *equal*, leaving their relative order to
+    /// the sort's unspecified stability. Both are negative witnesses in the
+    /// vector file: a lane using `String <` emits different canonical
+    /// bytes, a different hash, and fails to verify an honest capsule built
+    /// by any other lane.
+    func testJcsKeyOrderRegistry() throws {
+        let path = Self.vectorsDir.appendingPathComponent("jcs-key-order.json")
+        let doc = try loadJSON(path)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "jcs-key-order registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let keys = try XCTUnwrap(vector["keys"] as? [String], "\(name): keys")
+            let pairs = keys.enumerated().map { (i, key) in (key, JCSValue.integer(Int64(i))) }
+            let canonical = try JCS.bytes(.object(pairs))
+            XCTAssertEqual(
+                Bytes.toHex(canonical),
+                try XCTUnwrap(vector["canonical_utf8_hex"] as? String),
+                name
+            )
+            XCTAssertEqual(
+                Hash.sha256Hex(canonical),
+                try XCTUnwrap(vector["sha256_hex"] as? String),
+                name
+            )
+        }
+    }
+
+    /// The comparator claim itself, independent of the vector file: the two
+    /// cases Swift's `String <` gets wrong.
+    func testUtf16LessDisagreesWithSwiftStringOrdering() {
+        // U+1F600 is D83D DE00, so it precedes U+E000 in UTF-16 order even
+        // though its scalar value is far larger.
+        XCTAssertTrue(JCS.utf16Less("\u{1F600}", "\u{E000}"))
+        XCTAssertFalse(JCS.utf16Less("\u{E000}", "\u{1F600}"))
+        XCTAssertTrue("\u{E000}" < "\u{1F600}", "Swift's String < is scalar order, not UTF-16")
+        // Canonically equivalent keys are distinct and strictly ordered.
+        XCTAssertTrue(JCS.utf16Less("e\u{0301}", "\u{00E9}"))
+        XCTAssertFalse(JCS.utf16Less("\u{00E9}", "e\u{0301}"))
+        XCTAssertEqual("e\u{0301}", "\u{00E9}", "Swift's String == is canonical equivalence")
+    }
 }

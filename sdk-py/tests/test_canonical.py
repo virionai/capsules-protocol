@@ -155,3 +155,27 @@ def test_jcs_numbers_match_spec_vectors():
         value = struct.unpack(">d", bytes.fromhex(entry["ieee_hex"]))[0]
         got = jcs(value).decode("utf-8")
         assert got == entry["expected"], f"bits {entry['ieee_hex']}"
+
+
+# UTF-16 code-unit ordering probes, spelled by code point so no source
+# escape can be mis-transcribed. EMOJI is supplementary (D83D DE00); PUA
+# and NONCHAR are BMP and sort AFTER it in UTF-16 but BEFORE it by code
+# point — which is exactly where Python's default `sorted()` diverges.
+EMOJI = chr(0x1F600)
+PUA = chr(0xE000)
+NONCHAR = chr(0xFFFF)
+
+
+def test_jcs_sorts_object_keys_by_utf16_code_units():
+    obj = {NONCHAR: 0, EMOJI: 1, PUA: 2, "z": 3}
+    expected = ('{"z":3,"' + EMOJI + '":1,"' + PUA + '":2,"' + NONCHAR + '":0}').encode("utf-8")
+    assert jcs(obj) == expected
+
+
+def test_utf16_sort_key_orders_supplementary_below_high_bmp():
+    from capsule.canonical import utf16_sort_key
+
+    # RFC 8785 §3.2.3 order: U+1F600 (D83D DE00) < U+E000 < U+FFFF.
+    assert utf16_sort_key(EMOJI) < utf16_sort_key(PUA) < utf16_sort_key(NONCHAR)
+    # ...and that is NOT code-point order, which reverses the first pair.
+    assert ord(EMOJI) > ord(PUA)

@@ -112,12 +112,17 @@ pub fn build_content_index(
             sha256: sha256_hex(bytes),
         });
     }
-    // BTreeMap iteration is already lexicographically sorted by path, so
-    // the entries vector is sorted by construction. The explicit sort below
-    // is a defensive belt-and-suspenders move that mirrors the JS step
-    // exactly — useful if a future refactor swaps in a different map type
-    // upstream.
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    // content_index.files is a JSON *array*, so this order is inside the
+    // bytes index_hash covers — and this function runs on the verify path,
+    // so the order has to match every other lane's, not merely be stable.
+    //
+    // BTreeMap iteration sorts by `str: Ord`, which is UTF-8 byte order ==
+    // Unicode code-point order. That is NOT the RFC 8785 §3.2.3 order the
+    // rest of the format uses: a supplementary-plane path (>= U+10000,
+    // UTF-16 lead surrogate 0xD800..0xDBFF) sorts BELOW U+E000..U+FFFF in
+    // UTF-16 and above it by code point. So this sort is load-bearing, not
+    // defensive: it re-orders the map's iteration into the normative order.
+    entries.sort_by(|a, b| a.path.encode_utf16().cmp(b.path.encode_utf16()));
 
     // Build a JSON Value of the array for canonicalization. Each entry is
     // an object with two string keys; serde_json::to_value cannot fail.
@@ -206,6 +211,35 @@ mod tests {
         let recomputed = build_content_index(&files, STRUCTURAL_EXCLUDED);
         assert_eq!(recomputed.index_hash, manifest.content_index.index_hash);
         assert_eq!(recomputed.files, manifest.content_index.files);
+    }
+
+    /// `content_index.files` is a JSON array, so its order is inside the
+    /// bytes `index_hash` covers — and this function runs on the VERIFY
+    /// path (`verify_content_index`), not just at build time. The order
+    /// must therefore be the same UTF-16 code-unit order RFC 8785 §3.2.3
+    /// gives object members, which is NOT Rust's `str: Ord` (UTF-8 byte
+    /// order == code-point order). A code-point sort puts the U+1F600 path
+    /// last and yields a different index_hash, so an honest capsule built
+    /// in any other lane fails content-index verification here.
+    #[test]
+    fn content_index_orders_paths_by_utf16_code_units() {
+        let emoji = "\u{1F600}.txt";
+        let pua = "\u{E000}.txt";
+        let nonchar = "\u{FFFF}.txt";
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        files.insert(nonchar.into(), b"a".to_vec());
+        files.insert(emoji.into(), b"b".to_vec());
+        files.insert(pua.into(), b"c".to_vec());
+        files.insert("z.txt".into(), b"d".to_vec());
+        let index = build_content_index(&files, STRUCTURAL_EXCLUDED);
+        let order: Vec<&str> = index.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(order, vec!["z.txt", emoji, pua, nonchar]);
+        // Pinned from the JS reference lane over the same file map:
+        //   buildContentIndex(new Map([...])).index_hash
+        assert_eq!(
+            index.index_hash,
+            "49e4bccd112720dad9125d366459e2d4893cb1ffd58d99dc75ea40cc6aa04976"
+        );
     }
 
     #[test]

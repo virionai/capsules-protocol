@@ -78,7 +78,12 @@ them (they are not authoritative under v0.6) but should not error.
 
 ## Container properties
 
-- File entries are sorted by path, ASCII order.
+- File entries are sorted by path on **UTF-16 code-unit sequences** — the
+  same ordering RFC 8785 §3.2.3 applies to object members, so every
+  conforming implementation lays the entries out in the same order. NOT
+  Unicode code-point order; the two disagree once a supplementary-plane
+  path (>= U+10000) is compared against a path in U+E000..U+FFFF. Pinned by
+  `spec/vectors/jcs-key-order.json`.
 - Internal ZIP timestamps are fixed at `1980-01-01T00:00:00Z` (the ZIP
   epoch) so identical content produces identical bytes.
 - Compression: `STORED` (no compression). This makes archive bytes a

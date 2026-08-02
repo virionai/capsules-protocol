@@ -56,7 +56,10 @@ public enum Manifest {
         for (path, data) in files where !excluded.contains(path) {
             entries.append((path, Hash.sha256Hex(data)))
         }
-        entries.sort { $0.path < $1.path }
+        // content_index.files is a JSON array, so this order is inside the
+        // bytes indexHash covers. Same UTF-16 comparator JCS uses for
+        // object members — Swift's `String <` is not that order.
+        entries.sort { JCS.utf16Less($0.path, $1.path) }
         let arr = JCSValue.array(entries.map { (p, h) in
             .object([("path", .string(p)), ("sha256", .string(h))])
         })

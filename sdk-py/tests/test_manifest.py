@@ -136,3 +136,29 @@ def test_manifest_bytes_is_jcs():
     )
     m["id"] = "c" * 64
     assert manifest_bytes(m) == jcs(m)
+
+
+def test_build_content_index_orders_paths_by_utf16_code_units():
+    # content_index.files is a JSON array, so its order is inside the bytes
+    # index_hash covers. It must match the JS reference lane, which sorts
+    # with `a < b` on JS strings (UTF-16 code units). Python's default str
+    # ordering is code-point order and would put the U+1F600 path last.
+    emoji, pua, nonchar = chr(0x1F600), chr(0xE000), chr(0xFFFF)
+    files = {
+        nonchar + ".txt": b"a",
+        emoji + ".txt": b"b",
+        pua + ".txt": b"c",
+        "z.txt": b"d",
+    }
+    index = build_content_index(files)
+    assert [e["path"] for e in index["files"]] == [
+        "z.txt",
+        emoji + ".txt",
+        pua + ".txt",
+        nonchar + ".txt",
+    ]
+    # Pinned from the JS reference lane over the same file map:
+    #   buildContentIndex(new Map([...])).index_hash
+    assert index["index_hash"] == (
+        "49e4bccd112720dad9125d366459e2d4893cb1ffd58d99dc75ea40cc6aa04976"
+    )
