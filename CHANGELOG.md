@@ -11,6 +11,71 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **Lane × collection vector coverage is now itself machine-checked
+  (T10).** Registry consumption used to be opt-in per lane, by
+  hardcoded filename — each of sdk-py, verifier-rust, sdk-swift and
+  sdk-kotlin kept its own list of vector files, and nothing asserted
+  the lists were COMPLETE, so a new collection was invisible to four
+  lanes by default (the generator behind the Swift/Kotlin
+  malformed-layout gap, and behind malformed-shape / chain-binding /
+  unknown-fields / signing-input each missing from at least one lane).
+  New `spec/vectors/registry.json` declares, for every collection, its
+  reason/failing vocabulary and the set of lanes required to consume it
+  — as a witness consumer file, a transitive `via`, or an explicit
+  reasoned exemption (e.g. only sdk-js implements federation
+  attestations); silent omission is not expressible. The new required
+  conformance target `vector-registry`
+  (`tools/check-vector-registry.mjs`) fails on an unlisted or missing
+  or EMPTY collection (F40 — an empty `vectors` array used to record
+  nothing and pass; the per-lane loaders now also refuse missing/empty
+  registries instead of silently collecting zero tests), on vocabulary
+  drift in either direction, and on a declared consumer that never
+  references the collection. The gaps the manifest surfaced were
+  closed rather than exempted: Swift and Kotlin now consume
+  malformed-shape, chain-binding, unknown-fields and signing-input
+  (Swift gained the empty-chain null-anchor rules, zero-byte
+  capsule_id derivation, manifest/envelope shape validation at parse,
+  and byte-level signing-input pins; Kotlin the same by construction),
+  and Rust consumes malformed-shape.
+- **Duplicate JSON object members are rejected in every lane (A13).**
+  I-JSON (RFC 7493 §2.3) forbids them; no lane enforced it. Every
+  mainstream parser silently keeps the last value, so `{"a":1,"a":2}`
+  and `{"a":2}` were two different byte sequences with one canonical
+  form — a reviewer/verifier smuggling primitive, one future
+  first-wins parser away from a cross-lane verification split.
+  `spec/canonicalization.md` gains the "Objects" rule (names compare
+  after escape processing); every capsule-document parse path now
+  refuses duplicates (JS text scanner + `parseJsonStrict`, Python
+  `object_pairs_hook`, Rust visitor-based `parse_json_strict`, Swift
+  UTF-16 scanner, Kotlin streaming `JsonReader` re-scan), pinned by
+  three new `ijson-acceptance` vectors with reason `duplicate_member`
+  including the `"\u0061"`-vs-`"a"` escaped-name collision.
+- **Remaining cross-lane parity gaps from the addendum are closed with
+  vectors (A10, A11, A12, A15).** (1) Swift and Kotlin did not enforce
+  contiguous chain sequence numbers — a correctly hashed, signed chain
+  renumbered `seq=2` verified in both; chain.md step 5 is now enforced
+  in all five lanes (`chain-rules/non-contiguous-seq`). (2) Swift and
+  Kotlin accepted UPPERCASE envelope signer-key hex that JS/Python/
+  Rust reject: the key decodes to the same bytes and `signers[]` sits
+  outside the canonical payload, so those lanes saw a valid signature
+  on bytes the strict lanes refuse; both hex decoders are now strict
+  lowercase, and Kotlin's signature path no longer throws on malformed
+  hex (`malformed-shape/uppercase-signer-key-hex`). (3) verifier-rust
+  uniquely required participant `label`, refusing a spec-valid capsule
+  every other lane verified; the typed view now treats `label` as the
+  advisory optional field the spec defines
+  (`chain-rules/participant-without-label`). (4)
+  `untrusted_payload_fields` had no enforceable grammar and no host
+  projection contract — a host could not tell which payload members
+  the author marked untrusted without inventing semantics.
+  `spec/chain.md` now defines the normative path grammar
+  (`payload(.segment)+`, `segment = [A-Za-z0-9_-]+`), the resolution
+  rules (object-member traversal only; unresolved paths mark nothing;
+  hosts never guess), and verification step 8: an out-of-grammar
+  marking is a chain-area failure in every profile, and all four
+  builders refuse it at append time
+  (`chain-rules/invalid-untrusted-path`).
+
 - **The chain.md step-6 actor rule and the closed `kind` enum are now
   enforced in all five lanes — with the actor rule conditioned on the
   manifest's own claim.** Only verifier-rust implemented step 6

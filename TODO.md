@@ -14,20 +14,23 @@ Priority legend:
 
 ## Capsule v0.6 Spec
 
-- [~] **P0** - Create a checked-in normative vector registry under
+- [x] **P0** - Create a checked-in normative vector registry under
       `spec/vectors/` with capsule bytes, expected hashes, verifier
-      results, and negative cases. (Done: positive embedded vector
-      `plain-basic.json` (capsule bytes + expected hashes), a
-      language-neutral outcome registry `tamper-detection/vectors.json`
-      covering all six tamper fixtures, the open-stage registry
-      `malformed-layout/vectors.json`, byte-level pins in
-      `signing-input.json`, and `jcs-numbers.json` (number
-      canonicalization, all five lanes). The JS `spec-vectors` lane checks
-      everything; the Python and Rust lanes consume the outcome registries
-      and signing-input pins directly (`test_spec_registry.py`,
-      `spec_registry.rs`). Remaining: negative-case capsule vectors for
-      envelope/identity mis-binding (uppercase hex, unknown versions,
-      role mismatch), and Swift/Kotlin wiring to the outcome registries.)
+      results, and negative cases. (Positive embedded vector
+      `plain-basic.json`, outcome registries for tamper-detection /
+      malformed-layout / malformed-shape / unknown-fields / signer-set /
+      chain-binding / chain-rules / unicode-boundary, byte-level pins in
+      `signing-input.json`, `jcs-numbers.json`, `jcs-key-order.json`,
+      `ijson-acceptance.json`, `ed25519-key-validation.json`. ALL FIVE
+      lanes are wired to every collection that applies to them, and the
+      coverage claim is itself machine-checked: `spec/vectors/registry.json`
+      declares the required lane set per collection (consumer / via /
+      reasoned exemption) and the `vector-registry` conformance target
+      (`tools/check-vector-registry.mjs`) fails on an unlisted, missing,
+      or empty collection, vocabulary drift, or a consumer that never
+      references its collection. Uppercase signer-key hex is vectored
+      (`malformed-shape/uppercase-signer-key-hex`); unknown versions and
+      role mismatch remain covered by per-lane unit tests.)
 - [x] **P0** - Add explicit malformed-layout vectors for missing required
       files, duplicate entries, unsafe paths, compressed entries, over-limit
       archives, and invalid JSON. (`spec/vectors/malformed-layout/`:
@@ -50,8 +53,12 @@ Priority legend:
 - [ ] **P1** - Make resource-limit profile names normative: max entries,
       max total bytes, compressed-entry rejection, symlink rejection, and
       path validation.
-- [ ] **P1** - Define untrusted-content projection rules for host/model
-      contexts and add conformance cases.
+- [x] **P1** - Define untrusted-content projection rules for host/model
+      contexts and add conformance cases. (spec/chain.md "Untrusted
+      content" now carries the normative `untrusted_payload_fields` path
+      grammar and host-projection contract, enforced as verification
+      step 8 in all five lanes and at append time in all four builders;
+      conformance vector `chain-rules/invalid-untrusted-path`.)
 - [ ] **P1** - Freeze the federation wire shapes (issuer metadata,
       identity attestation `ed25519-jcs` + JWT) and add attestation vectors
       plus negative cases to `spec/vectors/`. Reference: `spec/federation.md`,
