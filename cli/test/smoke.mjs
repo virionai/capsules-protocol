@@ -12,6 +12,7 @@ import {
   CapsuleBuilder,
   CapsuleReader,
   generateEd25519,
+  generateX25519,
   packZip,
 } from "@capsule/sdk-v0.6-prototype";
 
@@ -23,12 +24,16 @@ const TMP = join(tmpdir(), `capsule-cli-smoke-${process.pid}`);
 const FIXTURES = join(TMP, "fixtures");
 const CLEAN = join(FIXTURES, "clean.capsule");
 const TAMPERED = join(FIXTURES, "tampered-payload.capsule");
+const ENCRYPTED = join(FIXTURES, "encrypted.capsule");
 const VECTORS = join(FIXTURES, "parity-vectors.json");
 const EXTRACT_DIR = join(TMP, "extract");
 
 let passed = 0;
 let failed = 0;
 const failures = [];
+
+// Keys the trust-policy tests need; populated by buildFixtures().
+const KEYS = { originatorPublicKeyHex: "", strangerPublicKeyHex: "" };
 
 function run(args, opts = {}) {
   const res = spawnSync("node", [BIN, ...args], {
@@ -60,6 +65,9 @@ async function buildFixtures() {
   mkdirSync(FIXTURES, { recursive: true });
 
   const originator = generateEd25519();
+  KEYS.originatorPublicKeyHex = originator.publicKeyHex;
+  // A perfectly valid key that signed nothing — the "wrong signer" case.
+  KEYS.strangerPublicKeyHex = generateEd25519().publicKeyHex;
   const builder = new CapsuleBuilder({
     originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke" },
     participants: [
@@ -101,6 +109,28 @@ async function buildFixtures() {
     signedAt: "2026-05-21T12:00:02Z",
   });
   writeFileSync(CLEAN, Buffer.from(cleanBytes));
+
+  // Encrypted fixture: same originator, one X25519 recipient.
+  const encBuilder = new CapsuleBuilder({
+    originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke Enc" },
+  });
+  encBuilder.setProgram("# CLI Smoke (encrypted)\n");
+  await encBuilder.appendEvent({
+    actor: "human:cli",
+    kind: "decision",
+    action: "created",
+    target: "program.md",
+    timestamp: "2026-05-21T12:00:00Z",
+    payload: { summary: "Created encrypted CLI smoke fixture" },
+  });
+  const encBytes = await encBuilder.seal({
+    signers: [
+      { role: "originator", publicKey: originator.publicKey, privateKey: originator.privateKey },
+    ],
+    recipients: generateX25519(),
+    signedAt: "2026-05-21T12:00:02Z",
+  });
+  writeFileSync(ENCRYPTED, Buffer.from(encBytes));
 
   const reader = await CapsuleReader.fromBytes(cleanBytes);
   const files = new Map(reader.files_());
@@ -293,6 +323,158 @@ section("keygen");
   check("keygen --json output parses", parsedK && parsedK.algorithm === "Ed25519");
   check("keygen produces 64-hex public key", parsedK && /^[0-9a-f]{64}$/.test(parsedK.public_key_hex ?? ""));
   check("keygen produces 64-hex private key", parsedK && /^[0-9a-f]{64}$/.test(parsedK.private_key_hex ?? ""));
+}
+
+// ----------------------------------------------------------------------
+
+section("verify - trust policy drives the verdict (F04)");
+
+{
+  const okKey = KEYS.originatorPublicKeyHex;
+  const wrongKey = KEYS.strangerPublicKeyHex;
+
+  // Allowlisted signer: integrity AND policy hold.
+  const match = run(["verify", CLEAN, "--allowlist", okKey]);
+  check("allowlisted signer exits 0", match.code === 0);
+  check("allowlisted signer prints qualified PASS",
+    /Result: PASS \(integrity verified; trust policy satisfied\)/.test(match.stdout));
+  check("allowlisted signer shows trusted=true", /trusted=true/.test(match.stdout));
+
+  // Supplied-but-unmatched allowlist: the capsule is signed by someone
+  // the operator did not trust. That must FAIL loudly, not PASS quietly.
+  const miss = run(["verify", CLEAN, "--allowlist", wrongKey]);
+  check("unmatched allowlist exits 1", miss.code === 1);
+  check("unmatched allowlist prints FAIL", /Result: FAIL/.test(miss.stdout));
+  check("unmatched allowlist is loud about why",
+    /no signer matches the supplied allowlist/.test(miss.stdout));
+
+  const missJson = run(["verify", CLEAN, "--allowlist", wrongKey, "--json"]);
+  check("unmatched allowlist --json exits 1", missJson.code === 1);
+  let missParsed;
+  try { missParsed = JSON.parse(missJson.stdout); } catch { /* noop */ }
+  check("unmatched --json ok=false but integrity_ok=true",
+    missParsed && missParsed.ok === false && missParsed.integrity_ok === true);
+  check("unmatched --json trust block says unsatisfied",
+    missParsed && missParsed.trust
+      && missParsed.trust.policy === "allowlist"
+      && missParsed.trust.satisfied === false
+      && missParsed.trust.trusted_signer_count === 0);
+
+  const matchJson = run(["verify", CLEAN, "--allowlist", okKey, "--json"]);
+  let matchParsed;
+  try { matchParsed = JSON.parse(matchJson.stdout); } catch { /* noop */ }
+  check("matched --json ok=true and trust satisfied",
+    matchParsed && matchParsed.ok === true && matchParsed.trust
+      && matchParsed.trust.satisfied === true
+      && matchParsed.trust.trusted_signer_count === 1);
+
+  // No allowlist: no policy. PASS, but the verdict must say what it covers.
+  const none = run(["verify", CLEAN]);
+  check("no allowlist still exits 0", none.code === 0);
+  check("no-allowlist PASS is qualified as integrity-only",
+    /Result: PASS \(integrity only/.test(none.stdout));
+  check("no-allowlist report says signer identity not checked",
+    /signer identity not checked/.test(none.stdout));
+
+  const noneJson = run(["verify", CLEAN, "--json"]);
+  let noneParsed;
+  try { noneParsed = JSON.parse(noneJson.stdout); } catch { /* noop */ }
+  check("no-allowlist --json trust: policy none, satisfied null",
+    noneParsed && noneParsed.ok === true && noneParsed.trust
+      && noneParsed.trust.policy === "none"
+      && noneParsed.trust.satisfied === null);
+
+  // Integrity still gates: a tampered capsule fails even when the trust
+  // policy would be satisfied.
+  const tm = run(["verify", TAMPERED, "--allowlist", okKey]);
+  check("tampered capsule fails even with satisfied policy", tm.code === 1);
+
+  // A trust-config value that can never match a signer is a usage error
+  // (parity with the Rust CLI's --allowlist validation), not a quiet
+  // trusted=false.
+  const badKey = run(["verify", CLEAN, "--allowlist", "not-a-key"]);
+  check("malformed allowlist entry exits 2", badKey.code === 2);
+  check("malformed allowlist message states the expected shape",
+    /64 hex/.test(badKey.stderr));
+}
+
+// ----------------------------------------------------------------------
+
+section("verify/inspect - self-attested time is labelled (F48)");
+
+{
+  const r = run(["verify", CLEAN]);
+  check("verify labels sealed-at as attested", /Sealed at \(attested\):/.test(r.stdout));
+  check("verify attested label carries the caveat", /signer-supplied/.test(r.stdout));
+
+  const i = run(["inspect", CLEAN]);
+  check("inspect labels sealed-at as attested", /Sealed at \(attested\):/.test(i.stdout));
+}
+
+// ----------------------------------------------------------------------
+
+section("args - unknown flags and extra positionals fail closed (F03)");
+
+{
+  const someKey = "cc".repeat(32);
+
+  // A typo'd trust flag must never silently drop the policy and PASS.
+  const typo = run(["verify", CLEAN, "--alowlist", someKey]);
+  check("typo'd --alowlist exits 2", typo.code === 2);
+  check("typo'd --alowlist names the flag on stderr", /--alowlist/.test(typo.stderr));
+  check("typo'd --alowlist prints no verdict", !/Result:/.test(typo.stdout));
+
+  // The exact invocation inspect.mjs used to recommend; the flag does
+  // not exist, so it must be an error, not a silent PASS.
+  const dk = run(["verify", CLEAN, "--decryption-key", someKey]);
+  check("verify --decryption-key exits 2 (flag not implemented)", dk.code === 2);
+  check("verify --decryption-key names the flag on stderr", /--decryption-key/.test(dk.stderr));
+
+  // Two files: verifying only the first and ignoring the second is a lie.
+  const extra = run(["verify", CLEAN, TAMPERED]);
+  check("second positional exits 2", extra.code === 2);
+  check("second positional named on stderr", /unexpected argument/.test(extra.stderr));
+
+  // Fail-closed parsing is parser-wide, not verify-specific.
+  const short = run(["inspect", CLEAN, "-x"]);
+  check("unknown short flag exits 2", short.code === 2);
+  check("unknown short flag named on stderr", /-x/.test(short.stderr));
+
+  // A flag that requires a value but has none is a clean usage error,
+  // not a stack trace.
+  const missing = run(["chain", CLEAN, "--limit"]);
+  check("flag missing its value exits 2", missing.code === 2);
+  check("flag missing its value gets a clean message", /requires a value/.test(missing.stderr) && !/at .*\(/.test(missing.stderr));
+
+  // --help is universally recognized (it must not become an unknown flag).
+  const help = run(["verify", "--help"]);
+  check("verify --help exits 0", help.code === 0);
+  check("verify --help prints usage", /usage: capsule verify/.test(help.stderr));
+}
+
+// ----------------------------------------------------------------------
+
+section("encrypted capsules - honest decryption pointers (F47)");
+
+{
+  // No capsule-CLI command implements decryption, so no message may
+  // point users at a `verify --decryption-key` flag that does not exist.
+  const c = run(["chain", ENCRYPTED]);
+  check("chain on encrypted capsule exits 2", c.code === 2);
+  check("chain error says this CLI does not decrypt", /does not decrypt/.test(c.stderr));
+  check("chain error does not recommend a nonexistent flag",
+    !/capsule verify.*--decryption-key/.test(c.stderr));
+
+  const i = run(["inspect", ENCRYPTED]);
+  check("inspect on encrypted capsule exits 0", i.code === 0);
+  check("inspect shows encryption cipher", /encrypted/.test(i.stdout));
+  check("inspect chain-length note says this CLI cannot decrypt", /cannot decrypt/.test(i.stdout));
+  check("inspect does not recommend a nonexistent flag", !/--decryption-key/.test(i.stdout));
+
+  // The encrypted capsule still verifies at L2 (chain deferred), and the
+  // trust policy applies to the outer envelope like any other capsule.
+  const v = run(["verify", ENCRYPTED, "--allowlist", KEYS.originatorPublicKeyHex]);
+  check("encrypted capsule verifies at L2 with trust satisfied", v.code === 0);
 }
 
 // ----------------------------------------------------------------------

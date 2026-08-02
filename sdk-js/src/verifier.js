@@ -437,8 +437,13 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     result.chain.ok &&
     result.envelope.ok;
 
+  // Advisory notes: a PASS with trusted=false is never silent about why.
+  // The unmatched case must never get LESS warning than the no-policy
+  // case (wording matches verifier-rust).
   if (allowlist.size === 0) {
     notes.push("no allowlist provided; trusted=false for all signers regardless of signature validity");
+  } else if (result.trustedSignerCount === 0) {
+    notes.push("allowlist provided but matched no signer; trusted=false for all signers");
   }
 
   return result;

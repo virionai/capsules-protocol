@@ -43,9 +43,10 @@ function help() {
   err("  -h, --help          show this help");
   err("");
   err("exit codes:");
-  err("  0  success / verification passed");
-  err("  1  verification failed / vectors mismatch");
-  err("  2  I/O, argument, or environment error");
+  err("  0  success — for verify: integrity verified AND any supplied");
+  err("     trust policy (--allowlist) satisfied");
+  err("  1  verification failed, trust policy not satisfied, or vectors mismatch");
+  err("  2  usage, I/O, or environment error (unknown flag, malformed key, ...)");
 }
 
 export async function run(argv) {

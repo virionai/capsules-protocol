@@ -56,7 +56,8 @@ export async function vectorsCmd(argv) {
 }
 
 async function vectorsVerify(argv) {
-  const args = parseArgs(argv, { booleans: ["json"] });
+  const args = parseArgs(argv, { booleans: ["json"], maxPositionals: 1 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const file = args._[0];
   if (!file) { process.stderr.write(USAGE); return 2; }
 

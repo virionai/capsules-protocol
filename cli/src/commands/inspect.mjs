@@ -11,7 +11,11 @@ import { bytesText, out, readBytes, truncHex } from "../format.mjs";
 const USAGE = "usage: capsule inspect <file> [--json]\n";
 
 export async function inspectCmd(argv) {
-  const args = parseArgs(argv, { booleans: ["json"] });
+  const args = parseArgs(argv, { booleans: ["json"], maxPositionals: 1 });
+  if (args.help) {
+    process.stderr.write(USAGE);
+    return 0;
+  }
   const file = args._[0];
   if (!file) {
     process.stderr.write(USAGE);
@@ -72,10 +76,10 @@ export async function inspectCmd(argv) {
   out(`Capsule ID:             ${m.id}`);
   out(`Originator:             ${m.originator.label || "(no label)"}`);
   out(`  pubkey (Ed25519):     ${m.originator.public_key}`);
-  out(`Sealed at:              ${env.signed_at}`);
+  out(`Sealed at (attested):   ${env.signed_at}`);
   out(`Encryption:             ${encrypted ? `${env.cipher} (encrypted)` : "none (plain)"}`);
   out(`Content-index entries:  ${m.content_index?.files?.length ?? 0}`);
-  out(`Chain length:           ${encrypted ? "(encrypted — run verify --decryption-key to inspect)" : chainLen}`);
+  out(`Chain length:           ${encrypted ? "(encrypted — this CLI cannot decrypt; use the SDK reader.decrypt() or the Rust capsule-verify-cli)" : chainLen}`);
 
   if (m.participants?.length) {
     out("");

@@ -53,6 +53,39 @@ incompatible wire changes ship as `0.7`).
   the new `actor_set_bound` registry key, consumed by the JS, Python,
   Rust, Swift, and Kotlin registry lanes. The CLI reports `actor_set`
   in `--json` and the human checklist. Wire format unchanged.
+- **The JS CLI's PASS now means exactly what was checked (T9: F03,
+  F04, F47, F48).** `capsule verify` computed its exit code and
+  PASS/FAIL line purely from the SDK's integrity-only verdict, so
+  `--allowlist` had zero effect: a capsule signed by a completely
+  different key than the operator allowlisted printed PASS and exited
+  0 on the documented CI-gating path — and the argument parser treated
+  any unrecognized long flag as a boolean, so a typo'd `--alowlist`
+  (or the `--decryption-key` flag inspect wrongly recommended, or a
+  second file argument) was silently ignored. The CLI is now the
+  explicit policy layer the SDK deliberately is not: supplying
+  `--allowlist` sets the policy "at least one distinct allowlisted key
+  must carry a valid signature" and an unmatched allowlist FAILS with
+  exit 1 and a loud reason; no allowlist means the PASS is qualified
+  `integrity only — signer identity not checked` (absence downgrades
+  reported assurance, never rejects); malformed allowlist entries are
+  exit-2 usage errors (Rust CLI parity); the parser fails closed on
+  unknown flags and unexpected positionals; every command answers
+  `--help`. Exit codes are documented in `cli/README.md`: 0 =
+  integrity verified AND policy satisfied, 1 = either failed, 2 =
+  usage/I-O. JSON output gains `integrity_ok` and a
+  `trust {policy, allowlist_size, trusted_signer_count, satisfied}`
+  block, with `ok` now the overall verdict matching the exit code.
+  `envelope.signed_at` renders as `Sealed at (attested)` — it is
+  signer-supplied with no external time anchor and SKILL.md lists it
+  under "what you must not trust". Encrypted-capsule messages no
+  longer point at the unimplemented `verify --decryption-key`; they
+  name the SDK's `reader.decrypt()` and the Rust `capsule-verify-cli`
+  instead. sdk-js's `verifyCapsule` additionally emits the
+  "allowlist provided but matched no signer" advisory (wording
+  identical to verifier-rust), so the mismatch case never gets less
+  warning than the no-policy case; the Python, Swift, and Kotlin
+  lanes still lack that advisory and are tracked as follow-up. CLI
+  smoke tests: 50 → 91.
 
 - **Empty chains are legal — and then the anchors must be null.** A
   plain capsule's only envelope-to-chain binding is the

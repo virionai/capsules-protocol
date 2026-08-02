@@ -2,9 +2,9 @@
 // capsule — command-line entry point.
 //
 // Exit codes:
-//   0  success / verification passed
-//   1  verification failed / vectors mismatch / data violation
-//   2  I/O, argument, or environment error
+//   0  success / verified and any supplied trust policy satisfied
+//   1  verification failed / trust policy not satisfied / vectors mismatch
+//   2  usage, I/O, or environment error
 //
 // Note: we set process.exitCode and return rather than calling
 // process.exit(). When stdout is a pipe (e.g. captured by spawnSync or
