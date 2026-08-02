@@ -18,6 +18,8 @@ const {
   resolveRecipientKeys,
   clerkRecipientDirectory,
   evaluateSignerPolicy,
+  fetchIssuerMetadata,
+  loadTrustRoots,
 } = federation;
 
 const TS = "2026-05-07T12:00:00Z";
@@ -865,4 +867,70 @@ test("evaluateSignerPolicy refuses to run without a capsule id", () => {
     () => evaluateSignerPolicy(verifyResult, [], { required: [] }),
     /requires options\.capsuleId/,
   );
+});
+
+// --------------------------------------------------------------------------
+// Issuer discovery: identity is bound to the origin it was fetched from
+// --------------------------------------------------------------------------
+
+function fakeFetch(routes) {
+  return async (url) => {
+    if (!(url in routes)) return { ok: false, async json() { return {}; } };
+    return { ok: true, async json() { return routes[url]; } };
+  };
+}
+
+test("issuer metadata whose 'issuer' does not match the fetch origin is refused", async () => {
+  const fetchLike = fakeFetch({
+    "https://evil.example/.well-known/capsule-issuer.json": {
+      issuer: "https://capsules.acme.example",
+      spec_version: "0.6",
+      profiles: ["ed25519-jcs"],
+      trust_roots: { jwks: { keys: [] } },
+    },
+  });
+  await assert.rejects(
+    () => fetchIssuerMetadata(fetchLike, "https://evil.example"),
+    /does not match the origin it was fetched from/,
+  );
+});
+
+test("issuer metadata is accepted when 'issuer' matches the fetch origin", async () => {
+  const doc = {
+    issuer: "https://capsules.acme.example/",
+    spec_version: "0.6",
+    profiles: ["ed25519-jcs"],
+    trust_roots: { jwks: { keys: [] } },
+  };
+  const fetchLike = fakeFetch({
+    "https://capsules.acme.example/.well-known/capsule-issuer.json": doc,
+  });
+  const meta = await fetchIssuerMetadata(fetchLike, "https://capsules.acme.example");
+  assert.equal(meta.issuer, "https://capsules.acme.example/");
+});
+
+test("loadTrustRoots refuses a jwks_uri off the issuer origin", async () => {
+  const meta = {
+    issuer: "https://capsules.acme.example",
+    profiles: ["ed25519-jcs"],
+    trust_roots: { jwks_uri: "https://evil.example/jwks.json" },
+  };
+  const fetchLike = fakeFetch({
+    "https://evil.example/jwks.json": { keys: [{ kid: "k", alg: "ed25519-jcs", public_key_hex: "0".repeat(64) }] },
+  });
+  await assert.rejects(
+    () => loadTrustRoots(meta, fetchLike),
+    /is not on the issuer origin/,
+  );
+});
+
+test("loadTrustRoots fetches a jwks_uri on the issuer origin", async () => {
+  const jwks = { keys: [{ kid: "k", alg: "ed25519-jcs", public_key_hex: "0".repeat(64) }] };
+  const meta = {
+    issuer: "capsules.acme.example",
+    profiles: ["ed25519-jcs"],
+    trust_roots: { jwks_uri: "https://capsules.acme.example/.well-known/jwks.json" },
+  };
+  const fetchLike = fakeFetch({ "https://capsules.acme.example/.well-known/jwks.json": jwks });
+  assert.deepEqual(await loadTrustRoots(meta, fetchLike), jwks);
 });
