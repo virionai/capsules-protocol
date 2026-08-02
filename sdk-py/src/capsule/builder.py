@@ -46,7 +46,6 @@ _SKILL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 class _SkillEntry:
     json: dict | None
     markdown: str | None
-    signed: bool
 
 
 class CapsuleBuilder:
@@ -91,13 +90,19 @@ class CapsuleBuilder:
         *,
         json: dict | None = None,
         markdown: str | None = None,
-        signed: bool = False,
     ) -> CapsuleBuilder:
+        """Add a skill (skills/<id>/skill.json + SKILL.md).
+
+        There is no trust declaration here: skill trust is host-relative
+        and DERIVED at verify time (``verify_capsule(...)["skill_trust"]``),
+        so an author cannot assert it. The removed draft-era ``signed``
+        flag raises TypeError like any unknown keyword.
+        """
         if not isinstance(id, str) or not _SKILL_ID_RE.match(id):
             raise ValueError(f"invalid skill id: {id}")
         if id == "decryption":
             raise ValueError("'decryption' is reserved for encryption metadata; not a skill")
-        self.skills[id] = _SkillEntry(json=json, markdown=markdown, signed=bool(signed))
+        self.skills[id] = _SkillEntry(json=json, markdown=markdown)
         return self
 
     def add_payload(self, path: str, data: bytes) -> CapsuleBuilder:
@@ -242,7 +247,6 @@ class CapsuleBuilder:
         }
         if self.agents_md is not None:
             inner["agents.md"] = self.agents_md.encode("utf-8")
-        skill_trust: dict[str, str] = {}
         for sid, entry in self.skills.items():
             if entry.json is not None:
                 inner[f"skills/{sid}/skill.json"] = json.dumps(
@@ -250,7 +254,6 @@ class CapsuleBuilder:
                 ).encode("utf-8")
             if entry.markdown is not None:
                 inner[f"skills/{sid}/SKILL.md"] = entry.markdown.encode("utf-8")
-            skill_trust[sid] = "signed" if entry.signed else "unsigned"
         inner.update(self.payload)
 
         # Manifest
@@ -273,7 +276,6 @@ class CapsuleBuilder:
                 participants=self.participants,
                 content_index=content_index,
                 first_event_hash=first_event_hash,
-                skill_trust=skill_trust,
                 encryption=None,
                 created_at=self.created_at,
                 signer_commitment=signer_commitment,
@@ -309,7 +311,6 @@ class CapsuleBuilder:
             participants=self.participants,
             content_index=inner_content_index,
             first_event_hash=first_event_hash,
-            skill_trust=skill_trust,
             encryption=None,
             created_at=self.created_at,
             signer_commitment=signer_commitment,
@@ -373,7 +374,6 @@ class CapsuleBuilder:
             participants=self.participants,
             content_index=outer_content_index,
             first_event_hash=first_event_hash,
-            skill_trust={},
             encryption={
                 "metadata_path": "skills/decryption/decryption.json",
                 "cipher": "ChaCha20-Poly1305",

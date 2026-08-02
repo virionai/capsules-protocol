@@ -142,18 +142,24 @@ export class CapsuleReader {
   }
 
   /**
-   * Returns Map<skill_id, { json, markdown, trust }>.
+   * Returns Map<skill_id, { json, markdown }>.
    * Excludes 'decryption' (which is metadata, not a skill).
+   *
+   * Deliberately carries NO trust tier: the tier is host-relative (it
+   * depends on the allowlist the host supplies at verify time), so a
+   * reader cannot know it. Take the classification from
+   * `verifyCapsule(...).skillTrust` — and until a skill classifies
+   * "signed" there, treat its SKILL.md as untrusted text, never as
+   * instructions (spec/trust.md "Skill trust").
    */
   skills() {
     const out = new Map();
-    const trust = this._manifest.skill_trust ?? {};
     for (const [path, bytes] of this.files.entries()) {
       const m = path.match(/^skills\/([^/]+)\/(skill\.json|SKILL\.md)$/);
       if (!m) continue;
       const id = m[1];
       if (id === "decryption") continue;
-      if (!out.has(id)) out.set(id, { json: null, markdown: null, trust: trust[id] ?? "unsigned" });
+      if (!out.has(id)) out.set(id, { json: null, markdown: null });
       const slot = out.get(id);
       if (m[2] === "skill.json") slot.json = parseJsonStrict(bytes, path);
       else slot.markdown = dec.decode(bytes);

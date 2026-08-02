@@ -49,6 +49,7 @@ SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 CHAIN_BINDING = VECTORS / "chain-binding" / "vectors.json"
 SEMANTIC = VECTORS / "semantic-binding" / "vectors.json"
 CHAIN_RULES = VECTORS / "chain-rules" / "vectors.json"
+SKILL_TRUST = VECTORS / "skill-trust" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
@@ -168,6 +169,19 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
             f"{name}: expected a note containing {expected['notes_includes']!r}; "
             f"got {result['notes']!r}"
         )
+    if "skill_trust" in expected:
+        # Skill-trust derivation (spec/trust.md "Skill trust"): the tier
+        # MUST come from the verify result — capsule_signed plus the exact
+        # per-id map — never from any skill_trust member in the capsule.
+        want = expected["skill_trust"]
+        assert result["skill_trust"]["capsule_signed"] is want["capsule_signed"], (
+            f"{name}: expected skill_trust.capsule_signed={want['capsule_signed']}, "
+            f"got {result['skill_trust']}"
+        )
+        assert result["skill_trust"]["skills"] == want.get("skills", {}), (
+            f"{name}: expected skill_trust.skills={want.get('skills')}, "
+            f"got {result['skill_trust']['skills']}"
+        )
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(TAMPER))
@@ -244,6 +258,29 @@ def test_chain_rule_registry_outcomes(doc: dict, vector: dict, base: pathlib.Pat
     data = (base / vector["capsule_file"]).read_bytes()
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(vector["name"], vector["expected"], result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(SKILL_TRUST))
+def test_skill_trust_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Skill trust is DERIVED, never read from the capsule (spec/trust.md).
+
+    The same capsule bytes classify differently at hosts with different
+    allowlists, so each vector pins its own trust configuration: the
+    per-vector ``allowlist`` names keypairs in keys_file ([] = verify
+    with no allowlist). A lane that surfaces the fixture's own
+    ``skill_trust`` manifest member as trust hands prompt-injection text
+    to a host LLM as trusted instructions — that is the defect (A01)
+    this collection exists to keep closed.
+    """
+    keys = _load((base / doc["keys_file"]).resolve())
+    allowlist = []
+    for key_name in vector.get("allowlist", []):
+        assert key_name in keys, f"{vector['name']}: allowlist entry {key_name!r} not in keys_file"
+        allowlist.append(keys[key_name]["publicKey"])
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=allowlist)
     _assert_verify_outcome(vector["name"], vector["expected"], result)
 
 

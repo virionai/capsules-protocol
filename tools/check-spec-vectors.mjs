@@ -237,6 +237,20 @@ async function checkCollection(path, doc) {
     for (const req of v.requires ?? []) {
       if (!KNOWN_REQUIREMENTS.has(req)) fail(`${label}: unknown requirement '${req}'`);
     }
+    // A vector may pin its own trust configuration: `allowlist` names
+    // keypairs in the collection's keys_file ([] = no allowlist). Trust-
+    // derivation vectors (skill-trust) verify THE SAME capsule bytes under
+    // different host configurations, which a doc-level allowlist cannot
+    // express.
+    let vectorAllowlist = allowlist;
+    if (Array.isArray(v.allowlist)) {
+      vectorAllowlist = [];
+      for (const name of v.allowlist) {
+        const pk = keys?.[name]?.publicKey;
+        if (!pk) fail(`${label}: allowlist entry '${name}' has no keypair in keys_file`);
+        else vectorAllowlist.push(pk);
+      }
+    }
     let bytes;
     try {
       bytes = await readFile(join(base, v.capsule_file));
@@ -276,7 +290,7 @@ async function checkCollection(path, doc) {
       fail(`${label}: capsule_file cannot be opened: ${err.message}`);
       continue;
     }
-    const result = await verifyCapsule(reader, { allowlist });
+    const result = await verifyCapsule(reader, { allowlist: vectorAllowlist });
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
@@ -297,6 +311,27 @@ async function checkCollection(path, doc) {
       fail(
         `${label}: expected actorSet.bound=${v.expected.actor_set_bound}, got ${result.actorSet.bound}`,
       );
+    }
+    // Skill-trust derivation (spec/trust.md "Skill trust"): the tier MUST
+    // come from the verify result — capsule_signed plus the exact per-id
+    // map — never from any skill_trust member in the capsule itself.
+    if (v.expected.skill_trust) {
+      const want = v.expected.skill_trust;
+      const got = result.skillTrust ?? {};
+      if (got.capsuleSigned !== want.capsule_signed) {
+        fail(
+          `${label}: expected skillTrust.capsuleSigned=${want.capsule_signed}, got ${got.capsuleSigned}`,
+        );
+      }
+      const wantSkills = JSON.stringify(
+        Object.fromEntries(Object.entries(want.skills ?? {}).sort()),
+      );
+      const gotSkills = JSON.stringify(
+        Object.fromEntries(Object.entries(got.skills ?? {}).sort()),
+      );
+      if (wantSkills !== gotSkills) {
+        fail(`${label}: expected skillTrust.skills=${wantSkills}, got ${gotSkills}`);
+      }
     }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];
@@ -338,7 +373,7 @@ async function checkCollection(path, doc) {
             recipientPrivateKey: pair.privateKey,
           });
           const innerResult = await verifyCapsule(inner, {
-            allowlist,
+            allowlist: vectorAllowlist,
             outerEnvelope: reader.envelope(),
           });
           if (!innerResult.ok) {

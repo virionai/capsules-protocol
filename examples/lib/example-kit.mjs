@@ -55,7 +55,6 @@ This example is illustrative only and carries no warranty.
 Use the included work product as a portable example artifact. Do not treat
 the example content as operational, legal, compliance, or security advice.
 `,
-    signed: true,
   });
 
   for (const [path, content] of Object.entries(workproducts)) {

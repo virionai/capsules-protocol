@@ -151,6 +151,16 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "skill-trust-fixtures-regen",
+    name: "skill-trust fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-skill-trust-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "semantic-binding-fixtures-regen",
     name: "semantic-binding fixture regeneration check",
     language: "javascript",

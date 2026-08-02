@@ -95,7 +95,7 @@ procedure.
 - [manifest.md](manifest.md) — manifest.json schema and capsule identity
 - [chain.md](chain.md) — event format and hash linkage
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
-- [trust.md](trust.md) — trust model, allowlists, skill trust tiers
+- [trust.md](trust.md) — trust model, allowlists, derived skill trust
 - [pith.md](pith.md) — context-style discipline for narrative fields
 - [federation.md](federation.md) — key discovery, issuer metadata, and
   temporal anchoring (informative draft, proposed for v0.7)

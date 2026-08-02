@@ -39,7 +39,32 @@ public struct CapsuleVerification {
     /// i.e. no claim about who acted: verification can still succeed at a
     /// visibly lower assurance, reported in `notes`.
     public let actorSetBound: Bool
+    /// Derived skill-trust classification (spec/trust.md "Skill trust").
+    /// The tier is host-relative — it depends on the allowlist THIS
+    /// verification ran with — so it derives from the verify result and
+    /// is never read from the capsule: v0.6 has no manifest.skill_trust
+    /// member, and a capsule carrying one (earlier drafts, hostile
+    /// authors) contributes an inert unknown member to the hash and
+    /// nothing here. Capsule-level in reality: one envelope signature
+    /// covers the whole content index, so every skill under one seal
+    /// shares `capsuleSigned`; per-id variation only reflects whether
+    /// that skill ships an indexed skill.json.
+    public let skillTrust: SkillTrust
     public let notes: [String]
+
+    public struct SkillTrust: Equatable {
+        /// content_index ok AND envelope signatures ok AND at least one
+        /// DISTINCT trusted signer key.
+        public let capsuleSigned: Bool
+        /// Skill id -> "signed" | "unsigned". "signed" iff capsuleSigned
+        /// AND skills/<id>/skill.json is listed in the content index.
+        public let skills: [String: String]
+        public static let failClosed = SkillTrust(capsuleSigned: false, skills: [:])
+        public init(capsuleSigned: Bool, skills: [String: String]) {
+            self.capsuleSigned = capsuleSigned
+            self.skills = skills
+        }
+    }
 }
 
 public enum CapsuleVerifier {
@@ -66,6 +91,7 @@ public enum CapsuleVerifier {
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
+                skillTrust: .failClosed,
                 notes: initialNotes
             )
         }
@@ -99,6 +125,7 @@ public enum CapsuleVerifier {
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
+                skillTrust: .failClosed,
                 notes: initialNotes
             )
         }
@@ -124,6 +151,7 @@ public enum CapsuleVerifier {
                 trustedSignerCount: outer.trustedSignerCount,
                 signerSetBound: outer.signerSetBound,
                 actorSetBound: outer.actorSetBound,
+                skillTrust: .failClosed,
                 notes: outer.notes
             )
         }
@@ -179,6 +207,9 @@ public enum CapsuleVerifier {
             trustedSignerCount: outer.trustedSignerCount + innerResult.trustedSignerCount,
             signerSetBound: outer.signerSetBound,
             actorSetBound: outer.actorSetBound,
+            // Skills live inside the ciphertext: the inner verification's
+            // derived classification is the one that describes them.
+            skillTrust: innerResult.skillTrust,
             notes: outer.notes
         )
     }
@@ -280,6 +311,7 @@ public enum CapsuleVerifier {
         for (path, data) in parsed.files where !excluded.contains(path) {
             indexInputs.append((path, data))
         }
+        var contentIndexOk = false
         do {
             let ci = try Manifest.buildContentIndex(indexInputs, excluded: excluded)
             // Per-file attribution, so a failing index names the offending paths
@@ -319,8 +351,9 @@ public enum CapsuleVerifier {
                let storedEnv = lookupString(parsed.envelope, ["content_index_hash"]) {
                 let hashesMatch = ci.indexHash == storedMf && ci.indexHash == storedEnv
                 let short = String(ci.indexHash.prefix(12)) + "…"
+                contentIndexOk = hashesMatch && indexProblems.isEmpty
                 record("content_index_hash",
-                       hashesMatch && indexProblems.isEmpty,
+                       contentIndexOk,
                        indexProblems.isEmpty ? short : ([short] + indexProblems).joined(separator: "; "))
             }
         } catch {
@@ -555,15 +588,34 @@ public enum CapsuleVerifier {
                    : "originator binding: manifest.originator.public_key \(originatorKey ?? "(missing)") has no valid envelope signature with role 'originator'")
 
         let ok = checks.allSatisfy { $0.ok }
+        // DISTINCT trusted keys, never rows.
+        let trustedCount = Set(
+            signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
+        ).count
+
+        // Skill trust: DERIVED from this verification, never read from the
+        // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
+        // member is an inert unknown member, never authority.
+        let capsuleSigned = contentIndexOk && env.ok && trustedCount > 0
+        let indexedPaths = contentIndexPaths(parsed.manifest)
+        var skillTiers: [String: String] = [:]
+        for (path, _) in parsed.files {
+            let parts = path.split(separator: "/").map(String.init)
+            guard parts.count == 3, parts[0] == "skills",
+                  parts[2] == "skill.json" || parts[2] == "SKILL.md" else { continue }
+            let id = parts[1]
+            if id == "decryption" { continue } // encryption metadata, not a skill
+            skillTiers[id] = (capsuleSigned && indexedPaths.contains("skills/\(id)/skill.json"))
+                ? "signed" : "unsigned"
+        }
+
         return CapsuleVerification(
             ok: ok, level: level, checks: checks,
             signers: signers,
-            // DISTINCT trusted keys, never rows.
-            trustedSignerCount: Set(
-                signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
-            ).count,
+            trustedSignerCount: trustedCount,
             signerSetBound: signerSetBound,
             actorSetBound: actorSetBound,
+            skillTrust: .init(capsuleSigned: capsuleSigned, skills: skillTiers),
             notes: notes
         )
     }

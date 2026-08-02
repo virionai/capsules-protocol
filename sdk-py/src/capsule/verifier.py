@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TypedDict
 from zipfile import BadZipFile
 
@@ -18,6 +19,8 @@ from .manifest import (
     signer_commitment_problems,
 )
 from .reader import CapsuleReader
+
+_SKILL_PATH_RE = re.compile(r"^skills/([^/]+)/(skill\.json|SKILL\.md)$")
 
 
 class _ContentIndexResult(TypedDict):
@@ -40,6 +43,22 @@ class _ActorSetResult(TypedDict):
     bound: bool
 
 
+class _SkillTrustResult(TypedDict):
+    """Derived skill classification (spec/trust.md "Skill trust").
+
+    ``capsule_signed`` is the single capsule-level fact — content_index.ok
+    and envelope.ok and trusted_signer_count > 0 — because ONE envelope
+    signature covers the whole content index. ``skills[id]`` is "signed"
+    iff ``capsule_signed`` and ``skills/<id>/skill.json`` is listed in the
+    content index. Hosts MUST take the tier from here: the format has no
+    ``skill_trust`` manifest member, and any encountered one is an inert
+    unknown member, never authority.
+    """
+
+    capsule_signed: bool
+    skills: dict[str, str]
+
+
 class VerifyResult(TypedDict):
     ok: bool
     level: str
@@ -49,6 +68,7 @@ class VerifyResult(TypedDict):
     envelope: _EnvelopeSummary
     signer_set: _SignerSetResult
     actor_set: _ActorSetResult
+    skill_trust: _SkillTrustResult
     trusted_signer_count: int
     notes: list[str]
 
@@ -64,6 +84,7 @@ def _fail_closed(message: str, level: str) -> VerifyResult:
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": False, "errors": []},
         "actor_set": {"bound": False},
+        "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
         "notes": [],
     }
@@ -128,6 +149,7 @@ def _verify_capsule_impl(
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": True, "errors": []},
         "actor_set": {"bound": False},
+        "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
         "notes": notes,
     }
@@ -419,6 +441,35 @@ def _verify_capsule_impl(
     result["trusted_signer_count"] = len(
         {(s["public_key"] or "").lower() for s in signers if s["trusted"]}
     )
+
+    # Skill trust: DERIVED from this verification, never read from the
+    # capsule. A ``skill_trust`` manifest member does not exist in v0.6 —
+    # when present (earlier drafts, hostile authors) it is an inert
+    # unknown member (spec/trust.md "Skill trust"). The classification is
+    # capsule-level in reality: one envelope signature covers the whole
+    # content index, so every skill under one seal shares capsule_signed;
+    # per-id variation only reflects whether that skill ships an indexed
+    # skill.json at all.
+    capsule_signed = bool(
+        result["content_index"]["ok"]
+        and result["envelope"]["ok"]
+        and result["trusted_signer_count"] > 0
+    )
+    indexed_paths = {f.get("path") for f in stored_files}
+    skill_map: dict[str, str] = {}
+    for path in files:
+        m = _SKILL_PATH_RE.match(path)
+        if m is None:
+            continue
+        sid = m.group(1)
+        if sid == "decryption":  # encryption metadata, not a skill
+            continue
+        skill_map[sid] = (
+            "signed"
+            if capsule_signed and f"skills/{sid}/skill.json" in indexed_paths
+            else "unsigned"
+        )
+    result["skill_trust"] = {"capsule_signed": capsule_signed, "skills": skill_map}
 
     # Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
     # A present manifest.signer_commitment must equal the normalized

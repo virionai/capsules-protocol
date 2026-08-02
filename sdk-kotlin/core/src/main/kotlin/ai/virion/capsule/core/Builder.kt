@@ -50,7 +50,7 @@ class CapsuleBuilder(
     private var agentsMd: String? = null
     private var participants: List<Participant> = emptyList()
     private val bareEvents = mutableListOf<BareEvent>()
-    private val skills = linkedMapOf<String, Triple<ByteArray?, String?, Boolean>>() // id → (json, md, signed)
+    private val skills = linkedMapOf<String, Pair<ByteArray?, String?>>() // id → (json, md)
     private val payload = linkedMapOf<String, ByteArray>()
 
     fun setProgram(md: String) = apply { this.programMd = md }
@@ -108,11 +108,16 @@ class CapsuleBuilder(
         )
     }
 
-    fun addSkill(id: String, json: ByteArray? = null, markdown: String? = null,
-                 signed: Boolean = false) = apply {
+    /**
+     * Add a skill (skills/<id>/skill.json + SKILL.md). There is no trust
+     * declaration here: skill trust is host-relative and DERIVED at
+     * verify time (CapsuleVerification.skillTrust), so an author cannot
+     * assert it (spec/trust.md "Skill trust").
+     */
+    fun addSkill(id: String, json: ByteArray? = null, markdown: String? = null) = apply {
         require(Regex("^[A-Za-z0-9_-]+$").matches(id)) { "invalid skill id: $id" }
         require(id != "decryption") { "'decryption' is reserved for encryption metadata" }
-        skills[id] = Triple(json, markdown, signed)
+        skills[id] = json to markdown
     }
 
     fun addPayload(file: PayloadFile) = apply {
@@ -145,11 +150,9 @@ class CapsuleBuilder(
             "chain/events.jsonl" to eventsJsonl,
         )
         agentsMd?.let { innerFiles += "agents.md" to it.toByteArray(Charsets.UTF_8) }
-        val skillTrust = mutableListOf<Pair<String, String>>()
         for ((id, sk) in skills) {
             sk.first?.let { innerFiles += "skills/$id/skill.json" to it }
             sk.second?.let { innerFiles += "skills/$id/SKILL.md" to it.toByteArray(Charsets.UTF_8) }
-            skillTrust += id to (if (sk.third) "signed" else "unsigned")
         }
         for ((path, bytes) in payload) innerFiles += path to bytes
 
@@ -168,7 +171,6 @@ class CapsuleBuilder(
             },
             contentIndex = ci,
             firstEventHash = firstHash,
-            skillTrust = skillTrust,
             signerCommitment = signerCommitment,
             createdAt = createdAt,
             capsuleId = capsuleId,

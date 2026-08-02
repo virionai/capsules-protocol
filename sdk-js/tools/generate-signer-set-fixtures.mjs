@@ -138,7 +138,6 @@ async function buildLowLevelCapsule({ signerKeys, role, signerCommitment, extraS
     participants: [{ actor_id: "human:origin", role: "originator", label: "Origin" }],
     contentIndex,
     firstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: SIGNED_AT,
     signerCommitment,

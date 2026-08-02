@@ -159,11 +159,17 @@ def build_manifest(
     participants: list[dict],
     content_index: dict,
     first_event_hash: str,
-    skill_trust: dict | None = None,
     encryption: dict | None = None,
     created_at: str,
     signer_commitment: list[dict] | None = None,
 ) -> dict:
+    """Build a v0.6 manifest object (without ``id`` populated).
+
+    Deliberately absent: any ``skill_trust`` member. Skill trust is
+    host-relative and DERIVED at verify time (spec/trust.md); a capsule
+    from an earlier draft that carries the member is treated as having an
+    inert unknown member — preserved and hashed, never read as authority.
+    """
     manifest = {
         "format": {
             "version": "0.6",
@@ -176,7 +182,6 @@ def build_manifest(
         "participants": participants,
         "first_event_hash": first_event_hash,
         "content_index": content_index,
-        "skill_trust": skill_trust if skill_trust is not None else {},
         "encryption": encryption,
         "created_at": created_at,
     }

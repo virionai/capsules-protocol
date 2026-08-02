@@ -129,7 +129,7 @@ final class EncryptedRoundTripTests: XCTestCase {
                 payload: jobj(("decision", "go"))
             )
             .addSkill(id: "demo", json: Data(#"{"id":"demo","actions":[]}"#.utf8),
-                      markdown: "# Demo\n", signed: false)
+                      markdown: "# Demo\n")
             .addPayload(.init(path: "payload/notes.txt", bytes: Data("hello\n".utf8)))
         let result = try builder.seal(
             signedAt: signedAt,

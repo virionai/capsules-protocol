@@ -163,13 +163,19 @@ export function buildSignerCommitment(members) {
   return out;
 }
 
-/** Build a v0.6 manifest object (without `id` populated). */
+/**
+ * Build a v0.6 manifest object (without `id` populated).
+ *
+ * Deliberately absent: any `skill_trust` member. Skill trust is
+ * host-relative and DERIVED at verify time (spec/trust.md); a capsule
+ * from an earlier draft that carries the member is treated as having an
+ * inert unknown member — preserved and hashed, never read as authority.
+ */
 export function buildManifest({
   originator,
   participants,
   contentIndex,
   firstEventHash,
-  skillTrust,
   encryption,
   createdAt,
   signerCommitment,
@@ -186,7 +192,6 @@ export function buildManifest({
     participants,
     first_event_hash: firstEventHash,
     content_index: contentIndex,
-    skill_trust: skillTrust ?? {},
     encryption: encryption ?? null,
     created_at: createdAt,
   };

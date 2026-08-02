@@ -11,6 +11,39 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **Skill trust is now a DERIVED classification — the author-declared
+  `manifest.skill_trust` member is removed from the format (finding
+  A01).** spec/trust.md defines the `signed` tier in terms of the
+  HOST'S allowlist, which exists only at verify time, but the tier was
+  whatever the author passed to `addSkill(..., signed)` and no verifier
+  in any lane cross-referenced it: an attacker-authored capsule, sealed
+  with the attacker's own key at a host that does NOT allowlist it,
+  reported `trust: "signed"` for a SKILL.md full of prompt-injection
+  text — and a host enforcing the tier exactly as documented was
+  enforcing the attacker's own claim. The field was a category error
+  twice over: a build-time member claiming a verify-time, host-relative
+  property (the author cannot know the host's allowlist), with per-skill
+  granularity a single envelope signature cannot back. All five lanes
+  now derive the tier in the verify result — `capsule_signed =
+  content_index.ok AND envelope.ok AND trusted_signer_count > 0`; a
+  skill is `signed` iff `capsule_signed` and its `skill.json` is listed
+  in the content index — reported as `skill_trust: {capsule_signed,
+  skills}` (`skillTrust` in JS/Swift/Kotlin). Reader skill accessors
+  (`reader.skills()`, `CapsuleSkill`) no longer carry a trust member —
+  a reader without the host's allowlist cannot know one — and sdk-py
+  gained the previously missing `skills()` accessor so every lane
+  exposes the same surface. Builders reject the removed `signed`
+  declaration loudly. A capsule from an earlier draft that still
+  carries `skill_trust` verifies (unknown member: preserved, hashed,
+  inert) but the member is NEVER read as a trust input. spec/trust.md's
+  adversary matrix no longer claims the author-declared tier as an
+  author-resistant control; the derived tier genuinely is one.
+  Conformance vectors: `spec/vectors/skill-trust/` (the
+  `declared-signed-not-allowlisted` vector pins the attack), consumed
+  by all five lanes and registered in `spec/vectors/registry.json`;
+  fixtures for signer-set, chain-binding, chain-rules and
+  unknown-fields regenerated without the removed member.
+
 - **The semantic-binding layer: manifest claims are now tied to the
   signed envelope, the chain, and the files in every lane.**
   `capsule_id` is derived from `manifest.first_event_hash`, but no lane

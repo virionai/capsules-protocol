@@ -37,6 +37,19 @@ data class CapsuleVerification(
      * visibly lower assurance, reported in [notes].
      */
     val actorSetBound: Boolean = false,
+    /**
+     * Derived skill-trust classification (spec/trust.md "Skill trust").
+     * The tier is host-relative — it depends on the allowlist THIS
+     * verification ran with — so it derives from the verify result and is
+     * never read from the capsule: v0.6 has no manifest.skill_trust
+     * member, and a capsule carrying one (earlier drafts, hostile
+     * authors) contributes an inert unknown member to the hash and
+     * nothing here. Capsule-level in reality: one envelope signature
+     * covers the whole content index, so every skill under one seal
+     * shares [SkillTrustCheck.capsuleSigned]; per-id variation only
+     * reflects whether that skill ships an indexed skill.json.
+     */
+    val skillTrust: SkillTrustCheck = SkillTrustCheck(),
     val notes: List<String>,
 ) {
     data class SignerCheck(
@@ -44,6 +57,20 @@ data class CapsuleVerification(
         val publicKey: String,
         val valid: Boolean,
         val trusted: Boolean,
+    )
+
+    /**
+     * Derived skill classification. The default — capsuleSigned=false,
+     * empty map — is the fail-closed shape used by early-return paths.
+     */
+    data class SkillTrustCheck(
+        /** content_index ok AND envelope ok AND >=1 distinct trusted key. */
+        val capsuleSigned: Boolean = false,
+        /**
+         * Skill id -> "signed" | "unsigned". "signed" iff capsuleSigned
+         * AND skills/<id>/skill.json is listed in the content index.
+         */
+        val skills: Map<String, String> = emptyMap(),
     )
 }
 
@@ -158,8 +185,9 @@ object CapsuleVerifier {
         val storedIdxMf = CapsuleReader.lookupString(parsed.manifest, listOf("content_index", "index_hash"))
         val storedIdxEnv = CapsuleReader.lookupString(parsed.envelope, listOf("content_index_hash"))
         val indexHashesMatch = ci.indexHash == storedIdxMf && ci.indexHash == storedIdxEnv
+        val contentIndexOk = indexHashesMatch && indexProblems.isEmpty()
         rec("content_index_hash",
-            indexHashesMatch && indexProblems.isEmpty(),
+            contentIndexOk,
             (listOf(ci.indexHash.take(12) + "…") + indexProblems).joinToString("; "))
 
         // Encrypted-blob shape (mirrors verifier-rust). Two legal shapes:
@@ -393,14 +421,34 @@ object CapsuleVerifier {
         )
 
         val ok = checks.all { it.ok }
+        // DISTINCT trusted keys, never rows.
+        val trustedCount = signers.filter { it.trusted }
+            .map { it.publicKey.lowercase() }.toSet().size
+
+        // Skill trust: DERIVED from this verification, never read from the
+        // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
+        // member is an inert unknown member, never authority.
+        val capsuleSigned = contentIndexOk && env.ok && trustedCount > 0
+        val indexedPaths = contentIndexPaths(parsed.manifest)
+        val skillTiers = mutableMapOf<String, String>()
+        for (path in parsed.files.keys) {
+            val parts = path.split('/')
+            if (parts.size != 3 || parts[0] != "skills") continue
+            if (parts[2] != "skill.json" && parts[2] != "SKILL.md") continue
+            val id = parts[1]
+            if (id == "decryption") continue // encryption metadata, not a skill
+            skillTiers[id] =
+                if (capsuleSigned && "skills/$id/skill.json" in indexedPaths) "signed"
+                else "unsigned"
+        }
+
         return CapsuleVerification(
             ok = ok, level = "L2", checks = checks,
             signers = signers,
-            // DISTINCT trusted keys, never rows.
-            trustedSignerCount = signers.filter { it.trusted }
-                .map { it.publicKey.lowercase() }.toSet().size,
+            trustedSignerCount = trustedCount,
             signerSetBound = signerSetBound,
             actorSetBound = actorSetBound,
+            skillTrust = CapsuleVerification.SkillTrustCheck(capsuleSigned, skillTiers),
             notes = notes,
         )
     }

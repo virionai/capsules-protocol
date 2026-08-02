@@ -92,7 +92,6 @@ async function sealCapsule(keys, { chainBytes, manifestFirstEventHash, firstEven
     participants: [{ actor_id: "human:origin", role: "originator", label: "Origin" }],
     contentIndex,
     firstEventHash: manifestFirstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: SIGNED_AT,
     signerCommitment: buildSignerCommitment([

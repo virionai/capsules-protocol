@@ -30,7 +30,7 @@ final class RoundTripTests: XCTestCase {
                 payload: jobj(("decision", "go"))
             )
             .addSkill(id: "demo", json: Data(#"{"id":"demo","actions":[]}"#.utf8),
-                      markdown: "# Demo\n\nSkill markdown.\n", signed: false)
+                      markdown: "# Demo\n\nSkill markdown.\n")
             .addPayload(.init(path: "payload/notes.txt", bytes: Data("hello\n".utf8)))
 
         let result = try builder.seal()
@@ -53,7 +53,6 @@ final class RoundTripTests: XCTestCase {
         let skills = parsed.skills()
         XCTAssertEqual(skills.count, 1)
         XCTAssertEqual(skills.first?.id, "demo")
-        XCTAssertEqual(skills.first?.trust, .unsigned)
         XCTAssertEqual(parsed.programMd.split(separator: "\n").first, "# Hello")
     }
 

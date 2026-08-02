@@ -25,10 +25,12 @@
 //!   `#[serde(rename_all = "camelCase")]`; the Rust field names mirror the
 //!   on-disk keys exactly.
 //!
-//! - **`Manifest::skill_trust` uses `BTreeMap`, not `HashMap`.** JCS sorts
-//!   object keys, and the JS SDK relies on that — the data is logically
-//!   sorted-keyed, and we preserve that semantic at the type level so any
-//!   later canonicalization through `serde_jcs` produces matching bytes.
+//! - **There is no `Manifest::skill_trust` field.** v0.6 removed the
+//!   member from the format: skill trust is host-relative and DERIVED at
+//!   verify time (spec/trust.md "Skill trust"). A capsule from an earlier
+//!   draft that still carries the member parses fine — it lands in the
+//!   preserved `serde_json::Value` tree as an unknown member (hashed,
+//!   inert) and is never read as authority.
 //!
 //! - **`Envelope::encrypted_blob_hash` is `Option<String>`.** Plain (cipher
 //!   == "none") capsules write `null` here; encrypted ones write a 64-hex
@@ -43,8 +45,6 @@
 //!   so we must preserve everything inside `payload` losslessly. Round-
 //!   tripping through `Value` is fine for that — the JCS canonicalizer
 //!   re-sorts keys at hash time anyway.
-
-use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -127,11 +127,6 @@ pub struct SignerCommitmentEntry {
 
 /// The full v0.6 manifest. Field names match the on-disk keys exactly.
 ///
-/// `skill_trust` is keyed by skill id (e.g. `"intake-checklist"`) and valued
-/// by trust state (e.g. `"signed"`). `BTreeMap` is intentional: the on-disk
-/// representation comes through JCS, which sorts object keys, and any
-/// re-canonicalization on our side has to honor the same ordering.
-///
 /// `signer_commitment` is the exact seal-time signer set (spec/manifest.md
 /// "signer_commitment"). It is OPTIONAL on the wire — presence binds,
 /// absence reports — so `#[serde(default)]` keeps commitment-less capsules
@@ -152,7 +147,6 @@ pub struct Manifest {
     /// event-count consistency in both directions.
     pub first_event_hash: Option<String>,
     pub content_index: ContentIndex,
-    pub skill_trust: BTreeMap<String, String>,
     pub encryption: Option<Encryption>,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

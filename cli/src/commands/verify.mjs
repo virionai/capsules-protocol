@@ -111,6 +111,12 @@ export async function verifyCmd(argv) {
         envelope: result.envelope,
         signer_set: result.signerSet,
         actor_set: result.actorSet,
+        // Derived at verify time from THIS invocation's allowlist —
+        // never read from the capsule (spec/trust.md "Skill trust").
+        skill_trust: {
+          capsule_signed: result.skillTrust.capsuleSigned,
+          skills: result.skillTrust.skills,
+        },
         notes: result.notes,
         trusted_signer_count: result.trustedSignerCount,
       },
@@ -163,6 +169,12 @@ export async function verifyCmd(argv) {
     out(`  policy check:      ${policySatisfied
       ? "SATISFIED"
       : "FAILED — no signer matches the supplied allowlist"}`);
+  }
+  // Skill trust is DERIVED from this invocation's allowlist, never read
+  // from the capsule (spec/trust.md "Skill trust").
+  const skillTiers = Object.entries(result.skillTrust.skills);
+  if (skillTiers.length > 0) {
+    out(`  skills (derived):  ${skillTiers.map(([id, tier]) => `${id}=${tier}`).join(", ")}`);
   }
 
   out("");

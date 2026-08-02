@@ -32,9 +32,44 @@ function failClosed(message, level) {
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: false, errors: [] },
     actorSet: { bound: false },
+    skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
     notes: [],
   };
+}
+
+const SKILL_PATH = /^skills\/([^/]+)\/(skill\.json|SKILL\.md)$/;
+
+/**
+ * Derived skill-trust classification (spec/trust.md "Skill trust").
+ *
+ * The tier is host-relative — it depends on the allowlist the host passed
+ * to THIS verification — so it can only be derived from the verify
+ * result, never read from the capsule (the author cannot know the host's
+ * allowlist, and the threat model's adversary IS the capsule author).
+ *
+ * The classification is CAPSULE-LEVEL in reality: one envelope signature
+ * covers the whole content index, so every skill under one seal shares
+ * the same `capsuleSigned` fact. Per-id variation only reflects whether
+ * that skill ships a `skill.json` listed in the content index at all.
+ */
+function deriveSkillTrust({ files, manifest, contentIndexOk, envelopeOk, trustedSignerCount }) {
+  const capsuleSigned = contentIndexOk && envelopeOk && trustedSignerCount > 0;
+  const indexedPaths = new Set(
+    (Array.isArray(manifest?.content_index?.files) ? manifest.content_index.files : [])
+      .map((f) => f?.path)
+      .filter((p) => typeof p === "string"),
+  );
+  const skills = {};
+  for (const path of files.keys()) {
+    const m = path.match(SKILL_PATH);
+    if (!m) continue;
+    const id = m[1];
+    if (id === "decryption") continue; // encryption metadata, not a skill
+    skills[id] =
+      capsuleSigned && indexedPaths.has(`skills/${id}/skill.json`) ? "signed" : "unsigned";
+  }
+  return { capsuleSigned, skills };
 }
 
 /**
@@ -65,6 +100,7 @@ function failClosed(message, level) {
  *     envelope: { ok, signers: [{role, public_key, valid, trusted}] },
  *     signerSet: { bound, ok, errors: [string] },
  *     actorSet: { bound },
+ *     skillTrust: { capsuleSigned, skills: { [id]: "signed"|"unsigned" } },
  *     trustedSignerCount: number,
  *     notes: [string]
  *   }
@@ -83,6 +119,16 @@ function failClosed(message, level) {
  *   bound=false — the manifest declares no participants, so it makes no
  *                 claim about who acted. Verification still succeeds; the
  *                 unbound actor set is reported here and in notes.
+ * skillTrust is the DERIVED skill classification (spec/trust.md):
+ *   capsuleSigned — contentIndex.ok && envelope.ok && trustedSignerCount>0,
+ *                 i.e. every content-indexed byte is covered by at least one
+ *                 valid signature from a key on THIS host's allowlist.
+ *   skills[id]  — "signed" iff capsuleSigned and skills/<id>/skill.json is
+ *                 listed in the content index; otherwise "unsigned". The
+ *                 fact is capsule-level (one signature covers the whole
+ *                 index); hosts MUST take the tier from here — the format
+ *                 has no skill_trust manifest member, and any encountered
+ *                 one is an inert unknown member, never authority.
  * trustedSignerCount counts DISTINCT trusted public keys, not signer rows.
  */
 export async function verifyCapsule(readerOrBytes, options = {}) {
@@ -129,6 +175,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: true, errors: [] },
     actorSet: { bound: false },
+    skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
     notes,
   };
@@ -400,6 +447,18 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   result.trustedSignerCount = new Set(
     result.envelope.signers.filter((s) => s.trusted).map((s) => s.public_key.toLowerCase()),
   ).size;
+
+  // Skill trust: DERIVED from this verification, never read from the
+  // capsule. manifest.skill_trust does not exist in v0.6 — a capsule
+  // carrying one (earlier drafts, hostile authors) contributes an inert
+  // unknown member to the hash and NOTHING here (spec/trust.md).
+  result.skillTrust = deriveSkillTrust({
+    files,
+    manifest,
+    contentIndexOk: result.contentIndex.ok,
+    envelopeOk: result.envelope.ok,
+    trustedSignerCount: result.trustedSignerCount,
+  });
 
   // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
   // A present manifest.signer_commitment must equal the normalized

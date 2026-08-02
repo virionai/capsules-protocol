@@ -42,9 +42,6 @@ here.
     ],
     "index_hash": "<64-hex>"
   },
-  "skill_trust": {
-    "<skill_id>": "signed | unsigned"
-  },
   "signer_commitment": [
     { "role": "approver", "public_key": "<64-hex ed25519 raw>" },
     { "role": "originator", "public_key": "<64-hex ed25519 raw>" }
@@ -104,10 +101,14 @@ here.
     the envelope signature.
 - `content_index.index_hash`: SHA-256 over the JCS-canonical
   serialization of `content_index.files`.
-- `skill_trust`: per-skill trust assertion (see [trust.md](trust.md)).
-  Skills marked `signed` must have their `skill.json` covered by an
-  envelope signature; unsigned skills are passed to readers as
-  untrusted content.
+- There is **no `skill_trust` member**. Skill trust is host-relative —
+  it depends on the allowlist the verifying host supplies — so it is
+  DERIVED from the verify result, never declared by the author (see
+  [trust.md](trust.md) "Skill trust"). A capsule from an earlier draft
+  that carries the member is treated as carrying an unknown member:
+  preserved verbatim, included in `manifest_hash`, and semantically
+  inert — verifiers MUST NOT read it as a trust input. Conformance
+  vectors: `spec/vectors/skill-trust/`.
 - `signer_commitment`: the exact membership of the seal-time signer
   set, as an array of `{role, public_key}` members. The envelope's
   signing input is `JCS(envelope minus signers)`, so `signers[]` is not

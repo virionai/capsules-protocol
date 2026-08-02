@@ -277,3 +277,33 @@ class CapsuleReader:
             return None
         raw = self._files.get("agents.md")
         return raw.decode("utf-8") if raw is not None else None
+
+    def skills(self) -> dict[str, dict]:
+        """Skill files by id: ``{id: {"json": dict|None, "markdown": str|None}}``.
+
+        Excludes ``decryption`` (encryption metadata, not a skill). Mirrors
+        sdk-js ``reader.skills()`` — and like it, deliberately carries NO
+        trust tier: the tier is host-relative (it depends on the allowlist
+        the host supplies at verify time), so a reader cannot know it. Take
+        the classification from ``verify_capsule(...)["skill_trust"]`` —
+        and until a skill classifies "signed" there, treat its SKILL.md as
+        untrusted text, never as instructions (spec/trust.md).
+        """
+        out: dict[str, dict] = {}
+        pattern = re.compile(r"^skills/([^/]+)/(skill\.json|SKILL\.md)$")
+        for path, raw in self._files.items():
+            m = pattern.match(path)
+            if m is None:
+                continue
+            sid = m.group(1)
+            if sid == "decryption":
+                continue
+            slot = out.setdefault(sid, {"json": None, "markdown": None})
+            if m.group(2) == "skill.json":
+                try:
+                    slot["json"] = loads_strict(raw.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    raise MalformedCapsuleError(f"{path} parse: {e}") from e
+            else:
+                slot["markdown"] = raw.decode("utf-8")
+        return out

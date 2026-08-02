@@ -74,7 +74,7 @@ spec/                  v0.6 protocol specification (normative)
   manifest.md          manifest.json schema
   chain.md             event chain rules
   envelope.md          provenance envelope schema
-  trust.md             trust model and skill trust tiers
+  trust.md             trust model and derived skill trust
   pith.md              context-style discipline (informative)
 
 sdk-js/                JavaScript reference SDK (npm)
