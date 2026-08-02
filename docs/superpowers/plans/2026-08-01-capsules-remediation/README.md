@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close every tier-1 and tier-2 finding from [the pre-release code review](../../../../CODE-REVIEW-2026-07-31.md) so that the five implementation lanes agree on one protocol and no verifier accepts a capsule carrying bytes its signature does not cover.
+**Goal:** Close the review's findings so that the five lanes agree on one protocol, no verifier accepts a capsule carrying bytes its signature does not cover, and the format is secure for the strictest deployment while staying lax where open is the requirement.
 
-**Architecture:** Twelve independent fix clusters plus one design spike, each grounded in the real code and each landing with a negative conformance vector consumed by every lane. Clusters are sized so a reviewer can accept or reject one without touching its neighbours. The spike (S1) is a decision gate, not code — it must be answered before any work that changes the manifest or envelope wire shape.
+**Architecture:** Read **[ARCHITECTURE.md](ARCHITECTURE.md) first** — it is the spine and it supersedes the v1 reasoning. Work is organised by *integrity invariant vs host policy*, not by severity. Invariants are enforced unconditionally at every profile; policy requirements are reported as facts for a host-declared profile to judge.
 
 **Tech Stack:** JavaScript (node:test) · Python (pytest) · Rust (cargo test) · Swift (XCTest) · Kotlin (Gradle) · JSON conformance vectors under `spec/vectors/`
 
@@ -13,11 +13,30 @@
 Every task in every cluster implicitly includes these.
 
 - The project is **pre-release (v0.6 prototype)**. Breaking changes are acceptable. Do not add compatibility shims or deprecation paths.
-- `sdk-js` is the **reference implementation**. Where lanes disagree and no decision below says otherwise, JS defines correct behaviour.
-- The chain.md step-6 actor rule resolves as: **all five verifiers enforce** (`actor` is in `manifest.participants` or equals `system:host`), **and builders reject at `appendEvent` time**. Not auto-registration. *(Maintainer decision, 2026-08-01.)*
-- Every normative rule this plan enforces must land with a **negative conformance vector** consumed by every lane's spec-registry test. A fix without a vector does not count as done — that is the exact gap the review identified as the root pattern.
+- **The spec and its conformance vectors are authoritative.** `sdk-js` is one implementation of five and gets no vote by virtue of being written first. *(This inverts a v1 constraint — see ARCHITECTURE.md §2. Any cluster file still asserting JS-as-reference is stale on that point.)*
+- **Invariants are unconditional; policy is reported, never decided.** If implementing a fix makes an integrity check optional or profile-gated, that is a defect — stop. Conversely, if a fix rejects a capsule merely for *not asserting* something, it has confused absence with violation.
+- The chain.md step-6 actor rule resolves as: verifiers enforce `actor ∈ participants ∨ system:host` **when `participants` is non-empty**, and builders reject at `appendEvent` time under the same condition. Safe because `participants` is covered by `manifest_hash` inside the signed payload. *(Refined from the v1 decision — see ARCHITECTURE.md §1.)*
+- Every normative rule this plan enforces must land with a **negative conformance vector** consumed by every lane that can run it. A fix without a vector does not count as done — that is the exact gap the review identified as the root pattern.
 - Test frameworks by lane: `sdk-js` node:test · `sdk-py` pytest · `verifier-rust` `#[test]` · `sdk-swift` XCTest · `sdk-kotlin` its existing style.
 - Never claim a command was run without running it.
+
+## Build order (corrected)
+
+The v1 order is superseded. Signer-set binding was a zero-task design spike; it is now **step 2**, because until it lands every assurance claim counts rows in an unbound array and the report cannot be honest.
+
+```
+0.  Slot 0 — canonicalize manifest & envelope from the PARSED document,
+    preserving unknown members.                    [A07]      ← in flight
+1.  Container & crypto invariants.                 [C1 C2 C3 C4 C5]  ← in flight
+2.  Signer-set binding.                            [was S1 memo — now code]
+3.  Verifier totality + assurance report.          [C6 + new]
+4.  Cross-lane determinism.                        [C9 C10, A13 A14]
+5.  Semantic binding + registry.                   [C12 C7 C8]
+6.  Federation & self-containment.                 [C11 + reserved slots]
+7.  QA, fixture regeneration, v0.7 bump.
+```
+
+Step 0 gates everything additive: until Rust hashes a preserved `serde_json::Value` instead of a struct round-trip, filling *any* new field manufactures a false tamper accusation. Measured — `format.profile` and `pith_version` each PASS in JS and FAIL in Rust with `envelope.manifest_hash mismatch`.
 
 ---
 
