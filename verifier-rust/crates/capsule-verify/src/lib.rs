@@ -15,6 +15,7 @@ mod l3;
 pub mod manifest;
 pub mod schemas;
 pub mod verifier;
+pub mod versions;
 pub mod zip_reader;
 
 #[cfg(test)]

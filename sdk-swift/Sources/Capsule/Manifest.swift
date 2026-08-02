@@ -28,14 +28,19 @@ public enum Manifest {
         encrypted ? CONTENT_INDEX_EXCLUDED : STRUCTURAL_EXCLUDED
     }
 
-    public static let ID_DOMAIN = Data("capsule-id-v0.6\0".utf8)
+    /// The v0.6 capsule_id hash domain. Kept for byte-level reference;
+    /// derivation now selects the domain BY the capsule's declared
+    /// version via `CapsuleVersions.idDomain` (spec/versioning.md).
+    public static let ID_DOMAIN = CapsuleVersions.idDomain("0.6")
 
     /// SHA-256("capsule-id-v0.6\0" || originator_pub || first_event_hash_raw).
-    public static func computeCapsuleId(originatorPub: Data, firstEventHashHex: String) -> String {
+    public static func computeCapsuleId(originatorPub: Data, firstEventHashHex: String,
+                                        version: String = CapsuleVersions.current) -> String
+    {
         precondition(originatorPub.count == 32, "originator pubkey must be 32 bytes")
         precondition(firstEventHashHex.count == 64, "first_event_hash must be 64-hex")
         let firstRaw = Bytes.fromHex(firstEventHashHex)
-        let h = Hash.sha256(Bytes.concat(ID_DOMAIN, originatorPub, firstRaw))
+        let h = Hash.sha256(Bytes.concat(CapsuleVersions.idDomain(version), originatorPub, firstRaw))
         return Bytes.toHex(h)
     }
 

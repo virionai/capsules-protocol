@@ -264,10 +264,14 @@ public enum CapsuleReader {
         // ECDH below produces a key that won't decrypt — handled by AEAD.
 
         let shared = try recipient.dh(peerPublicKey: m.ephPub)
+        // HKDF info is keyed by the capsule's DECLARED version
+        // (spec/versioning.md): decrypting a v0.6 capsule uses the v0.6
+        // wrap-domain forever, whatever version this SDK seals at.
+        let declaredVersion = lookupString(outer.envelope, "version") ?? CapsuleVersions.current
         let wrapKey = HKDF.sha256(
             ikm: shared,
             salt: recipientPublicKey,
-            info: Data("capsule-key-wrap-v0.6".utf8),
+            info: CapsuleVersions.keyWrapInfo(declaredVersion),
             length: 32
         )
         let contentKey: Data
@@ -290,7 +294,7 @@ public enum CapsuleReader {
             throw CapsuleError.malformed("outer manifest missing originator.public_key")
         }
         let aad = try JCS.bytes(.object([
-            ("version", .string("0.6")),
+            ("version", .string(declaredVersion)),
             ("capsule_id", .string(envCapsuleId)),
             ("first_event_hash", .string(envFirstHash)),
             ("originator_public_key", .string(mfOrigPub)),
@@ -339,10 +343,11 @@ public enum CapsuleReader {
            case .string(let v)? = fmt.first(where: { $0.0 == "version" })?.1 {
             version = v
         }
-        guard version == "0.6" else {
-            throw CapsuleError.malformed(
-                "manifest.format.version: expected '0.6', got \(Chain.debugQuoted(version))")
-        }
+        // Any KNOWN version opens (spec/versioning.md): a v0.6 capsule
+        // stays openable by every future reader, forever. Unknown
+        // versions fail closed with a diagnosis distinct from
+        // malformation or tampering.
+        try CapsuleVersions.requireKnown(field: "manifest.format.version", version)
         guard case .string(let id)? = member("id"), isHex64(id) else {
             throw CapsuleError.malformed("manifest.id is not a 64-char lowercase hex string")
         }
@@ -404,9 +409,11 @@ public enum CapsuleReader {
         guard case .object(let pairs) = envelope else {
             throw CapsuleError.malformed("envelope.json is not a JSON object")
         }
-        guard case .string("0.6")? = pairs.first(where: { $0.0 == "version" })?.1 else {
-            throw CapsuleError.malformed("envelope.version: expected '0.6'")
+        var envVersion: String? = nil
+        if case .string(let v)? = pairs.first(where: { $0.0 == "version" })?.1 {
+            envVersion = v
         }
+        try CapsuleVersions.requireKnown(field: "envelope.version", envVersion)
         guard case .string(let cid)? = pairs.first(where: { $0.0 == "capsule_id" })?.1,
               isHex64(cid)
         else {

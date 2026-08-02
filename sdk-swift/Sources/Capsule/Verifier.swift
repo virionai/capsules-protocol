@@ -39,7 +39,28 @@ public struct CapsuleVerification {
     /// i.e. no claim about who acted: verification can still succeed at a
     /// visibly lower assurance, reported in `notes`.
     public let actorSetBound: Bool
+    /// Version-compatibility facts (spec/versioning.md): the observed
+    /// declared version, whether this verifier supports that era, the
+    /// closed status vocabulary ("known" | "unknown_newer" |
+    /// "unknown_older" | "invalid" | "unread"), the era's algorithm
+    /// suite, and the host's declared-acceptance verdict (nil when no
+    /// acceptVersions policy was declared). Reported, never decided.
+    public let formatVersion: FormatVersionReport
     public let notes: [String]
+
+    public struct FormatVersionReport {
+        public let observed: String?
+        public let supported: Bool
+        public let status: String
+        public let suite: String?
+        public let acceptedByPolicy: Bool?
+
+        /// The fail-closed "unread" shape used before the manifest's
+        /// declaration could be read.
+        public static let unread = FormatVersionReport(
+            observed: nil, supported: false, status: "unread", suite: nil, acceptedByPolicy: nil
+        )
+    }
 }
 
 public enum CapsuleVerifier {
@@ -52,7 +73,8 @@ public enum CapsuleVerifier {
     /// Pass `allowlist` of hex public keys (lowercase) to mark signers
     /// trusted; the verifier never returns trusted=true on its own.
     public static func verify(_ bytes: Data,
-                              allowlist: Set<String> = []) -> CapsuleVerification
+                              allowlist: Set<String> = [],
+                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
     {
         let parsed: ParsedCapsule
         do { parsed = try CapsuleReader.parse(bytes) }
@@ -66,10 +88,27 @@ public enum CapsuleVerifier {
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
+                formatVersion: formatVersionOnOpenRefusal(error),
                 notes: initialNotes
             )
         }
-        return verifyParsed(parsed, level: "L2", allowlist: allowlist)
+        return verifyParsed(parsed, level: "L2", allowlist: allowlist,
+                            acceptVersions: acceptVersions)
+    }
+
+    /// spec/versioning.md: the observed version stays a REPORTED fact
+    /// even when open is refused — an unknown-version refusal must be
+    /// distinguishable from tamper by machine, not just by prose.
+    private static func formatVersionOnOpenRefusal(_ error: Error)
+        -> CapsuleVerification.FormatVersionReport
+    {
+        if case CapsuleError.unsupportedVersion(let observed, let status, _) = error {
+            return CapsuleVerification.FormatVersionReport(
+                observed: observed, supported: false, status: status,
+                suite: nil, acceptedByPolicy: nil
+            )
+        }
+        return .unread
     }
 
     /// Verify a sealed capsule at L3 (decrypted-content). For plain
@@ -85,7 +124,8 @@ public enum CapsuleVerifier {
     public static func verify(_ bytes: Data,
                               recipientPrivateKey: Data,
                               recipientPublicKey: Data,
-                              allowlist: Set<String> = []) -> CapsuleVerification
+                              allowlist: Set<String> = [],
+                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
     {
         let outerParsed: ParsedCapsule
         do { outerParsed = try CapsuleReader.parse(bytes) }
@@ -99,14 +139,17 @@ public enum CapsuleVerifier {
                 checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
+                formatVersion: formatVersionOnOpenRefusal(error),
                 notes: initialNotes
             )
         }
         if !outerParsed.isEncrypted {
             // Plain capsule — L3 is the same surface as L2.
-            return verifyParsed(outerParsed, level: "L3", allowlist: allowlist)
+            return verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
+                                acceptVersions: acceptVersions)
         }
-        let outer = verifyParsed(outerParsed, level: "L3", allowlist: allowlist)
+        let outer = verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
+                                 acceptVersions: acceptVersions)
         var checks = outer.checks
 
         let inner: ParsedCapsule
@@ -124,6 +167,7 @@ public enum CapsuleVerifier {
                 trustedSignerCount: outer.trustedSignerCount,
                 signerSetBound: outer.signerSetBound,
                 actorSetBound: outer.actorSetBound,
+                formatVersion: outer.formatVersion,
                 notes: outer.notes
             )
         }
@@ -179,6 +223,7 @@ public enum CapsuleVerifier {
             trustedSignerCount: outer.trustedSignerCount + innerResult.trustedSignerCount,
             signerSetBound: outer.signerSetBound,
             actorSetBound: outer.actorSetBound,
+            formatVersion: outer.formatVersion,
             notes: outer.notes
         )
     }
@@ -186,7 +231,8 @@ public enum CapsuleVerifier {
     /// Verification of an already-parsed capsule (plain or encrypted-outer).
     private static func verifyParsed(_ parsed: ParsedCapsule,
                                      level: String,
-                                     allowlist: Set<String>) -> CapsuleVerification
+                                     allowlist: Set<String>,
+                                     acceptVersions: Set<String>? = nil) -> CapsuleVerification
     {
         var checks: [VerifyCheck] = []
         func record(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -198,6 +244,39 @@ public enum CapsuleVerifier {
         }
         record("zip_parse", true, "\(parsed.files.count) files")
         record("json_parse", true)
+
+        // Format-version facts (spec/versioning.md). CapsuleReader.parse
+        // gates unknown versions, so a ParsedCapsule always declares a
+        // KNOWN one; the observed version is REPORTED, and whether the
+        // deployment accepts it is host policy — reported, never decided.
+        let declaredVersion = lookupString(parsed.manifest, ["format", "version"])
+            ?? CapsuleVersions.current
+        var acceptedByPolicy: Bool? = nil
+        if let acceptVersions {
+            acceptedByPolicy = acceptVersions.contains(declaredVersion)
+            if acceptedByPolicy == false {
+                notes.append(
+                    "host policy: observed format version \(declaredVersion) is not in the "
+                    + "declared accepted set \(acceptVersions.sorted())"
+                )
+            }
+        }
+        let formatVersion = CapsuleVerification.FormatVersionReport(
+            observed: declaredVersion,
+            supported: true,
+            status: "known",
+            suite: CapsuleVersions.suite(for: declaredVersion),
+            acceptedByPolicy: acceptedByPolicy
+        )
+        // manifest.format.version and envelope.version MUST be equal
+        // (spec/versioning.md): two KNOWN versions that disagree leave
+        // the capsule ambiguous about which era's rules bind it.
+        let envDeclared = lookupString(parsed.envelope, ["version"])
+        record("format_version_binding", envDeclared == declaredVersion,
+               envDeclared == declaredVersion
+                   ? declaredVersion
+                   : "envelope.version '\(envDeclared ?? "null")' does not match "
+                     + "manifest.format.version '\(declaredVersion)'")
 
         // capsule_id derivation. A null (or absent) manifest.first_event_hash
         // is the legal zero-event shape: capsule_id then derives with 32
@@ -221,9 +300,12 @@ public enum CapsuleVerifier {
                pubBytes.count == 32, firstHash.count == 64,
                (try? Bytes.fromHexThrowing(firstHash, label: "manifest.first_event_hash")) != nil
             {
+                // Domain keyed by the capsule's DECLARED version
+                // (spec/versioning.md "Version-keyed domain separation").
                 let expected = Manifest.computeCapsuleId(
                     originatorPub: pubBytes,
-                    firstEventHashHex: firstHash
+                    firstEventHashHex: firstHash,
+                    version: declaredVersion
                 )
                 record("capsule_id",
                        expected == mfId && expected == envId,
@@ -564,6 +646,7 @@ public enum CapsuleVerifier {
             ).count,
             signerSetBound: signerSetBound,
             actorSetBound: actorSetBound,
+            formatVersion: formatVersion,
             notes: notes
         )
     }

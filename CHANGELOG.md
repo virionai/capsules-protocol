@@ -9,6 +9,47 @@ incompatible wire changes ship as `0.7`).
 
 ## Unreleased
 
+### Added
+
+- **The version-compatibility policy (`spec/versioning.md`) — the gate
+  for the v0.7 bump.** Every lane previously hard-rejected any
+  `manifest.format.version` / `envelope.version` other than exactly
+  `"0.6"`, so the moment the project bumps to 0.7, every capsule sealed
+  today becomes unopenable by the new verifier — not because the capsule
+  is bad, but because time passed. That is the strictest possible
+  violation of the archival profile (sealed today, opened by an
+  underwriter in three years). The policy, now normative and implemented
+  in all five lanes: a verifier keeps a KNOWN-VERSION table and opens
+  any known version under that era's rules forever; the observed version
+  is a REPORTED fact on the verify result (`formatVersion` /
+  `format_version` channel: observed, supported, status, suite,
+  accepted-by-policy) — even when open is refused; an unknown NEWER
+  version fails closed with a verifier-too-old diagnosis that is
+  machine-distinguishable from tamper detection, an unknown OLDER
+  version with its own reason, and a version violating the
+  `<major>.<minor>` grammar as a malformed document; after refusing an
+  unknown version the verifier applies none of its own era's rules, so
+  the refusal never manufactures hash-mismatch noise; and hosts DECLARE
+  an accepted range (`acceptVersions` / `accept_versions`) whose verdict
+  is reported, never decided — the signer-allowlist shape applied to
+  time. Domain-separation strings (`capsule-id-v<V>`,
+  `capsule-provenance-v<V>:<role>`, `capsule-key-wrap-v<V>`) are now
+  selected BY the capsule's declared version in every lane, never a
+  current-version constant, so the v0.6 strings are retained forever.
+  `spec/versioning.md` also pins the algorithm-suite rule: a sealed v0.6
+  capsule names no signature/hash/KDF/AEAD algorithm anywhere, so the
+  spec now states normatively that the absence of an algorithm
+  identifier means the v0.6 suite (Ed25519 / SHA-256 / JCS RFC 8785 /
+  X25519 + HKDF-SHA-256 + ChaCha20-Poly1305) — a later field cannot
+  retroactively disambiguate capsules sealed today; this statement can.
+  Conformance vectors: `spec/vectors/version-compat/` (known version
+  verifies + reports; coherent unknown-newer/-older refused with the
+  pinned reasons and the observed version still reported; grammar
+  violation refused as malformed; unknown envelope version gated
+  identically), consumed by all five lanes and registered in
+  `spec/vectors/registry.json`. The 0.6 → 0.7 bump itself is NOT
+  performed here; this policy is what makes it safe.
+
 ### Security
 
 - **The semantic-binding layer: manifest claims are now tied to the

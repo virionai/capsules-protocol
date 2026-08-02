@@ -56,8 +56,12 @@ here.
 
 ## Field rules
 
-- `format.*`: fixed for v0.6 capsules. Readers reject unknown
-  `format.version`.
+- `format.*`: fixed for v0.6 capsules. `format.version` declares the
+  capsule's format era and MUST equal `envelope.version`. Readers accept
+  any KNOWN version under that era's rules, and fail closed on an
+  unknown one with a diagnosis distinct from tamper detection — see
+  [versioning.md](versioning.md). Conformance vectors:
+  `spec/vectors/version-compat/`.
 - `id`: derived; see "Capsule identity" below. Computed by the writer
   and checked by the reader.
 - `originator.public_key`: 32 bytes of Ed25519 raw public key, lowercase
@@ -194,7 +198,11 @@ Notes:
 
 - All concatenations are raw bytes. No hex strings as inputs.
 - Domain-separation prefix `"capsule-id-v0.6\x00"` is 16 ASCII bytes
-  including the trailing NUL, so the prefix has a fixed boundary.
+  including the trailing NUL, so the prefix has a fixed boundary. The
+  prefix embeds the capsule's declared format version and is selected
+  BY that declared version, forever — a verifier recomputing the id of
+  a v0.6 capsule uses the v0.6 domain whatever version it seals at
+  ([versioning.md](versioning.md) "Version-keyed domain separation").
 - **Empty chain:** when `first_event_hash` is `null` (zero-event
   capsule, see [chain.md](chain.md) "Empty chains"),
   `first_event_hash_raw_bytes` is 32 zero bytes — the same value as the

@@ -36,6 +36,7 @@ import {
 } from "./manifest.js";
 import { compressEventPayload } from "./pith.js";
 import { packZip } from "./zip.js";
+import { CURRENT_VERSION, keyWrapInfo } from "./versions.js";
 import { nowIso, toKeyHex, toRecipient, toSigner } from "./keys.js";
 
 export class CapsuleBuilder {
@@ -341,7 +342,7 @@ export class CapsuleBuilder {
     const contentNonce = randomNonce12();
 
     const aadObj = {
-      version: "0.6",
+      version: CURRENT_VERSION,
       capsule_id: capsuleId,
       first_event_hash: firstEventHash,
       originator_public_key: this.originator.public_key,
@@ -361,7 +362,7 @@ export class CapsuleBuilder {
       const wrapKey = hkdfSha256(
         shared,
         r.publicKey,
-        Buffer.from("capsule-key-wrap-v0.6", "utf8"),
+        keyWrapInfo(CURRENT_VERSION),
         32,
       );
       const wrapNonce = randomNonce12();

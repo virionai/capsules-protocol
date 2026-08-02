@@ -17,6 +17,9 @@
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//   - version-compat/vectors.json     (version gates: known opens and
+//                                      reports; unknown fails closed with
+//                                      a non-tamper diagnosis)
 //
 // signing-input.json is consumed by SigningInputVectorTest, and
 // jcs-numbers.json / ed25519-key-validation.json by their own test files.
@@ -290,6 +293,58 @@ class SpecRegistryTest {
         }
     }
 
+    /**
+     * spec/versioning.md: a capsule declaring a KNOWN format version
+     * verifies under that era's rules with the observed version REPORTED
+     * machine-readably; a well-formed unknown version is refused at open
+     * with a diagnosis distinct from tamper detection (verifier-too-old
+     * vs unknown-older), a grammar-violating one as malformed. The
+     * unknown-version fixtures are internally coherent under their
+     * declared version's domain strings, so only the version gate
+     * refuses them. Even on refusal, the verify result still reports
+     * the observed version (expected.observed_version pin).
+     */
+    @Test
+    fun versionCompatRegistryOutcomes() {
+        val file = File(vectorsDir(), "version-compat/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "version-compat registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val expected = v.getAsJsonObject("expected")
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            val result = verify(bytes, allowlist)
+            val declaredOpen = expected.has("stage") && expected.get("stage").asString == "open"
+            if (declaredOpen) {
+                assertFalse(result.ok, "$name: open-stage fixture must not verify")
+                val parse = result.checks.firstOrNull { it.name == "parse" }
+                assertEquals(false, parse?.ok, "$name: reader must refuse this capsule")
+                val reason = expected.get("reason").asString
+                val needles = openReasonNeedles(reason)
+                assertTrue(
+                    needles.any { parse!!.detail.contains(it) },
+                    "$name: expected reason $reason (any of $needles); got ${parse!!.detail}",
+                )
+            } else {
+                assertVerifyOutcome(name, expected, result)
+            }
+            if (expected.has("observed_version")) {
+                // The observed version is a REPORTED fact even when the
+                // capsule is refused — what lets an auditor tell "this
+                // verifier is too old" apart from "corrupt".
+                assertEquals(
+                    expected.get("observed_version").asString,
+                    result.formatVersion.observed,
+                    "$name: formatVersion.observed mismatch",
+                )
+            }
+        }
+    }
+
     @Test
     fun malformedRegistryOutcomes() {
         val file = File(vectorsDir(), "malformed-layout/vectors.json")
@@ -509,6 +564,10 @@ class SpecRegistryTest {
             "directory marker with nonzero size",
         )
         "local_central_name_mismatch" -> listOf("local/central name mismatch")
+        // spec/versioning.md: unknown versions fail closed with a
+        // diagnosis DISTINCT from malformation or tampering.
+        "unsupported_version_newer" -> listOf("newer than this verifier supports")
+        "unsupported_version_older" -> listOf("older than any version this verifier supports")
         else -> error("unknown open-stage reason $reason")
     }
 

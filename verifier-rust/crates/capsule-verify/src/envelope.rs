@@ -11,10 +11,7 @@
 use crate::crypto::{ed25519_verify, hex_to_bytes};
 use crate::jcs::jcs;
 use crate::schemas::Envelope;
-
-/// Domain separator prefix per the v0.6 envelope spec. The full domain
-/// includes the per-signer role and a NUL terminator; see [`signing_input`].
-const ENVELOPE_DOMAIN_PREFIX: &str = "capsule-provenance-v0.6:";
+use crate::versions::{provenance_domain, CURRENT_VERSION};
 
 /// Result of verifying a single signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,14 +38,22 @@ pub fn canonical_payload(envelope_value: &serde_json::Value) -> Vec<u8> {
     jcs(&value)
 }
 
-/// Build the per-role signing input: `utf8("capsule-provenance-v0.6:" + role
-/// + "\x00") || JCS(envelope minus signers)`. Mirrors `envelopeSigningInput`.
+/// Build the per-role signing input:
+/// `utf8("capsule-provenance-v<version>:" + role + "\x00") ||
+/// JCS(envelope minus signers)`. Mirrors `envelopeSigningInput`.
 /// `envelope_value` is the preserved envelope tree (see [`canonical_payload`]).
+///
+/// The domain embeds the envelope's DECLARED `version` member — keyed
+/// selection per spec/versioning.md, so an older era's signatures stay
+/// verifiable under that era's domain forever. (Whether the declared
+/// version is one this verifier knows is gated earlier, in the
+/// verifier's version gate.)
 pub fn signing_input(envelope_value: &serde_json::Value, role: &str) -> Vec<u8> {
-    let mut domain = Vec::with_capacity(ENVELOPE_DOMAIN_PREFIX.len() + role.len() + 1);
-    domain.extend_from_slice(ENVELOPE_DOMAIN_PREFIX.as_bytes());
-    domain.extend_from_slice(role.as_bytes());
-    domain.push(0u8); // NUL terminator
+    let version = envelope_value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CURRENT_VERSION);
+    let domain = provenance_domain(version, role);
     let canonical = canonical_payload(envelope_value);
     let mut out = Vec::with_capacity(domain.len() + canonical.len());
     out.extend_from_slice(&domain);
@@ -139,7 +144,7 @@ mod tests {
         let (_, env_value) = parse_clean_envelope();
         let role = "originator";
         let input = signing_input(&env_value, role);
-        let prefix = format!("{ENVELOPE_DOMAIN_PREFIX}{role}\0");
+        let prefix = format!("capsule-provenance-v0.6:{role}\0");
         assert!(input.starts_with(prefix.as_bytes()));
         // After the NUL the rest must equal the canonical payload bytes.
         let canon = canonical_payload(&env_value);

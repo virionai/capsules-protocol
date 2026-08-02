@@ -76,6 +76,11 @@ v0.6:
 A reader that encounters these files in an old capsule should ignore
 them (they are not authoritative under v0.6) but should not error.
 
+How readers treat capsules whose *declared format version* differs from
+their own — known-older versions open forever; unknown versions fail
+closed with a non-tamper diagnosis — is defined in
+[versioning.md](versioning.md).
+
 ## Container properties
 
 - File entries are sorted by path on **UTF-16 code-unit sequences** — the

@@ -183,6 +183,11 @@ const OPEN_REASON = {
   symlink_entry: /symlink/,
   directory_marker_shape: /directory (attribute on non-directory name|marker with nonzero size)/,
   local_central_name_mismatch: /local\/central name mismatch/,
+  // spec/versioning.md: unknown versions fail closed with a diagnosis
+  // DISTINCT from malformation or tampering. The needles below are the
+  // cross-lane normative wording.
+  unsupported_version_newer: /newer than this verifier supports/,
+  unsupported_version_older: /older than any version this verifier supports/,
 };
 
 // Map a verify-stage `reason` category (semantic-binding/vectors.json) to
@@ -266,6 +271,21 @@ async function checkCollection(path, doc) {
           `${label}: open failed, but not for reason '${v.expected.reason}': ${openError.message}`,
         );
       }
+      // spec/versioning.md: the observed version is a REPORTED FACT even
+      // when open is refused — this is what lets an auditor tell "this
+      // verifier is too old" apart from "this capsule is corrupt".
+      if (v.expected.observed_version) {
+        const refused = await verifyCapsule(bytes, { allowlist });
+        if (refused.ok !== false) {
+          fail(`${label}: open-stage fixture must fail closed at the verifier surface`);
+        }
+        if (refused.formatVersion?.observed !== v.expected.observed_version) {
+          fail(
+            `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+              `got ${JSON.stringify(refused.formatVersion?.observed)}`,
+          );
+        }
+      }
       continue;
     }
 
@@ -280,6 +300,14 @@ async function checkCollection(path, doc) {
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // spec/versioning.md: the observed format version is a reported fact.
+    if (v.expected.observed_version &&
+        result.formatVersion?.observed !== v.expected.observed_version) {
+      fail(
+        `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+          `got ${JSON.stringify(result.formatVersion?.observed)}`,
+      );
     }
     // Signer-set binding is PRESENCE BINDS, ABSENCE REPORTS: vectors pin
     // the machine-readable bound/unbound report, not just ok.
@@ -698,6 +726,14 @@ function checkAttestationVectors(path, doc) {
     }
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // spec/versioning.md: the observed format version is a reported fact.
+    if (v.expected.observed_version &&
+        result.formatVersion?.observed !== v.expected.observed_version) {
+      fail(
+        `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+          `got ${JSON.stringify(result.formatVersion?.observed)}`,
+      );
     }
     if (v.expected.status && result.status !== v.expected.status) {
       fail(`${label}: expected status '${v.expected.status}', got '${result.status}'`);

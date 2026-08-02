@@ -11,6 +11,7 @@ import {
 } from "./crypto.js";
 import { unpackZip } from "./zip.js";
 import { toRawKey } from "./keys.js";
+import { keyWrapInfo, requireKnownVersion } from "./versions.js";
 
 const dec = new TextDecoder();
 
@@ -26,9 +27,10 @@ function validateManifestShape(manifest) {
   if (manifest == null || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("manifest.json is not a JSON object");
   }
-  if (manifest.format?.version !== "0.6") {
-    throw new Error(`manifest.format.version: expected '0.6', got ${JSON.stringify(manifest.format?.version)}`);
-  }
+  // Any KNOWN version opens (spec/versioning.md): a v0.6 capsule stays
+  // openable by every future reader, forever. Unknown versions fail
+  // closed with a diagnosis distinct from malformation or tampering.
+  requireKnownVersion("manifest.format.version", manifest.format?.version);
   if (!HEX64.test(manifest.id ?? "")) {
     throw new Error(`manifest.id is not a 64-char lowercase hex string: ${JSON.stringify(manifest.id)}`);
   }
@@ -81,9 +83,7 @@ function validateEnvelopeShape(envelope) {
   if (envelope == null || typeof envelope !== "object") {
     throw new Error("envelope.json is not a JSON object");
   }
-  if (envelope.version !== "0.6") {
-    throw new Error(`envelope.version: expected '0.6', got ${JSON.stringify(envelope.version)}`);
-  }
+  requireKnownVersion("envelope.version", envelope.version);
   if (!HEX64.test(envelope.capsule_id ?? "")) {
     throw new Error("envelope.capsule_id must be a 64-char lowercase hex string");
   }
@@ -203,10 +203,13 @@ export class CapsuleReader {
     const wrappedKey = hexToBytes(bundle.wrapped_key);
 
     const shared = x25519DH(recipientPrivateKey, ephPub);
+    // HKDF info is keyed by the capsule's DECLARED version
+    // (spec/versioning.md): decrypting a v0.6 capsule uses the v0.6
+    // wrap-domain forever, whatever version this SDK seals at.
     const wrapKey = hkdfSha256(
       shared,
       recipientPublicKey,
-      Buffer.from("capsule-key-wrap-v0.6", "utf8"),
+      keyWrapInfo(this._envelope.version),
       32,
     );
     const contentKey = chacha20Poly1305Decrypt(wrapKey, wrapNonce, Buffer.alloc(0), wrappedKey);
@@ -214,7 +217,7 @@ export class CapsuleReader {
     // AAD reconstructed per spec/envelope.md "Encryption" — must mirror
     // builder exactly. Do not include manifest_hash; see spec rationale.
     const aad = jcs({
-      version: "0.6",
+      version: this._envelope.version,
       capsule_id: this._envelope.capsule_id,
       first_event_hash: this._envelope.first_event_hash,
       originator_public_key: this._manifest.originator.public_key,

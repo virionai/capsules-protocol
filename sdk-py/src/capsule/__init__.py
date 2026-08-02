@@ -60,6 +60,16 @@ from .manifest import (
 from .pith import PITH_VERSION, compress_event_payload, compress_text
 from .reader import CapsuleReader, MalformedCapsuleError
 from .verifier import verify_capsule
+from .versions import (
+    CURRENT_VERSION,
+    KNOWN_VERSIONS,
+    SUITES,
+    UnsupportedCapsuleVersionError,
+    classify_version,
+    id_domain,
+    key_wrap_info,
+    provenance_domain,
+)
 from .zip_io import UnsafeZipPathError, pack_zip, unpack_zip
 
 __version__ = "0.6.0"
@@ -67,6 +77,9 @@ SPEC_VERSION = "0.6"
 
 __all__ = [
     "CONTENT_INDEX_EXCLUDED",
+    "CURRENT_VERSION",
+    "KNOWN_VERSIONS",
+    "SUITES",
     "EVENT_KINDS",
     "HOST_ACTOR",
     "PITH_VERSION",
@@ -78,6 +91,7 @@ __all__ = [
     "EncryptedCapsulesNotSupportedError",
     "MalformedCapsuleError",
     "UnsafeZipPathError",
+    "UnsupportedCapsuleVersionError",
     "X25519KeyPair",
     "__version__",
     "build_chain_events",
@@ -86,6 +100,7 @@ __all__ = [
     "build_manifest",
     "bytes_to_hex",
     "chacha20_poly1305_decrypt",
+    "classify_version",
     "chacha20_poly1305_encrypt",
     "compress_event_payload",
     "compress_text",
@@ -104,12 +119,15 @@ __all__ = [
     "hash_event",
     "hex_to_bytes",
     "hkdf_sha256",
+    "id_domain",
     "is_valid_event_kind",
     "jcs",
+    "key_wrap_info",
     "manifest_bytes",
     "manifest_hash",
     "pack_zip",
     "participant_actor_ids",
+    "provenance_domain",
     "random_key32",
     "random_nonce12",
     "sha256",

@@ -159,6 +159,7 @@ fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyRe
         &VerifyOptions {
             allowlist: allowlist.to_vec(),
             recipient_private_key: None,
+            accept_versions: None,
         },
     )
 }
@@ -413,6 +414,7 @@ fn semantic_binding_registry_outcomes() {
                 &VerifyOptions {
                     allowlist: allowlist.clone(),
                     recipient_private_key: Some(priv_bytes),
+                    accept_versions: None,
                 },
             );
             assert!(
@@ -433,6 +435,10 @@ fn semantic_binding_registry_outcomes() {
 fn open_reason_needles(reason: &str) -> &'static [&'static str] {
     match reason {
         "missing_required_file" => &["missing manifest.json", "missing provenance/envelope.json"],
+        // spec/versioning.md: unknown versions fail closed with a
+        // diagnosis DISTINCT from malformation or tampering.
+        "unsupported_version_newer" => &["newer than this verifier supports"],
+        "unsupported_version_older" => &["older than any version this verifier supports"],
         "invalid_json" => &["failed to parse manifest.json"],
         "duplicate_entry" => &["duplicate entry"],
         "unsafe_path" => &["parent-traversal", "path is absolute"],
@@ -441,6 +447,57 @@ fn open_reason_needles(reason: &str) -> &'static [&'static str] {
         "directory_marker_shape" => &["directory marker shape"],
         "local_central_name_mismatch" => &["local/central name mismatch"],
         other => panic!("unknown open-stage reason {other:?}"),
+    }
+}
+
+/// spec/versioning.md: known versions open and report; unknown fail closed
+/// with a NON-TAMPER diagnosis. This lane has no separate "open" stage —
+/// refusals surface as `FormatVersion` errors in the total verify result —
+/// so the open-stage vectors map to: !ok, the pinned needle, the observed
+/// version REPORTED on `result.format_version`, and (for the unknown-
+/// version fixtures) no tamper-flavored errors from applying the wrong
+/// era's rules.
+#[test]
+fn version_compat_registry_outcomes() {
+    let path = vectors_dir().join("version-compat/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let expected = &v["expected"];
+        let result = verify_fixture(&base, &allowlist, v);
+        if expected["stage"].as_str() == Some("open") {
+            let reason = expected["reason"].as_str().expect("reason");
+            let needles: &[&str] = match reason {
+                // The typed manifest view parses "banana" fine (it is a
+                // string); the version gate's grammar check names the
+                // field path, this lane's invalid_manifest_shape idiom.
+                "invalid_manifest_shape" => &["manifest.format.version"],
+                other => open_reason_needles(other),
+            };
+            assert!(!result.ok, "{name}: open-stage fixture must not verify");
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                needles.iter().any(|n| haystack.contains(n)),
+                "{name}: expected an error matching reason {reason:?} (any of {needles:?}); got {haystack:?}"
+            );
+        } else {
+            assert_verify_outcome(name, expected, &result);
+        }
+        if let Some(observed) = expected["observed_version"].as_str() {
+            // The observed version is a REPORTED fact even when the
+            // capsule is refused — what lets an auditor tell "this
+            // verifier is too old" apart from "this capsule is corrupt".
+            assert_eq!(
+                result.format_version.observed.as_deref(),
+                Some(observed),
+                "{name}: expected format_version.observed={observed:?}, got {:?}",
+                result.format_version
+            );
+        }
     }
 }
 

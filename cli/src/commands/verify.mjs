@@ -111,6 +111,9 @@ export async function verifyCmd(argv) {
         envelope: result.envelope,
         signer_set: result.signerSet,
         actor_set: result.actorSet,
+        // spec/versioning.md: the observed format version is a reported
+        // fact, next to (never inside) the integrity verdict.
+        format_version: result.formatVersion,
         notes: result.notes,
         trusted_signer_count: result.trustedSignerCount,
       },
@@ -130,6 +133,10 @@ export async function verifyCmd(argv) {
   // anchor, so it is labelled as attested, never presented as verified.
   out(`Sealed at (attested):   ${e.signed_at}  — signer-supplied; no external time anchor`);
   out(`Level:                  ${result.level}`);
+  // spec/versioning.md: report which era's rules were applied. Suite
+  // "v0.6" = Ed25519 / SHA-256 / JCS / X25519+HKDF-SHA-256+ChaCha20.
+  out(`Format version:         ${result.formatVersion.observed}` +
+      (result.formatVersion.suite ? `  (${result.formatVersion.suite} suite)` : ""));
   out("");
   out("Checks:");
   out(`  [${check(result.contentIndex.ok)}] content_index` +

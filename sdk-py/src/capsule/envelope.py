@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from .canonical import bytes_to_hex, concat_bytes, hex_to_bytes, jcs
 from .crypto import ed25519_sign, ed25519_verify
+from .versions import (
+    CURRENT_VERSION,
+    classify_version,
+    provenance_domain,
+    unsupported_version_message,
+)
 
-ENVELOPE_VERSION: str = "0.6"
+ENVELOPE_VERSION: str = CURRENT_VERSION
 _SUPPORTED_CIPHERS = {"none", "ChaCha20-Poly1305"}
 
 
@@ -52,11 +58,20 @@ def envelope_canonical_payload(envelope: dict) -> bytes:
 
 
 def envelope_signing_input(envelope: dict, role: str) -> bytes:
-    """domain_sep_bytes || canonical_payload_bytes — the raw signing input."""
+    """domain_sep_bytes || canonical_payload_bytes — the raw signing input.
+
+    The domain embeds the envelope's DECLARED version
+    (``capsule-provenance-v<version>:<role>\0``) — keyed selection per
+    spec/versioning.md, so an older era's signatures stay verifiable
+    under that era's domain forever. (Whether the declared version is
+    one this verifier knows is gated earlier.)
+    """
     if not isinstance(role, str) or len(role) == 0:
         raise ValueError("role must be a non-empty string")
-    domain = f"capsule-provenance-v{ENVELOPE_VERSION}:{role}\x00".encode()
-    return concat_bytes(domain, envelope_canonical_payload(envelope))
+    version = envelope.get("version")
+    if not isinstance(version, str):
+        version = CURRENT_VERSION
+    return concat_bytes(provenance_domain(version, role), envelope_canonical_payload(envelope))
 
 
 def sign_envelope(envelope: dict, signers: list[dict]) -> dict:
@@ -93,11 +108,23 @@ def verify_envelope_signatures(envelope: dict) -> dict:
 
     Returns {"ok": bool, "signers": [{"role", "public_key", "valid"}], ...}.
     """
-    if envelope.get("version") != ENVELOPE_VERSION:
+    # Any KNOWN version verifies under its own era's domain strings; an
+    # unknown one fails closed with the standard distinguishable
+    # diagnosis (spec/versioning.md), never a tamper-flavored failure.
+    version_class = classify_version(envelope.get("version"))
+    if version_class["status"] == "invalid":
         return {
             "ok": False,
             "signers": [],
             "note": f"unsupported envelope version: {envelope.get('version')}",
+        }
+    if version_class["status"] != "known":
+        return {
+            "ok": False,
+            "signers": [],
+            "note": unsupported_version_message(
+                "envelope.version", envelope.get("version"), version_class["status"]
+            ),
         }
     cipher = envelope.get("cipher")
     if cipher not in _SUPPORTED_CIPHERS:

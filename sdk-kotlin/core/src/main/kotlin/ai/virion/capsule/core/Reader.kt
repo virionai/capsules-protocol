@@ -85,10 +85,11 @@ object CapsuleReader {
         fun member(key: String): JCSValue? = pairs.firstOrNull { it.first == key }?.second
         val version = ((member("format") as? JCSValue.Obj)?.pairs
             ?.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
-        if (version != "0.6") {
-            throw CapsuleException(
-                "manifest.format.version: expected '0.6', got ${Chain.debugQuoted(version)}")
-        }
+        // Any KNOWN version opens (spec/versioning.md): a v0.6 capsule
+        // stays openable by every future reader, forever. Unknown
+        // versions fail closed with a diagnosis distinct from
+        // malformation or tampering.
+        CapsuleVersions.requireKnown("manifest.format.version", version)
         val id = (member("id") as? JCSValue.Str)?.v
         if (id == null || !isHex64(id)) {
             throw CapsuleException("manifest.id is not a 64-char lowercase hex string")
@@ -145,9 +146,7 @@ object CapsuleReader {
         val pairs = (envelope as? JCSValue.Obj)?.pairs
             ?: throw CapsuleException("envelope.json is not a JSON object")
         val version = (pairs.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
-        if (version != "0.6") {
-            throw CapsuleException("envelope.version: expected '0.6'")
-        }
+        CapsuleVersions.requireKnown("envelope.version", version)
         val capsuleId = (pairs.firstOrNull { it.first == "capsule_id" }?.second as? JCSValue.Str)?.v
         if (capsuleId == null || !isHex64(capsuleId)) {
             throw CapsuleException("envelope.capsule_id must be a 64-char lowercase hex string")

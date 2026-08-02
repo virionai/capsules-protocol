@@ -16,8 +16,9 @@ use crate::jcs::jcs;
 use crate::schemas::{ContentIndex, ContentIndexEntry};
 
 /// Domain separator for capsule_id derivation. Mirrors the JS SDK's
-/// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant.
-const CAPSULE_ID_DOMAIN: &[u8] = b"capsule-id-v0.6\x00";
+/// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant — now selected
+/// BY the capsule's declared version via [`crate::versions::id_domain`]
+/// (spec/versioning.md "Version-keyed domain separation").
 
 /// Paths excluded from the content index by structural necessity, for every
 /// capsule regardless of profile:
@@ -68,6 +69,7 @@ pub enum CapsuleIdError {
 pub fn compute_capsule_id(
     originator_pubkey_raw: &[u8],
     first_event_hash_hex: Option<&str>,
+    version: &str,
 ) -> Result<String, CapsuleIdError> {
     if originator_pubkey_raw.len() != 32 {
         return Err(CapsuleIdError::BadOriginatorLength);
@@ -81,9 +83,10 @@ pub fn compute_capsule_id(
             hex_to_bytes(hex)?
         }
     };
+    let domain = crate::versions::id_domain(version);
     let mut input =
-        Vec::with_capacity(CAPSULE_ID_DOMAIN.len() + originator_pubkey_raw.len() + feh_raw.len());
-    input.extend_from_slice(CAPSULE_ID_DOMAIN);
+        Vec::with_capacity(domain.len() + originator_pubkey_raw.len() + feh_raw.len());
+    input.extend_from_slice(&domain);
     input.extend_from_slice(originator_pubkey_raw);
     input.extend_from_slice(&feh_raw);
     Ok(bytes_to_hex(&sha256(&input)))
@@ -178,19 +181,19 @@ mod tests {
     fn capsule_id_matches_stored() {
         let (manifest, _) = load_clean();
         let pk = hex_to_bytes(&manifest.originator.public_key).unwrap();
-        let id = compute_capsule_id(&pk, manifest.first_event_hash.as_deref()).unwrap();
+        let id = compute_capsule_id(&pk, manifest.first_event_hash.as_deref(), "0.6").unwrap();
         assert_eq!(id, manifest.id);
     }
 
     #[test]
     fn capsule_id_rejects_short_pubkey() {
-        let err = compute_capsule_id(&[0u8; 31], Some(&"00".repeat(32))).unwrap_err();
+        let err = compute_capsule_id(&[0u8; 31], Some(&"00".repeat(32)), "0.6").unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadOriginatorLength));
     }
 
     #[test]
     fn capsule_id_rejects_short_first_event_hash() {
-        let err = compute_capsule_id(&[0u8; 32], Some("deadbeef")).unwrap_err();
+        let err = compute_capsule_id(&[0u8; 32], Some("deadbeef"), "0.6").unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadFirstEventHashShape));
     }
 
@@ -199,8 +202,8 @@ mod tests {
     /// (spec/manifest.md "Capsule identity").
     #[test]
     fn capsule_id_none_uses_genesis_zero_bytes() {
-        let via_none = compute_capsule_id(&[7u8; 32], None).unwrap();
-        let via_zero_hex = compute_capsule_id(&[7u8; 32], Some(&"0".repeat(64))).unwrap();
+        let via_none = compute_capsule_id(&[7u8; 32], None, "0.6").unwrap();
+        let via_zero_hex = compute_capsule_id(&[7u8; 32], Some(&"0".repeat(64)), "0.6").unwrap();
         assert_eq!(via_none, via_zero_hex);
     }
 

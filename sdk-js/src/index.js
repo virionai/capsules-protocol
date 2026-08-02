@@ -66,3 +66,17 @@ export {
 export * as federation from "./federation/index.js";
 
 export const SPEC_VERSION = "0.6";
+
+// Version-compatibility policy (spec/versioning.md): the known-version
+// table, the classifier behind the verify result's formatVersion channel,
+// and the version-keyed domain-separation selectors.
+export {
+  KNOWN_VERSIONS,
+  CURRENT_VERSION,
+  SUITES,
+  classifyVersion,
+  UnsupportedVersionError,
+  idDomain,
+  provenanceDomain,
+  keyWrapInfo,
+} from "./versions.js";

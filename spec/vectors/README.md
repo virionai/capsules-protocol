@@ -58,6 +58,18 @@ lane):
    value is `1e999`). No fixture in that collection may make a verifier
    raise an unhandled exception: verification is a total function.
 
+   `version-compat/vectors.json` pins `spec/versioning.md`: a capsule
+   declaring a KNOWN format version verifies with the observed version
+   REPORTED on the result (`expected.observed_version`); internally
+   coherent capsules declaring an unknown version are refused at open
+   with the DISTINGUISHABLE reason categories `unsupported_version_newer`
+   ("this verifier is too old" — not corruption) and
+   `unsupported_version_older`, while a version violating the
+   `<major>.<minor>` grammar maps to `invalid_manifest_shape`. Even when
+   open is refused, the fail-closed verify result must still report the
+   observed version — that reported fact is what lets an auditor tell a
+   version-support gap apart from tampering.
+
    `unicode-boundary/vectors.json` is a positive collection: a capsule whose
    event summary is 200 astral code points, long enough that the Pith
    normalizer must truncate it. Every implementation MUST verify it
@@ -174,6 +186,12 @@ should be reviewed with the byte-level diff):
   `unicode-boundary/output/` (fixed throwaway TEST keypair; byte-stable,
   supports `--check`). Builds through `CapsuleBuilder.appendEvent`, so the
   Pith truncation path is the thing under test.
+- `sdk-js/tools/generate-version-compat-fixtures.mjs` →
+  `version-compat/output/` (fixed throwaway TEST keypair; byte-stable,
+  supports `--check`). The unknown-version fixtures are internally
+  coherent under their DECLARED version's domain strings
+  (`capsule-id-v<V>`, `capsule-provenance-v<V>:<role>`), so only the
+  version gate refuses them.
 - `sdk-js/tools/generate-attestation-vectors.mjs` →
   `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
   byte-stable, supports `--check`)

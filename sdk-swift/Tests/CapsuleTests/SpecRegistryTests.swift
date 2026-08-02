@@ -13,6 +13,9 @@
 //   - signer-set/vectors.json         (signer-set binding outcomes)
 //   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //   - chain-rules/vectors.json        (per-event actor + kind field rules)
+//   - version-compat/vectors.json     (version gates: known opens and
+//                                      reports; unknown fails closed with
+//                                      a non-tamper diagnosis)
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
@@ -89,6 +92,12 @@ final class SpecRegistryTests: XCTestCase {
                     "directory marker with nonzero size"]
         case "local_central_name_mismatch":
             return ["local/central name mismatch"]
+        // spec/versioning.md: unknown versions fail closed with a
+        // diagnosis DISTINCT from malformation or tampering.
+        case "unsupported_version_newer":
+            return ["newer than this verifier supports"]
+        case "unsupported_version_older":
+            return ["older than any version this verifier supports"]
         default:
             XCTFail("unknown open-stage reason \(reason)")
             return []
@@ -336,6 +345,57 @@ final class SpecRegistryTests: XCTestCase {
                         .joined(separator: ", ")
                 )
                 XCTAssertEqual(l3.level, "L3", "\(name): level must be L3")
+            }
+        }
+    }
+
+    // MARK: - version-compat/vectors.json
+
+    /// spec/versioning.md: a capsule declaring a KNOWN format version
+    /// verifies under that era's rules with the observed version REPORTED
+    /// machine-readably; a well-formed unknown version is refused at open
+    /// with a diagnosis distinct from tamper detection (verifier-too-old
+    /// vs unknown-older), a grammar-violating one as malformed. The
+    /// unknown-version fixtures are internally coherent under their
+    /// declared version's domain strings, so only the version gate
+    /// refuses them. Even on refusal, the verify result still reports
+    /// the observed version (expected.observed_version pin).
+    func testVersionCompatRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("version-compat/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "version-compat registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            let v = CapsuleVerifier.verify(bytes, allowlist: keys)
+
+            if (expected["stage"] as? String) == "open" {
+                let reason = try XCTUnwrap(expected["reason"] as? String, "\(name): reason")
+                var thrown: Error?
+                do { _ = try CapsuleReader.parse(bytes) } catch { thrown = error }
+                let err = try XCTUnwrap(thrown, "\(name): reader must refuse this capsule")
+                let needles = openReasonNeedles(reason)
+                XCTAssertTrue(
+                    needles.contains(where: { "\(err)".contains($0) }),
+                    "\(name): expected reason \(reason) (any of \(needles)); got \(err)"
+                )
+                XCTAssertFalse(v.ok, "\(name): open-stage fixture must not verify")
+            } else {
+                assertVerifyOutcome(name, expected, v)
+            }
+            if let observed = expected["observed_version"] as? String {
+                // The observed version is a REPORTED fact even when the
+                // capsule is refused — what lets an auditor tell "this
+                // verifier is too old" apart from "corrupt".
+                XCTAssertEqual(
+                    v.formatVersion.observed, observed,
+                    "\(name): expected formatVersion.observed=\(observed)"
+                )
             }
         }
     }

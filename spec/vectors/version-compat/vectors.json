@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "name": "version-compat",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected verifier outcomes for the version-compatibility policy (spec/versioning.md). A capsule declaring a KNOWN format version verifies under that era's rules, and the verifier REPORTS the observed version machine-readably (expected.observed_version). A well-formed but UNKNOWN version fails closed with a diagnosis distinct from tamper detection: 'newer than this verifier supports' (unsupported_version_newer — this verifier is too old; the capsule is not thereby corrupt) or 'older than any version this verifier supports' (unsupported_version_older). A version violating the <major>.<minor> grammar is a malformed document (invalid_manifest_shape), not a support gap. The unknown-version fixtures are internally coherent under their DECLARED version's domain strings (capsule-id-v<V>, capsule-provenance-v<V>:<role>), so nothing but the version gate refuses them — pinning that the refusal is about support, never integrity. Even when open is refused, a verifier that reports facts must still surface the observed version.",
+    "generator": "sdk-js/tools/generate-version-compat-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "known-current-version",
+      "capsule_file": "output/known-current-version.capsule",
+      "expected": { "ok": true, "observed_version": "0.6" },
+      "note": "Positive control: sealed at the current version. Verifies, and the observed version is a REPORTED fact on the result — the era's rules were applied and the report says which. Whether 0.6 is acceptable to a deployment is host policy, declared by the host and reported (never decided) by the SDK."
+    },
+    {
+      "name": "unknown-newer-version",
+      "capsule_file": "output/unknown-newer-version.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_version_newer",
+        "observed_version": "9.9"
+      },
+      "note": "Declares format version 9.9 everywhere, internally coherent under the 9.9 domain strings. Fail closed — but the diagnosis is 'this verifier is too old', distinguishable from corruption by an operator and an auditor. No hash-mismatch noise from applying the wrong era's rules; the observed version is still reported."
+    },
+    {
+      "name": "unknown-older-version",
+      "capsule_file": "output/unknown-older-version.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_version_older",
+        "observed_version": "0.1"
+      },
+      "note": "Declares format version 0.1, older than any version this line of implementations has supported. Fail closed with its own reason: not evidence of tampering — an implementation retaining the 0.1 rules may verify it."
+    },
+    {
+      "name": "version-not-a-version",
+      "capsule_file": "output/version-not-a-version.capsule",
+      "expected": { "stage": "open", "reason": "invalid_manifest_shape" },
+      "note": "manifest.format.version is 'banana' — a grammar violation, which is a MALFORMED document, not a version-support gap. The distinction matters: malformed is a defect of the capsule; unknown_newer/older is a limitation of the verifier."
+    },
+    {
+      "name": "envelope-version-newer",
+      "capsule_file": "output/envelope-version-newer.capsule",
+      "expected": { "stage": "open", "reason": "unsupported_version_newer" },
+      "note": "manifest.format.version 0.6 but envelope.version 9.9 (signed coherently under the 9.9 provenance domain). envelope.version is gated identically to manifest.format.version — there is no path onto an unknown era through the envelope."
+    }
+  ]
+}

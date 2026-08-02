@@ -20,6 +20,14 @@ import { hexToBytes } from "./crypto.js";
 import { verifyEnvelopeSignatures } from "./envelope.js";
 import { CapsuleReader } from "./reader.js";
 import { toKeyHex } from "./keys.js";
+import { parseJsonStrict } from "./canonical.js";
+import { unpackZip } from "./zip.js";
+import { SUITES, classifyVersion, unsupportedVersionMessage } from "./versions.js";
+
+/** The unread (fail-closed) formatVersion channel. */
+function unreadFormatVersion() {
+  return { observed: null, supported: false, status: "unread", suite: null, acceptedByPolicy: null };
+}
 
 /** The documented fail-closed result: every channel present, nothing trusted. */
 function failClosed(message, level) {
@@ -32,9 +40,35 @@ function failClosed(message, level) {
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: false, errors: [] },
     actorSet: { bound: false },
+    formatVersion: unreadFormatVersion(),
     trustedSignerCount: 0,
     notes: [],
   };
+}
+
+/**
+ * Best-effort read of the DECLARED manifest.format.version from an
+ * unpacked file map whose reader-construction failed. The observed
+ * version is a reported fact even when the capsule cannot be processed —
+ * that is what lets an auditor tell "this verifier is too old for the
+ * capsule" apart from "this capsule is corrupt" (spec/versioning.md).
+ */
+function peekFormatVersion(files) {
+  try {
+    const bytes = files.get("manifest.json");
+    if (!bytes) return unreadFormatVersion();
+    const manifest = parseJsonStrict(bytes, "manifest.json");
+    const cls = classifyVersion(manifest?.format?.version);
+    return {
+      observed: cls.observed,
+      supported: cls.status === "known",
+      status: cls.status,
+      suite: cls.status === "known" ? SUITES[cls.observed] : null,
+      acceptedByPolicy: null,
+    };
+  } catch {
+    return unreadFormatVersion();
+  }
 }
 
 /**
@@ -100,12 +134,21 @@ export async function verifyCapsule(readerOrBytes, options = {}) {
 async function verifyCapsuleInner(readerOrBytes, options = {}) {
   let reader = readerOrBytes;
   if (reader instanceof Uint8Array || reader instanceof ArrayBuffer) {
+    const bytes = reader instanceof ArrayBuffer ? new Uint8Array(reader) : reader;
+    let files;
     try {
-      reader = await CapsuleReader.fromBytes(
-        reader instanceof ArrayBuffer ? new Uint8Array(reader) : reader,
-      );
+      files = await unpackZip(bytes);
     } catch (err) {
       return failClosed(`capsule cannot be opened: ${err.message}`, "L2");
+    }
+    try {
+      reader = new CapsuleReader(files);
+    } catch (err) {
+      const result = failClosed(`capsule cannot be opened: ${err.message}`, "L2");
+      // Report the observed version even when open is refused: an
+      // unknown-version refusal must stay distinguishable from tamper.
+      result.formatVersion = peekFormatVersion(files);
+      return result;
     }
   }
   const errors = [];
@@ -129,6 +172,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     envelope: { ok: false, signers: [] },
     signerSet: { bound: false, ok: true, errors: [] },
     actorSet: { bound: false },
+    formatVersion: unreadFormatVersion(),
     trustedSignerCount: 0,
     notes,
   };
@@ -151,12 +195,59 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     );
   }
 
-  // Format / version checks
-  if (manifest.format?.version !== "0.6") {
-    errors.push(`unsupported manifest format.version: ${manifest.format?.version}`);
+  // Format / version gate (spec/versioning.md). The observed version is
+  // a REPORTED FACT; whether it is acceptable to this deployment is host
+  // policy (acceptVersions), reported and never decided here. An unknown
+  // version fails closed EARLY with only the version diagnosis — running
+  // the wrong era's rules would bury "this verifier is too old" under
+  // hash-mismatch noise indistinguishable from tampering.
+  const versionClass = classifyVersion(manifest.format?.version);
+  const capsuleVersion = versionClass.status === "known" ? versionClass.observed : null;
+  result.formatVersion = {
+    observed: versionClass.observed,
+    supported: versionClass.status === "known",
+    status: versionClass.status,
+    suite: versionClass.status === "known" ? SUITES[versionClass.observed] : null,
+    acceptedByPolicy: null,
+  };
+  if (versionClass.status === "invalid") {
+    errors.push(
+      `manifest.format.version: not a '<major>.<minor>' version string, got ${JSON.stringify(manifest.format?.version)}`,
+    );
+    return result;
   }
-  if (envelope.version !== "0.6") {
-    errors.push(`unsupported envelope version: ${envelope.version}`);
+  if (versionClass.status !== "known") {
+    errors.push(
+      unsupportedVersionMessage("manifest.format.version", versionClass.observed, versionClass.status),
+    );
+    return result;
+  }
+  const envVersionClass = classifyVersion(envelope.version);
+  if (envVersionClass.status !== "known") {
+    errors.push(
+      envVersionClass.status === "invalid"
+        ? `envelope.version: not a '<major>.<minor>' version string, got ${JSON.stringify(envelope.version)}`
+        : unsupportedVersionMessage("envelope.version", envelope.version, envVersionClass.status),
+    );
+    return result;
+  }
+  if (envelope.version !== capsuleVersion) {
+    // Two KNOWN versions that disagree: the capsule is ambiguous about
+    // which era's rules bind it. Fail closed before applying either.
+    errors.push(
+      `envelope.version '${envelope.version}' does not match manifest.format.version '${capsuleVersion}'`,
+    );
+    return result;
+  }
+  // Host policy: DECLARED accepted versions. Reported, never decided —
+  // integrity ok is unaffected, exactly as with signer allowlists.
+  if (Array.isArray(options.acceptVersions)) {
+    result.formatVersion.acceptedByPolicy = options.acceptVersions.includes(capsuleVersion);
+    if (!result.formatVersion.acceptedByPolicy) {
+      notes.push(
+        `host policy: observed format version ${capsuleVersion} is not in the declared accepted set [${options.acceptVersions.join(", ")}]`,
+      );
+    }
   }
 
   // Capsule identity
@@ -164,6 +255,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     const expectedId = computeCapsuleId(
       hexToBytes(manifest.originator.public_key),
       manifest.first_event_hash,
+      capsuleVersion,
     );
     if (expectedId !== manifest.id) {
       errors.push(`manifest.id mismatch: stored ${manifest.id}, expected ${expectedId}`);

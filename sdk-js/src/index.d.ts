@@ -209,6 +209,31 @@ export interface VerifyOptions {
   allowlist?: KeyInput[];
   /** For L3: the outer envelope the decrypted inner capsule must match. */
   outerEnvelope?: Envelope;
+  /**
+   * Host policy: format versions this deployment accepts. The SDK
+   * REPORTS the verdict in VerifyResult.formatVersion.acceptedByPolicy
+   * and never fails verification over it — exactly as with allowlist.
+   */
+  acceptVersions?: string[];
+}
+
+/**
+ * The version-compatibility fact channel (spec/versioning.md).
+ * `observed` is the version the capsule DECLARES; `supported` says
+ * whether this verifier knows that era; `status` distinguishes, machine-
+ * readably, a verifier-too-old refusal (unknown_newer) from an
+ * unknown-older era, a grammar violation (invalid), and a capsule whose
+ * version could not be read at all (unread). None of these read as
+ * tampering. `suite` is the era's algorithm-suite identifier ("v0.6":
+ * Ed25519 / SHA-256 / JCS / X25519+HKDF-SHA-256+ChaCha20-Poly1305).
+ */
+export interface FormatVersionReport {
+  observed: string | null;
+  supported: boolean;
+  status: "known" | "unknown_newer" | "unknown_older" | "invalid" | "unread";
+  suite: string | null;
+  /** null when the host declared no acceptVersions policy. */
+  acceptedByPolicy: boolean | null;
 }
 
 export interface VerifyResult {
@@ -239,6 +264,8 @@ export interface VerifyResult {
    * still succeed at a visibly lower assurance (reported in notes).
    */
   actorSet: { bound: boolean };
+  /** Observed format version + support/policy verdicts (reported facts). */
+  formatVersion: FormatVersionReport;
   /** Number of DISTINCT public keys that are both valid and on your allowlist. */
   trustedSignerCount: number;
   notes: string[];
@@ -353,3 +380,19 @@ export const PITH_VERSION: string;
 export const federation: Record<string, unknown>;
 
 export const SPEC_VERSION: string;
+
+// Version-compatibility policy (spec/versioning.md).
+export const KNOWN_VERSIONS: string[];
+export const CURRENT_VERSION: string;
+export const SUITES: Record<string, string>;
+export function classifyVersion(v: unknown): {
+  observed: string | null;
+  status: "known" | "unknown_newer" | "unknown_older" | "invalid";
+};
+export class UnsupportedVersionError extends Error {
+  observed: string | null;
+  status: "unknown_newer" | "unknown_older";
+}
+export function idDomain(version: string): Uint8Array;
+export function provenanceDomain(version: string, role: string): Uint8Array;
+export function keyWrapInfo(version: string): Uint8Array;

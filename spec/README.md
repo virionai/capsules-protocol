@@ -95,6 +95,9 @@ procedure.
 - [manifest.md](manifest.md) — manifest.json schema and capsule identity
 - [chain.md](chain.md) — event format and hash linkage
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
+- [versioning.md](versioning.md) — version compatibility: known versions
+  open forever, unknown ones fail closed with a non-tamper diagnosis,
+  domain strings keyed by declared version, the v0.6 algorithm suite
 - [trust.md](trust.md) — trust model, allowlists, skill trust tiers
 - [pith.md](pith.md) — context-style discipline for narrative fields
 - [federation.md](federation.md) — key discovery, issuer metadata, and

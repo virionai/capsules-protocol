@@ -218,8 +218,15 @@ pub fn decrypt_inner_zip(
     let shared = x25519_dh(recipient_private_key, &ephemeral_pub);
 
     // Step 8: HKDF. Salt is the recipient's own pubkey raw 32 bytes; info
-    // is the v0.6 wrap-step domain string; output 32 bytes.
-    let wrap_key = hkdf_sha256(&shared, &my_pubkey, b"capsule-key-wrap-v0.6", 32);
+    // is the wrap-step domain string KEYED BY THE CAPSULE'S DECLARED
+    // VERSION (spec/versioning.md): decrypting a v0.6 capsule uses the
+    // v0.6 wrap-domain forever, whatever era this verifier is from.
+    let wrap_key = hkdf_sha256(
+        &shared,
+        &my_pubkey,
+        &crate::versions::key_wrap_info(&envelope.version),
+        32,
+    );
     let wrap_key_arr: [u8; 32] = wrap_key
         .as_slice()
         .try_into()
@@ -328,7 +335,8 @@ fn chacha20_poly1305_decrypt(
 /// source ordering.
 fn build_aad(envelope: &Envelope, manifest: &Manifest) -> Vec<u8> {
     let aad_obj = serde_json::json!({
-        "version": "0.6",
+        // Keyed by the capsule's DECLARED version (spec/versioning.md).
+        "version": envelope.version,
         "capsule_id": envelope.capsule_id,
         "first_event_hash": envelope.first_event_hash,
         "originator_public_key": manifest.originator.public_key,

@@ -8,8 +8,7 @@ import {
   sha256,
   sha256Hex,
 } from "./canonical.js";
-
-const ID_DOMAIN = Buffer.from("capsule-id-v0.6\x00", "utf8");
+import { CURRENT_VERSION, idDomain } from "./versions.js";
 
 /**
  * Compute capsule_id from originator pubkey + first event hash.
@@ -19,8 +18,13 @@ const ID_DOMAIN = Buffer.from("capsule-id-v0.6\x00", "utf8");
  * its manifest carries `first_event_hash: null`, and the derivation uses
  * 32 zero bytes — the genesis prev-hash value — in place of
  * `first_event_hash_raw` (spec/manifest.md "id").
+ *
+ * The hash domain embeds the capsule's format version
+ * (`capsule-id-v<version>\0`), so derivation is KEYED by the DECLARED
+ * version (spec/versioning.md): a verifier checking a v0.6 capsule uses
+ * the v0.6 domain forever, whatever version it seals at.
  */
-export function computeCapsuleId(originatorPubKeyRaw, firstEventHashHex) {
+export function computeCapsuleId(originatorPubKeyRaw, firstEventHashHex, version = CURRENT_VERSION) {
   if (originatorPubKeyRaw.length !== 32) throw new Error("originator pubkey must be 32 bytes");
   let fehRaw;
   if (firstEventHashHex == null) {
@@ -30,7 +34,7 @@ export function computeCapsuleId(originatorPubKeyRaw, firstEventHashHex) {
   } else {
     throw new Error("first_event_hash must be 64-hex or null (empty chain)");
   }
-  const out = sha256(concatBytes(ID_DOMAIN, originatorPubKeyRaw, fehRaw));
+  const out = sha256(concatBytes(idDomain(version), originatorPubKeyRaw, fehRaw));
   return bytesToHex(out);
 }
 
@@ -176,7 +180,7 @@ export function buildManifest({
 }) {
   const manifest = {
     format: {
-      version: "0.6",
+      version: CURRENT_VERSION,
       container: "zip",
       canonicalization: "JCS-RFC8785",
       hash_algorithm: "SHA-256",

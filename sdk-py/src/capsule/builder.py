@@ -38,6 +38,7 @@ from .manifest import (
 )
 from .pith import compress_event_payload
 from .zip_io import pack_zip
+from .versions import CURRENT_VERSION, key_wrap_info
 
 _SKILL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -345,7 +346,7 @@ class CapsuleBuilder:
             "cipher": "ChaCha20-Poly1305",
             "first_event_hash": first_event_hash,
             "originator_public_key": self.originator["public_key"],
-            "version": "0.6",
+            "version": CURRENT_VERSION,
         }
         aad = jcs(aad_obj)
         content_enc = chacha20_poly1305_encrypt(content_key, content_nonce, aad, inner_zip_bytes)
@@ -422,7 +423,7 @@ def _build_decryption_metadata(
         wrap_key = hkdf_sha256(
             shared,
             recipient_pub,  # salt = recipient public key
-            b"capsule-key-wrap-v0.6",
+            key_wrap_info(CURRENT_VERSION),
             32,
         )
         wrap_nonce = random_nonce12()

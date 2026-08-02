@@ -18,6 +18,8 @@ from .manifest import (
     signer_commitment_problems,
 )
 from .reader import CapsuleReader
+from .versions import SUITES, classify_version, unsupported_version_message
+from .zip_io import unpack_zip
 
 
 class _ContentIndexResult(TypedDict):
@@ -40,6 +42,14 @@ class _ActorSetResult(TypedDict):
     bound: bool
 
 
+class _FormatVersionResult(TypedDict):
+    observed: str | None
+    supported: bool
+    status: str
+    suite: str | None
+    accepted_by_policy: bool | None
+
+
 class VerifyResult(TypedDict):
     ok: bool
     level: str
@@ -49,8 +59,20 @@ class VerifyResult(TypedDict):
     envelope: _EnvelopeSummary
     signer_set: _SignerSetResult
     actor_set: _ActorSetResult
+    format_version: _FormatVersionResult
     trusted_signer_count: int
     notes: list[str]
+
+
+def _unread_format_version() -> _FormatVersionResult:
+    """The unread (fail-closed) format_version channel."""
+    return {
+        "observed": None,
+        "supported": False,
+        "status": "unread",
+        "suite": None,
+        "accepted_by_policy": None,
+    }
 
 
 def _fail_closed(message: str, level: str) -> VerifyResult:
@@ -64,9 +86,35 @@ def _fail_closed(message: str, level: str) -> VerifyResult:
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": False, "errors": []},
         "actor_set": {"bound": False},
+        "format_version": _unread_format_version(),
         "trusted_signer_count": 0,
         "notes": [],
     }
+
+
+def _peek_format_version(files: dict) -> _FormatVersionResult:
+    """Best-effort read of the DECLARED version from an unopenable capsule.
+
+    The observed version is a reported fact even when the reader refuses
+    the capsule — that is what lets an auditor tell "this verifier is
+    too old for the capsule" apart from "this capsule is corrupt"
+    (spec/versioning.md).
+    """
+    try:
+        import json as _json
+
+        manifest = _json.loads(files["manifest.json"])
+        fmt = manifest.get("format") if isinstance(manifest, dict) else None
+        cls = classify_version(fmt.get("version") if isinstance(fmt, dict) else None)
+        return {
+            "observed": cls["observed"],
+            "supported": cls["status"] == "known",
+            "status": cls["status"],
+            "suite": SUITES.get(cls["observed"]) if cls["status"] == "known" else None,
+            "accepted_by_policy": None,
+        }
+    except Exception:
+        return _unread_format_version()
 
 
 def verify_capsule(
@@ -74,6 +122,7 @@ def verify_capsule(
     *,
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
+    accept_versions: list | None = None,
 ) -> VerifyResult:
     """Verify a capsule.
 
@@ -90,7 +139,12 @@ def verify_capsule(
     """
     level = "L3" if outer_envelope is not None else "L2"
     try:
-        return _verify_capsule_impl(reader, allowlist=allowlist, outer_envelope=outer_envelope)
+        return _verify_capsule_impl(
+            reader,
+            allowlist=allowlist,
+            outer_envelope=outer_envelope,
+            accept_versions=accept_versions,
+        )
     except Exception as e:
         # The docstring promises callers a result, not an exception, for
         # every input. Anything that escapes the checks below is a capsule
@@ -103,12 +157,22 @@ def _verify_capsule_impl(
     *,
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
+    accept_versions: list | None = None,
 ) -> VerifyResult:
     if isinstance(reader, (bytes, bytearray, memoryview)):
         try:
-            reader = CapsuleReader.from_bytes(bytes(reader))
+            files = unpack_zip(bytes(reader))
         except (ValueError, BadZipFile) as e:
             return _fail_closed(f"capsule cannot be opened: {e}", "L2")
+        try:
+            reader = CapsuleReader.from_files(files)
+        except (ValueError, BadZipFile) as e:
+            # Report the observed version even when open is refused: an
+            # unknown-version refusal must stay distinguishable from
+            # tamper (spec/versioning.md).
+            failed = _fail_closed(f"capsule cannot be opened: {e}", "L2")
+            failed["format_version"] = _peek_format_version(files)
+            return failed
     errors: list[str] = []
     notes: list[str] = []
     allow: set[str] = set()
@@ -128,6 +192,7 @@ def _verify_capsule_impl(
         "envelope": {"ok": False, "signers": []},
         "signer_set": {"bound": False, "ok": True, "errors": []},
         "actor_set": {"bound": False},
+        "format_version": _unread_format_version(),
         "trusted_signer_count": 0,
         "notes": notes,
     }
@@ -149,19 +214,74 @@ def _verify_capsule_impl(
             "declared participant set"
         )
 
-    # Format / version checks
-    if manifest.get("format", {}).get("version") != "0.6":
+    # Format / version gate (spec/versioning.md). The observed version is
+    # a REPORTED FACT; whether it is acceptable to this deployment is host
+    # policy (accept_versions), reported and never decided here. An
+    # unknown version fails closed EARLY with only the version diagnosis —
+    # running the wrong era's rules would bury "this verifier is too old"
+    # under hash-mismatch noise indistinguishable from tampering.
+    fmt = manifest.get("format")
+    declared = fmt.get("version") if isinstance(fmt, dict) else None
+    version_class = classify_version(declared)
+    capsule_version = declared if version_class["status"] == "known" else None
+    result["format_version"] = {
+        "observed": version_class["observed"],
+        "supported": version_class["status"] == "known",
+        "status": version_class["status"],
+        "suite": SUITES.get(declared) if version_class["status"] == "known" else None,
+        "accepted_by_policy": None,
+    }
+    if version_class["status"] == "invalid":
         errors.append(
-            f"unsupported manifest format.version: {manifest.get('format', {}).get('version')}"
+            f"manifest.format.version: not a '<major>.<minor>' version string, got {declared!r}"
         )
-    if envelope.get("version") != "0.6":
-        errors.append(f"unsupported envelope version: {envelope.get('version')}")
+        return result
+    if version_class["status"] != "known":
+        errors.append(
+            unsupported_version_message(
+                "manifest.format.version", declared, version_class["status"]
+            )
+        )
+        return result
+    env_version_class = classify_version(envelope.get("version"))
+    if env_version_class["status"] != "known":
+        if env_version_class["status"] == "invalid":
+            errors.append(
+                "envelope.version: not a '<major>.<minor>' version string, got "
+                f"{envelope.get('version')!r}"
+            )
+        else:
+            errors.append(
+                unsupported_version_message(
+                    "envelope.version", envelope.get("version"), env_version_class["status"]
+                )
+            )
+        return result
+    if envelope.get("version") != capsule_version:
+        # Two KNOWN versions that disagree: the capsule is ambiguous
+        # about which era's rules bind it. Fail closed before applying
+        # either.
+        errors.append(
+            f"envelope.version {envelope.get('version')!r} does not match "
+            f"manifest.format.version {capsule_version!r}"
+        )
+        return result
+    # Host policy: DECLARED accepted versions. Reported, never decided —
+    # integrity ok is unaffected, exactly as with signer allowlists.
+    if accept_versions is not None:
+        result["format_version"]["accepted_by_policy"] = capsule_version in accept_versions
+        if not result["format_version"]["accepted_by_policy"]:
+            notes.append(
+                f"host policy: observed format version {capsule_version} is not in the "
+                f"declared accepted set {sorted(accept_versions)!r}"
+            )
 
     # Capsule identity
     try:
         expected_id = compute_capsule_id(
             hex_to_bytes(manifest["originator"]["public_key"]),
             manifest["first_event_hash"],
+            capsule_version,
         )
         if expected_id != manifest.get("id"):
             errors.append(

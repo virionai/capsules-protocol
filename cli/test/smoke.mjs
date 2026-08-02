@@ -204,6 +204,16 @@ section("verify - clean and tampered");
   check("tampered-payload prints FAIL", /Result: FAIL/.test(t.stdout));
 
   const j = run(["verify", CLEAN, "--json"]);
+  {
+    // spec/versioning.md: the observed format version is a REPORTED fact
+    // on the verify result, and the human report names the era applied.
+    const parsed = JSON.parse(j.stdout);
+    check("verify --json reports format_version.observed",
+      parsed.format_version?.observed === "0.6" && parsed.format_version?.supported === true);
+    const human = run(["verify", CLEAN]);
+    check("verify human report names the format version",
+      /Format version:\s+0\.6/.test(human.stdout));
+  }
   check("--json clean exits 0", j.code === 0);
   let parsedClean;
   try { parsedClean = JSON.parse(j.stdout); } catch { /* noop */ }

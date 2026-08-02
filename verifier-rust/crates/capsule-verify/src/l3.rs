@@ -188,29 +188,56 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         }
     };
 
-    // Step 3a-i (v0.5): inner format/version check. Mirrors the outer
-    // pipeline's step 3 — `inner_manifest.format.version` and
-    // `inner_envelope.version` must both be exactly "0.6". Failures surface
-    // via top-level `errors` with `category: FormatVersion` and the
-    // `"L3 inner: "` message prefix so callers can disambiguate via
-    // substring match on the message.
-    if inner_manifest.format.version != "0.6" {
+    // Step 3a-i: inner format/version gate. Mirrors the outer pipeline's
+    // stage 3 (spec/versioning.md): any KNOWN version proceeds under that
+    // era's rules; an unknown or grammar-violating one fails closed HERE,
+    // before any inner recompute can manufacture hash-mismatch noise
+    // indistinguishable from tampering. Failures surface via top-level
+    // `errors` with `category: FormatVersion` and the `"L3 inner: "`
+    // message prefix so callers can disambiguate via substring match.
+    let inner_version = inner_manifest.format.version.clone();
+    let inner_status = crate::versions::classify_version(&inner_version);
+    if inner_status != crate::versions::VersionStatus::Known {
         errors.push(TopError::inner(
             TopErrorCategory::FormatVersion,
-            format!(
-                "L3 inner: unsupported manifest format.version: {}",
-                inner_manifest.format.version
-            ),
+            if inner_status == crate::versions::VersionStatus::Invalid {
+                format!(
+                    "L3 inner: manifest.format.version: not a '<major>.<minor>' version string, got {inner_version:?}"
+                )
+            } else {
+                format!(
+                    "L3 inner: {}",
+                    crate::versions::unsupported_version_message(
+                        "manifest.format.version",
+                        &inner_version,
+                        inner_status,
+                    )
+                )
+            },
         ));
+        return;
     }
-    if inner_envelope.version != "0.6" {
+    if inner_envelope.version != inner_version {
+        let env_status = crate::versions::classify_version(&inner_envelope.version);
         errors.push(TopError::inner(
             TopErrorCategory::FormatVersion,
-            format!(
-                "L3 inner: unsupported envelope version: {}",
-                inner_envelope.version
-            ),
+            if env_status == crate::versions::VersionStatus::Known {
+                format!(
+                    "L3 inner: envelope.version '{}' does not match manifest.format.version '{}'",
+                    inner_envelope.version, inner_version
+                )
+            } else {
+                format!(
+                    "L3 inner: {}",
+                    crate::versions::unsupported_version_message(
+                        "envelope.version",
+                        &inner_envelope.version,
+                        env_status,
+                    )
+                )
+            },
         ));
+        return;
     }
 
     // Step 3a-ii (v0.5): inner capsule_id derivation. Mirrors the outer
@@ -220,7 +247,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // error tagged `CapsuleId` with the `"L3 inner: "` prefix.
     match hex_to_bytes(&inner_manifest.originator.public_key) {
         Ok(pk) if pk.len() == 32 => {
-            match compute_capsule_id(&pk, inner_manifest.first_event_hash.as_deref()) {
+            match compute_capsule_id(&pk, inner_manifest.first_event_hash.as_deref(), &inner_version) {
                 Ok(expected_id) => {
                     if expected_id != inner_manifest.id {
                         errors.push(TopError::inner(

@@ -167,6 +167,13 @@ def test_verify_rejects_unknown_version():
     env["version"] = "0.7"
     res = verify_envelope_signatures(env)
     assert res["ok"] is False
+    # spec/versioning.md: an unknown WELL-FORMED version fails closed with
+    # the directional, non-tamper diagnosis (0.7 is not yet a known era).
+    assert "newer than this verifier supports" in res.get("note", "")
+    # A grammar-violating version keeps the plain unsupported wording.
+    env["version"] = "not-a-version"
+    res = verify_envelope_signatures(env)
+    assert res["ok"] is False
     assert "unsupported envelope version" in res.get("note", "")
 
 

@@ -10,6 +10,7 @@ from .chain import events_from_jsonl
 from .crypto import chacha20_poly1305_decrypt, hkdf_sha256, x25519_dh
 from .envelope import EncryptedCapsulesNotSupportedError
 from .keys import _field, to_raw_key
+from .versions import key_wrap_info, require_known_version
 from .zip_io import unpack_zip
 
 
@@ -37,8 +38,10 @@ def _validate_manifest_shape(manifest) -> None:
         raise MalformedCapsuleError("manifest.json is not a JSON object")
     fmt = manifest.get("format")
     version = fmt.get("version") if isinstance(fmt, dict) else None
-    if version != "0.6":
-        raise MalformedCapsuleError(f"manifest.format.version: expected '0.6', got {version!r}")
+    # Any KNOWN version opens (spec/versioning.md): a v0.6 capsule stays
+    # openable by every future reader, forever. Unknown versions fail
+    # closed with a diagnosis distinct from malformation or tampering.
+    require_known_version("manifest.format.version", version)
     if not _is_hex64(manifest.get("id")):
         raise MalformedCapsuleError(
             f"manifest.id is not a 64-char lowercase hex string: {manifest.get('id')!r}"
@@ -88,10 +91,7 @@ def _validate_envelope_shape(envelope) -> None:
     """Shape check on provenance/envelope.json. Mirrors sdk-js reader.js."""
     if not isinstance(envelope, dict):
         raise MalformedCapsuleError("envelope.json is not a JSON object")
-    if envelope.get("version") != "0.6":
-        raise MalformedCapsuleError(
-            f"envelope.version: expected '0.6', got {envelope.get('version')!r}"
-        )
+    require_known_version("envelope.version", envelope.get("version"))
     if not _is_hex64(envelope.get("capsule_id")):
         raise MalformedCapsuleError("envelope.capsule_id must be a 64-char lowercase hex string")
     signers = envelope.get("signers")
@@ -107,7 +107,11 @@ class CapsuleReader:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> CapsuleReader:
-        files = unpack_zip(data)
+        return cls.from_files(unpack_zip(data))
+
+    @classmethod
+    def from_files(cls, files: dict[str, bytes]) -> CapsuleReader:
+        """Construct from an already-unpacked file map (same validation)."""
         if "manifest.json" not in files:
             raise MalformedCapsuleError("missing manifest.json")
         if "provenance/envelope.json" not in files:
@@ -219,17 +223,20 @@ class CapsuleReader:
         wrapped_key = hex_to_bytes(bundle["wrapped_key"])
 
         shared = x25519_dh(bytes(recipient_private_key), eph_pub)
+        # HKDF info is keyed by the capsule's DECLARED version
+        # (spec/versioning.md): decrypting a v0.6 capsule uses the v0.6
+        # wrap-domain forever, whatever version this SDK seals at.
         wrap_key = hkdf_sha256(
             ikm=shared,
             salt=bytes(recipient_public_key),
-            info=b"capsule-key-wrap-v0.6",
+            info=key_wrap_info(self._envelope["version"]),
             length=32,
         )
         content_key = chacha20_poly1305_decrypt(wrap_key, wrap_nonce, b"", wrapped_key)
 
         aad = jcs(
             {
-                "version": "0.6",
+                "version": self._envelope["version"],
                 "capsule_id": self._envelope["capsule_id"],
                 "first_event_hash": self._envelope["first_event_hash"],
                 "originator_public_key": self._manifest["originator"]["public_key"],

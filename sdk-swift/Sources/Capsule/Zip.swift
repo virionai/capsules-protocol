@@ -354,10 +354,18 @@ public enum CapsuleZip {
 public enum CapsuleError: Error, CustomStringConvertible {
     case malformed(String)
     case verification(String)
+    /// A well-formed format version this verifier does not know
+    /// (spec/versioning.md). Deliberately distinct from `.malformed`:
+    /// an operator and an auditor must be able to tell "this verifier
+    /// is too old / the era is unknown" apart from "this capsule is
+    /// corrupt". `observed` is the capsule's declared version; `status`
+    /// is "unknown_newer" or "unknown_older".
+    case unsupportedVersion(observed: String?, status: String, message: String)
     public var description: String {
         switch self {
         case .malformed(let m): return "Capsule malformed: \(m)"
         case .verification(let m): return "Capsule verification failed: \(m)"
+        case .unsupportedVersion(_, _, let m): return m
         }
     }
 }

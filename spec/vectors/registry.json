@@ -178,6 +178,24 @@
         "sdk-kotlin core is a plain-capsule (L2) verifier with no encryption path: its consumer pins the two encrypted fixtures by name (clean-encrypted, tampered-blob) to the documented plain-only refusal instead of the registry outcome. The collection is still consumed in full."
       ]
     },
+    "version-compat/vectors.json": {
+      "kind": "outcome-collection",
+      "open_reasons": [
+        "invalid_manifest_shape",
+        "unsupported_version_newer",
+        "unsupported_version_older"
+      ],
+      "lanes": {
+        "js": { "consumer": "tools/check-spec-vectors.mjs", "mode": "walker" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      },
+      "notes": [
+        "spec/versioning.md. The unknown-version fixtures are internally coherent under their DECLARED version's domain strings, so only the version gate refuses them: the pinned reasons distinguish 'this verifier is too old / the era is unknown' from malformation and tampering, and expected.observed_version pins that the verify result still REPORTS the declared version as a fact even when open is refused."
+      ]
+    },
     "unicode-boundary/vectors.json": {
       "kind": "outcome-collection",
       "lanes": {

@@ -37,6 +37,15 @@ data class CapsuleVerification(
      * visibly lower assurance, reported in [notes].
      */
     val actorSetBound: Boolean = false,
+    /**
+     * Version-compatibility facts (spec/versioning.md): the observed
+     * declared version, whether this verifier supports that era, the
+     * closed status vocabulary ("known" | "unknown_newer" |
+     * "unknown_older" | "invalid" | "unread"), the era's algorithm
+     * suite, and the host's declared-acceptance verdict (null when no
+     * acceptVersions policy was declared). Reported, never decided.
+     */
+    val formatVersion: FormatVersionReport = FormatVersionReport(),
     val notes: List<String>,
 ) {
     data class SignerCheck(
@@ -45,10 +54,23 @@ data class CapsuleVerification(
         val valid: Boolean,
         val trusted: Boolean,
     )
+
+    /** Defaults are the fail-closed "unread" shape. */
+    data class FormatVersionReport(
+        val observed: String? = null,
+        val supported: Boolean = false,
+        val status: String = "unread",
+        val suite: String? = null,
+        val acceptedByPolicy: Boolean? = null,
+    )
 }
 
 object CapsuleVerifier {
-    fun verify(bytes: ByteArray, allowlist: Set<String> = emptySet()): CapsuleVerification {
+    fun verify(
+        bytes: ByteArray,
+        allowlist: Set<String> = emptySet(),
+        acceptVersions: Set<String>? = null,
+    ): CapsuleVerification {
         val checks = mutableListOf<VerifyCheck>()
         fun rec(name: String, ok: Boolean, detail: String = "") {
             checks += VerifyCheck(name, ok, detail)
@@ -59,15 +81,57 @@ object CapsuleVerifier {
         }
 
         val parsed = try { CapsuleReader.parse(bytes) } catch (e: Throwable) {
+            // spec/versioning.md: the observed version stays a REPORTED
+            // fact even when open is refused — an unknown-version refusal
+            // must be distinguishable from tamper by machine, not prose.
+            val formatVersion = if (e is UnsupportedVersionException) {
+                CapsuleVerification.FormatVersionReport(
+                    observed = e.observed, supported = false, status = e.status,
+                )
+            } else CapsuleVerification.FormatVersionReport()
             return CapsuleVerification(
                 ok = false, level = "L2",
                 checks = listOf(VerifyCheck("parse", false, e.message ?: "$e")),
                 signers = emptyList(), trustedSignerCount = 0,
-                signerSetBound = false, actorSetBound = false, notes = notes,
+                signerSetBound = false, actorSetBound = false,
+                formatVersion = formatVersion, notes = notes,
             )
         }
         rec("zip_parse", true, "${parsed.files.size} files")
         rec("json_parse", true)
+
+        // Format-version facts (spec/versioning.md). CapsuleReader.parse
+        // gates unknown versions, so a ParsedCapsule always declares a
+        // KNOWN one; the observed version is REPORTED, and whether the
+        // deployment accepts it is host policy — reported, never decided.
+        val declaredVersion = CapsuleReader.lookupString(
+            parsed.manifest, listOf("format", "version")) ?: CapsuleVersions.CURRENT
+        var acceptedByPolicy: Boolean? = null
+        if (acceptVersions != null) {
+            acceptedByPolicy = declaredVersion in acceptVersions
+            if (!acceptedByPolicy) {
+                notes += "host policy: observed format version $declaredVersion is not in " +
+                    "the declared accepted set ${acceptVersions.sorted()}"
+            }
+        }
+        val formatVersion = CapsuleVerification.FormatVersionReport(
+            observed = declaredVersion,
+            supported = true,
+            status = "known",
+            suite = CapsuleVersions.suiteFor(declaredVersion),
+            acceptedByPolicy = acceptedByPolicy,
+        )
+        // manifest.format.version and envelope.version MUST be equal
+        // (spec/versioning.md): two KNOWN versions that disagree leave
+        // the capsule ambiguous about which era's rules bind it.
+        val envDeclared = CapsuleReader.lookupString(parsed.envelope, listOf("version"))
+        rec(
+            "format_version_binding",
+            envDeclared == declaredVersion,
+            if (envDeclared == declaredVersion) declaredVersion
+            else "envelope.version '${envDeclared ?: "null"}' does not match " +
+                "manifest.format.version '$declaredVersion'",
+        )
 
         // capsule_id derivation. A null (or absent) manifest.first_event_hash
         // is the legal zero-event shape: capsule_id then derives with 32
@@ -81,7 +145,8 @@ object CapsuleVerifier {
         val envId = CapsuleReader.lookupString(parsed.envelope, listOf("capsule_id"))
         if (pubHex != null && mfId != null && envId != null) {
             val firstHash = (mfFirstHashValue as? JCSValue.Str)?.v ?: "0".repeat(64)
-            val expected = Manifest.computeCapsuleId(CapsuleCrypto.hexToBytes(pubHex), firstHash)
+            val expected = Manifest.computeCapsuleId(
+                CapsuleCrypto.hexToBytes(pubHex), firstHash, declaredVersion)
             rec("capsule_id", expected == mfId && expected == envId, expected.take(12) + "…")
         } else rec("capsule_id", false, "missing fields")
 
@@ -401,6 +466,7 @@ object CapsuleVerifier {
                 .map { it.publicKey.lowercase() }.toSet().size,
             signerSetBound = signerSetBound,
             actorSetBound = actorSetBound,
+            formatVersion = formatVersion,
             notes = notes,
         )
     }

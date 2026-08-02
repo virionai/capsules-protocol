@@ -102,9 +102,21 @@ Priority legend:
       and `signing-input.json`, and bring their ZIP readers up to the
       container strictness contract (duplicate-entry, compression, symlink,
       raw-name checks) now enforced by JS/Python/Rust.
-- [ ] **P1** - Add negative vectors for uppercase hex, unknown versions,
-      unknown ciphers, role mismatch, bad envelope signatures, and broken
-      chain linkage.
+- [ ] **P1** - Add negative vectors for uppercase hex, unknown ciphers,
+      role mismatch, bad envelope signatures, and broken chain linkage.
+      (Unknown versions are now covered by `spec/vectors/version-compat/`
+      in every lane — see the versioning entry above.)
+- [x] **P0** - Version-compatibility policy (E3, gates the v0.7 bump):
+      `spec/versioning.md` is normative; all five lanes keep a
+      known-version table, select domain-separation strings BY the
+      capsule's declared version, report the observed version (and the
+      v0.6 algorithm-suite identifier) machine-readably on the verify
+      result, fail closed on unknown versions with reasons distinct
+      from tamper (`unsupported_version_newer` / `_older`), and expose a
+      host-declared accepted-version policy that is reported, never
+      decided. Vectors: `spec/vectors/version-compat/` (registered,
+      consumed by JS walker, sdk-py, verifier-rust, sdk-swift,
+      sdk-kotlin).
 - [ ] **P2** - Add multi-signer builder surfaces where the lower-level
       envelope support already exists.
 

@@ -40,9 +40,19 @@ object Envelope {
         return JCS.bytes(JCSValue.Obj(obj.pairs.filterNot { it.first == "signers" }))
     }
 
+    /**
+     * `domain_sep || canonical(envelope_minus_signers)` — the signing
+     * input. The domain embeds the envelope's DECLARED version — keyed
+     * selection per spec/versioning.md, so an older era's signatures
+     * stay verifiable under that era's domain forever. (Whether the
+     * declared version is one this verifier knows is gated earlier.)
+     */
     fun signingInput(envelope: JCSValue, role: String): ByteArray {
         require(role.isNotEmpty())
-        val domain = "capsule-provenance-v$VERSION:$role\u0000".toByteArray(Charsets.UTF_8)
+        val version = ((envelope as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
+            ?: CapsuleVersions.CURRENT
+        val domain = CapsuleVersions.provenanceDomain(version, role)
         return CapsuleCrypto.concat(domain, canonicalPayload(envelope))
     }
 
@@ -75,8 +85,19 @@ object Envelope {
     fun verifySignatures(envelope: JCSValue): VerifyResult {
         val obj = envelope as? JCSValue.Obj
             ?: return VerifyResult(false, emptyList(), "envelope is not an object")
+        // Any KNOWN version verifies under its own era's domain strings;
+        // an unknown one fails closed with the standard distinguishable
+        // diagnosis (spec/versioning.md), never a tamper-flavored one.
         val versionStr = (obj.pairs.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
-        if (versionStr != VERSION) return VerifyResult(false, emptyList(), "unsupported version")
+        when (val status = CapsuleVersions.classify(versionStr)) {
+            CapsuleVersions.Status.KNOWN -> Unit
+            CapsuleVersions.Status.INVALID ->
+                return VerifyResult(false, emptyList(), "unsupported version")
+            else -> return VerifyResult(
+                false, emptyList(),
+                CapsuleVersions.unsupportedMessage("envelope.version", versionStr!!, status),
+            )
+        }
         val cipher = (obj.pairs.firstOrNull { it.first == "cipher" }?.second as? JCSValue.Str)?.v
         if (cipher !in SUPPORTED_CIPHERS) return VerifyResult(false, emptyList(), "unsupported cipher")
         val signers = (obj.pairs.firstOrNull { it.first == "signers" }?.second as? JCSValue.Arr)?.items

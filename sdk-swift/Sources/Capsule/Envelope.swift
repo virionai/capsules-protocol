@@ -55,10 +55,19 @@ public enum Envelope {
         return try JCS.bytes(.object(withoutSigners))
     }
 
-    /// `domain_sep || canonical(envelope_minus_signers)` — the signing input.
+    /// `domain_sep || canonical(envelope_minus_signers)` — the signing
+    /// input. The domain embeds the envelope's DECLARED version — keyed
+    /// selection per spec/versioning.md, so an older era's signatures
+    /// stay verifiable under that era's domain forever. (Whether the
+    /// declared version is one this verifier knows is gated earlier.)
     static func signingInput(_ envelope: JCSValue, role: String) throws -> Data {
         precondition(!role.isEmpty)
-        let domain = Data("capsule-provenance-v\(VERSION):\(role)\0".utf8)
+        var version = CapsuleVersions.current
+        if case .object(let pairs) = envelope,
+           case .string(let v)? = pairs.first(where: { $0.0 == "version" })?.1 {
+            version = v
+        }
+        let domain = CapsuleVersions.provenanceDomain(version, role: role)
         return Bytes.concat(domain, try canonicalPayload(envelope))
     }
 
@@ -91,10 +100,25 @@ public enum Envelope {
     }
 
     public static func verifySignatures(_ envelope: JCSValue) -> VerifyResult {
+        // Any KNOWN version verifies under its own era's domain strings;
+        // an unknown one fails closed with the standard distinguishable
+        // diagnosis (spec/versioning.md), never a tamper-flavored one.
         guard case .object(let pairs) = envelope,
               let versionPair = pairs.first(where: { $0.0 == "version" }),
-              case .string(let v) = versionPair.1, v == VERSION
+              case .string(let v) = versionPair.1
         else { return VerifyResult(ok: false, signers: [], note: "unsupported version") }
+        switch CapsuleVersions.classify(v) {
+        case .known:
+            break
+        case .invalid:
+            return VerifyResult(ok: false, signers: [], note: "unsupported version")
+        case let status:
+            return VerifyResult(
+                ok: false, signers: [],
+                note: CapsuleVersions.unsupportedMessage(
+                    field: "envelope.version", observed: v, status: status)
+            )
+        }
 
         guard let cipherPair = pairs.first(where: { $0.0 == "cipher" }),
               case .string(let c) = cipherPair.1, SUPPORTED_CIPHERS.contains(c)

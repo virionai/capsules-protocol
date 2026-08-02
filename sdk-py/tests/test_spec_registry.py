@@ -15,6 +15,8 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+  - version-compat/vectors.json     (version gates: known opens, unknown fails
+                                     closed with a non-tamper diagnosis)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -54,6 +56,7 @@ KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
 IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
+VERSION_COMPAT = VECTORS / "version-compat" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
 IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate", "duplicate_member"}
@@ -73,6 +76,10 @@ OPEN_REASON_PATTERNS = {
     "symlink_entry": r"symlink",
     "directory_marker_shape": r"directory (attribute on non-directory name|marker with nonzero size)",
     "local_central_name_mismatch": r"local/central name mismatch",
+    # spec/versioning.md: unknown versions fail closed with a diagnosis
+    # DISTINCT from malformation or tampering.
+    "unsupported_version_newer": r"newer than this verifier supports",
+    "unsupported_version_older": r"older than any version this verifier supports",
 }
 
 # Per-lane mapping of the registry's normative verify-stage reason
@@ -168,6 +175,13 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
             f"{name}: expected a note containing {expected['notes_includes']!r}; "
             f"got {result['notes']!r}"
         )
+    if expected.get("observed_version"):
+        # spec/versioning.md: the observed format version is a REPORTED
+        # fact on the verify result, not merely enforced internally.
+        assert result["format_version"]["observed"] == expected["observed_version"], (
+            f"{name}: expected format_version.observed="
+            f"{expected['observed_version']!r}, got {result['format_version']!r}"
+        )
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(TAMPER))
@@ -259,6 +273,14 @@ def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None
         # verify_capsule is total: the same bytes must fail closed, not raise.
         result = verify_capsule(data, allowlist=_allowlist(doc, base))
         assert result["ok"] is False, f"{vector['name']}: expected a fail-closed result"
+        if expected.get("observed_version"):
+            # spec/versioning.md: even when open is refused, the observed
+            # version stays a reported fact — it is what lets an auditor
+            # tell "this verifier is too old" apart from "corrupt".
+            assert result["format_version"]["observed"] == expected["observed_version"], (
+                f"{vector['name']}: expected format_version.observed="
+                f"{expected['observed_version']!r}, got {result['format_version']!r}"
+            )
         return
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
@@ -272,6 +294,22 @@ def test_unicode_boundary_registry_outcomes(doc: dict, vector: dict, base: pathl
     A failure means this lane's canonicalization disagrees on well-formed
     astral text, not that the capsule was tampered with
     (spec/canonicalization.md, spec/pith.md).
+    """
+    _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(VERSION_COMPAT))
+def test_version_compat_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """spec/versioning.md: known versions open and report; unknown fail closed.
+
+    A capsule declaring a KNOWN format version verifies under that era's
+    rules with the observed version reported machine-readably. A
+    well-formed unknown version is refused with a diagnosis distinct
+    from tamper detection (verifier-too-old vs unknown-older), and a
+    grammar-violating version is a malformed document, not a support
+    gap. The unknown-version fixtures are internally coherent under
+    their declared version's domain strings, so only the version gate
+    refuses them.
     """
     _assert_registry_vector(doc, vector, base)
 

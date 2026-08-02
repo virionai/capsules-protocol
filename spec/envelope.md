@@ -38,8 +38,12 @@ registry defines them.
 
 ## Field rules
 
-- `version`: `"0.6"`. Readers reject unknown versions; no silent
-  upgrade path.
+- `version`: `"0.6"`; MUST equal `manifest.format.version`. Readers
+  accept any KNOWN version under that era's rules and fail closed on an
+  unknown one — with a diagnosis distinct from tamper detection, and no
+  silent upgrade path in either direction. See
+  [versioning.md](versioning.md); conformance vectors:
+  `spec/vectors/version-compat/`.
 - `capsule_id`: matches `manifest.id`.
 - `first_event_hash`: 32-byte SHA-256 hex; equals chain event 1's hash.
 - `entry_hash`: 32-byte SHA-256 hex; equals the final event's hash at
@@ -120,6 +124,11 @@ the prior `Ed25519.sign(utf8(hex_string))` interop bomb.
 **Domain separation per role** prevents replay of a signature across
 roles: a `creator` signature is not also a valid `notary` signature even
 over identical envelope bytes.
+
+**The domain embeds the declared version.** Verifiers reconstruct the
+domain from the envelope's own `version` member — keyed selection per
+[versioning.md](versioning.md), so a v0.6 signature stays verifiable by
+every future reader that knows v0.6.
 
 ## Signer set binding
 
@@ -268,6 +277,12 @@ of `content.enc`; the combination of `capsule_id` (derived from
 `originator_public_key || first_event_hash`) plus `first_event_hash`
 already binds the ciphertext to a specific origin and chain genesis.
 Implementations MUST NOT include `manifest_hash` in the AAD.
+
+The KDF info string `capsule-key-wrap-v0.6` and the AAD's `version`
+member both carry the capsule's declared version, keyed as in
+[versioning.md](versioning.md). No algorithm identifiers appear in the
+sealed bytes beyond `cipher`; the agreement and KDF are fixed by the
+v0.6 suite ([versioning.md](versioning.md) "Algorithm suites").
 
 For each recipient X25519 public key:
 

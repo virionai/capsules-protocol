@@ -116,6 +116,7 @@ fn run_verify(
         &VerifyOptions {
             allowlist,
             recipient_private_key,
+            accept_versions: None,
         },
     );
 

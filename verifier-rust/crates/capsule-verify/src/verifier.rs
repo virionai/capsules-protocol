@@ -44,6 +44,7 @@ use crate::manifest::{
     build_content_index, compute_capsule_id, content_index_exclusions, manifest_hash,
 };
 use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
+use crate::versions::{classify_version, suite_for, unsupported_version_message, VersionStatus};
 use crate::zip_reader::unpack_zip;
 
 /// Ciphers this verifier accepts in `envelope.cipher`.
@@ -176,6 +177,13 @@ pub struct VerifyOptions {
     /// exactly. When `Some` but the capsule is plain, the flag is silently
     /// ignored — there's nothing to decrypt.
     pub recipient_private_key: Option<[u8; 32]>,
+    /// Host policy (spec/versioning.md): the format versions this
+    /// deployment ACCEPTS. `Some(list)` makes the verifier report
+    /// `format_version.accepted_by_policy`; it never fails an
+    /// otherwise-valid known-version capsule — exactly the allowlist
+    /// shape: the SDK reports, the host decides. `None` reports no
+    /// policy verdict.
+    pub accept_versions: Option<Vec<String>>,
 }
 
 /// Top-level verifier result.
@@ -228,6 +236,13 @@ pub struct VerifyResult {
     /// empty the list without breaking every envelope signature.
     #[serde(default)]
     pub actor_set: ActorSetCheck,
+    /// Version-compatibility facts (spec/versioning.md): the observed
+    /// declared version, whether this verifier supports that era, the
+    /// era's algorithm suite, and the host's declared-acceptance
+    /// verdict. `#[serde(default)]` keeps pre-versioning JSON
+    /// deserializable (defaulting to the fail-closed "unread" shape).
+    #[serde(default)]
+    pub format_version: FormatVersionCheck,
     /// Inner envelope signature check, populated when L3 verification ran
     /// and the inner envelope was successfully parsed. None for plain
     /// capsules, L2-only paths (no recipient key), or when L3 failed
@@ -290,6 +305,43 @@ pub struct SignerSetCheck {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ActorSetCheck {
     pub bound: bool,
+}
+
+/// The version-compatibility fact channel (spec/versioning.md). The
+/// derived `Default` is the fail-closed "unread" shape (observed: None,
+/// supported: false) used by every early-return path before the
+/// manifest's declaration could be read; `status` defaults to "unread"
+/// via `Default` impl below.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatVersionCheck {
+    /// The version the capsule DECLARES (`manifest.format.version`),
+    /// reported even when unsupported — the observed fact is what lets
+    /// an auditor tell "this verifier is too old" from "corrupt".
+    pub observed: Option<String>,
+    /// Whether this verifier knows the declared era.
+    pub supported: bool,
+    /// Closed vocabulary: "known" | "unknown_newer" | "unknown_older" |
+    /// "invalid" | "unread".
+    pub status: String,
+    /// The era's algorithm-suite identifier ("v0.6"): Ed25519 / SHA-256
+    /// / JCS RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305.
+    /// `None` when the era is unsupported.
+    pub suite: Option<String>,
+    /// `Some(verdict)` only when the host declared `accept_versions`;
+    /// reported, never enforced.
+    pub accepted_by_policy: Option<bool>,
+}
+
+impl Default for FormatVersionCheck {
+    fn default() -> Self {
+        FormatVersionCheck {
+            observed: None,
+            supported: false,
+            status: "unread".to_string(),
+            suite: None,
+            accepted_by_policy: None,
+        }
+    }
 }
 
 /// Aggregate envelope-signature results.
@@ -362,6 +414,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 String::new(),
                 String::new(),
@@ -386,6 +439,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 String::new(),
                 String::new(),
@@ -412,6 +466,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 String::new(),
                 String::new(),
@@ -434,6 +489,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 String::new(),
                 String::new(),
@@ -457,6 +513,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 manifest.id.clone(),
                 String::new(),
@@ -482,6 +539,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 manifest.id.clone(),
                 String::new(),
@@ -504,6 +562,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
+                FormatVersionCheck::default(),
                 no_allowlist,
                 manifest.id.clone(),
                 String::new(),
@@ -517,21 +576,102 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     let capsule_id = manifest.id.clone();
     let signed_at = envelope.signed_at.clone();
 
-    // ---- (3) format / version checks ------------------------------------
-    if manifest.format.version != "0.6" {
+    // ---- (3) format / version gate (spec/versioning.md) ------------------
+    // The observed version is a REPORTED FACT (format_version channel);
+    // whether it is acceptable to this deployment is host policy
+    // (accept_versions), reported and never decided here. An unknown
+    // version fails closed EARLY with only the version diagnosis —
+    // running the wrong era's rules would bury "this verifier is too
+    // old" under hash-mismatch noise indistinguishable from tampering.
+    let declared_version = manifest.format.version.clone();
+    let version_status = classify_version(&declared_version);
+    let mut format_version_check = FormatVersionCheck {
+        observed: Some(declared_version.clone()),
+        supported: version_status == VersionStatus::Known,
+        status: version_status.as_str().to_string(),
+        suite: if version_status == VersionStatus::Known {
+            suite_for(&declared_version).map(|s| s.to_string())
+        } else {
+            None
+        },
+        accepted_by_policy: None,
+    };
+    if version_status != VersionStatus::Known {
         errors.push(TopError::outer(
             TopErrorCategory::FormatVersion,
-            format!(
-                "unsupported manifest format.version: {}",
-                manifest.format.version
-            ),
+            if version_status == VersionStatus::Invalid {
+                format!(
+                    "manifest.format.version: not a '<major>.<minor>' version string, got {declared_version:?}"
+                )
+            } else {
+                unsupported_version_message(
+                    "manifest.format.version",
+                    &declared_version,
+                    version_status,
+                )
+            },
         ));
+        return assemble_result(
+            errors,
+            notes,
+            chain_check,
+            content_index_check,
+            envelope_check,
+            None,
+            None,
+            format_version_check,
+            no_allowlist,
+            capsule_id,
+            signed_at,
+            level,
+        );
     }
-    if envelope.version != "0.6" {
+    let env_version_status = classify_version(&envelope.version);
+    if env_version_status != VersionStatus::Known || envelope.version != declared_version {
         errors.push(TopError::outer(
             TopErrorCategory::FormatVersion,
-            format!("unsupported envelope version: {}", envelope.version),
+            if env_version_status == VersionStatus::Invalid {
+                format!(
+                    "envelope.version: not a '<major>.<minor>' version string, got {:?}",
+                    envelope.version
+                )
+            } else if env_version_status != VersionStatus::Known {
+                unsupported_version_message("envelope.version", &envelope.version, env_version_status)
+            } else {
+                // Two KNOWN versions that disagree: the capsule is
+                // ambiguous about which era's rules bind it. Fail closed
+                // before applying either.
+                format!(
+                    "envelope.version '{}' does not match manifest.format.version '{}'",
+                    envelope.version, declared_version
+                )
+            },
         ));
+        return assemble_result(
+            errors,
+            notes,
+            chain_check,
+            content_index_check,
+            envelope_check,
+            None,
+            None,
+            format_version_check,
+            no_allowlist,
+            capsule_id,
+            signed_at,
+            level,
+        );
+    }
+    // Host policy: DECLARED accepted versions. Reported, never decided —
+    // integrity ok is unaffected, exactly as with signer allowlists.
+    if let Some(accepted) = &options.accept_versions {
+        let verdict = accepted.iter().any(|v| v == &declared_version);
+        format_version_check.accepted_by_policy = Some(verdict);
+        if !verdict {
+            notes.push(format!(
+                "host policy: observed format version {declared_version} is not in the declared accepted set {accepted:?}"
+            ));
+        }
     }
 
     // ---- (4) cipher whitelist -------------------------------------------
@@ -551,7 +691,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // chain walk below, which fails closed on any anchor/event-count
     // inconsistency (spec/chain.md "Empty chains").
     match hex_to_bytes(&manifest.originator.public_key) {
-        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, manifest.first_event_hash.as_deref()) {
+        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, manifest.first_event_hash.as_deref(), &declared_version) {
             Ok(expected_id) => {
                 if expected_id != manifest.id {
                     errors.push(TopError::outer(
@@ -942,6 +1082,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         envelope: envelope_check,
         signer_set: signer_set_check,
         actor_set: actor_set_check,
+        format_version: format_version_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -1480,6 +1621,7 @@ pub(crate) fn normalize_allowlist(allowlist: &[String]) -> (Vec<String>, Vec<Str
 /// `inner_content_index_check` are populated only on the L3-success path;
 /// every early-return path passes `None` for both.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn assemble_result(
     errors: Vec<TopError>,
     mut notes: Vec<String>,
@@ -1488,6 +1630,7 @@ fn assemble_result(
     envelope_check: EnvelopeCheck,
     inner_envelope_check: Option<EnvelopeCheck>,
     inner_content_index_check: Option<ContentIndexCheck>,
+    format_version: FormatVersionCheck,
     no_allowlist: bool,
     capsule_id: String,
     signed_at: String,
@@ -1519,6 +1662,7 @@ fn assemble_result(
         // capsule never reached the signer-set or actor-set checks.
         signer_set: SignerSetCheck::default(),
         actor_set: ActorSetCheck::default(),
+        format_version,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -1615,6 +1759,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![originator_ed25519_public_key_hex()],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -1761,7 +1906,7 @@ mod tests {
     #[test]
     fn clean_capsule_passes_l2() {
         let bytes = clean_capsule_bytes();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(result.ok, "clean capsule must pass; errors: {:?}", result.errors);
         assert!(result.errors.is_empty(), "no top-level errors: {:?}", result.errors);
@@ -1811,6 +1956,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: allowlist.clone(),
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -1834,6 +1980,7 @@ mod tests {
             &VerifyOptions {
                 allowlist,
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
         assert!(
@@ -1856,7 +2003,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(manifest_bytes).unwrap();
         let pk = manifest.originator.public_key.clone();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None, accept_versions: None });
 
         assert!(result.ok, "must still pass with allowlist; errors: {:?}", result.errors);
         assert!(
@@ -1870,7 +2017,7 @@ mod tests {
     #[test]
     fn tampered_payload_fails_at_content_index() {
         let bytes = tampered_capsule_bytes("tampered-payload.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "tampered payload must fail");
         assert!(
@@ -1897,7 +2044,7 @@ mod tests {
     #[test]
     fn tampered_chain_fails_at_chain_or_content_index() {
         let bytes = tampered_capsule_bytes("tampered-chain.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "tampered chain must fail");
         assert!(
@@ -1910,7 +2057,7 @@ mod tests {
     #[test]
     fn tampered_envelope_fails_at_signature() {
         let bytes = tampered_capsule_bytes("tampered-envelope.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "tampered envelope must fail");
         assert!(
@@ -1931,7 +2078,7 @@ mod tests {
     #[test]
     fn encrypted_capsule_rejected_with_clear_message() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "tampered-blob.capsule must be rejected");
         assert!(
@@ -1953,9 +2100,11 @@ mod tests {
     }
 
     /// A synthesized capsule with `format.version = "0.5"` must be
-    /// rejected. This test builds a STORED-only ZIP from raw JSON bytes
-    /// (no real signatures), so most other checks will also fail — but
-    /// the format error must be present.
+    /// rejected — 0.5 is a well-formed version this verifier has never
+    /// supported (spec/versioning.md: unknown_older). The refusal must
+    /// carry the directional, NON-TAMPER diagnosis, report the observed
+    /// version as a fact, and fail closed EARLY: no downstream
+    /// hash-mismatch noise from applying the wrong era's rules.
     #[test]
     fn format_version_mismatch_rejected() {
         use std::io::Cursor;
@@ -2015,16 +2164,28 @@ mod tests {
         zw.write_all(b"").unwrap(); // empty chain
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "0.5 manifest must be rejected");
         assert!(
             result
                 .errors
                 .iter()
-                .any(|e| e.message.contains("unsupported manifest format.version")
+                .any(|e| e.message.contains("older than any version this verifier supports")
                     && e.category == TopErrorCategory::FormatVersion),
-            "expected an unsupported-version error tagged FormatVersion; got: {:?}",
+            "expected the directional unsupported-version error tagged FormatVersion; got: {:?}",
+            result.errors
+        );
+        // The observed version is a REPORTED fact even on refusal.
+        assert_eq!(result.format_version.observed.as_deref(), Some("0.5"));
+        assert_eq!(result.format_version.status, "unknown_older");
+        assert!(!result.format_version.supported);
+        // Early fail-closed: the version diagnosis is the ONLY error —
+        // no tamper-flavored mismatches from the wrong era's rules.
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "unknown-version refusal must not read as tampering: {:?}",
             result.errors
         );
     }
@@ -2035,7 +2196,7 @@ mod tests {
     #[test]
     fn malformed_zip_surfaces_as_malformed_category() {
         let bytes = b"not a zip at all".to_vec();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "garbage bytes must not verify");
         assert!(
@@ -2106,7 +2267,7 @@ mod tests {
         zw.write_all(b"").unwrap();
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
         assert!(!result.ok);
         assert!(
             result
@@ -2332,7 +2493,7 @@ mod tests {
     #[test]
     fn clean_encrypted_passes_l2() {
         let bytes = tampered_capsule_bytes("clean-encrypted.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(
             result.ok,
@@ -2366,7 +2527,7 @@ mod tests {
     #[test]
     fn tampered_blob_fails_at_encrypted_blob_hash() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "tampered-blob must fail at L2");
         assert!(
@@ -2406,7 +2567,7 @@ mod tests {
         let bytes = synthesize_capsule_with_envelope_mutation("clean.capsule", |env| {
             env["cipher"] = serde_json::Value::String("AES-256-GCM".to_string());
         });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "unsupported cipher must be rejected");
         assert!(
@@ -2431,7 +2592,7 @@ mod tests {
             synthesize_capsule_with_envelope_mutation("clean-encrypted.capsule", |env| {
                 env["cipher"] = serde_json::Value::String("none".to_string());
             });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
 
         assert!(!result.ok, "encrypted blob with cipher='none' must fail");
         assert!(
@@ -2456,6 +2617,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2522,6 +2684,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -2551,6 +2714,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2586,6 +2750,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some([0x42; 32]),
+                accept_versions: None,
             },
         );
 
@@ -2612,6 +2777,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2648,6 +2814,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2685,6 +2852,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -2712,6 +2880,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2822,6 +2991,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -2874,6 +3044,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -2900,6 +3071,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -3027,6 +3199,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
 
@@ -3073,6 +3246,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
         assert!(
@@ -3094,6 +3268,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
             },
         );
         let has_inner = result
@@ -3309,6 +3484,7 @@ mod tests {
                 // Truncated: 32 hex chars where 64 are required.
                 allowlist: vec!["cc76ce271ed61e515b598d73290a2b39".to_string()],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -3345,6 +3521,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec!["not-hex".to_string(), pk],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -3382,6 +3559,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec!["ab".repeat(32)],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
@@ -3414,6 +3592,7 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![pk_upper],
                 recipient_private_key: None,
+                accept_versions: None,
             },
         );
 
