@@ -50,6 +50,82 @@ pub fn jcs(value: &Value) -> Vec<u8> {
         .into_bytes()
 }
 
+/// Largest integer exactly representable as an IEEE-754 binary64: 2^53 - 1.
+const MAX_SAFE_INTEGER: i128 = (1i128 << 53) - 1;
+
+/// Smallest magnitude whose ECMAScript `Number::toString` form uses exponent
+/// notation. Below it an integral double serializes as a plain integer
+/// literal; at or above it the token carries an `e`.
+const PLAIN_INTEGER_CEILING: f64 = 1e21;
+
+/// Enforce the I-JSON acceptance boundary from `spec/canonicalization.md`.
+///
+/// RFC 8785 canonicalization is only defined over I-JSON (RFC 7493) input.
+/// This verifier's strings are Rust `String`s, which cannot hold unpaired
+/// surrogates (`serde_json` rejects lone-surrogate escapes at parse time), so
+/// only the number rule needs enforcing here: a number whose canonical token
+/// is a *plain integer literal* must satisfy |n| <= 2^53 - 1.
+///
+/// Returns `Err(message)` naming the offending path, or `Ok(())`.
+pub fn check_ijson(value: &Value) -> Result<(), String> {
+    check_ijson_at(value, "$")
+}
+
+fn check_ijson_at(value: &Value, path: &str) -> Result<(), String> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+        Value::Number(n) => check_number(n, path),
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                check_ijson_at(item, &format!("{path}[{i}]"))?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for (k, v) in map {
+                check_ijson_at(v, &format!("{path}.{k}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn out_of_range(path: &str) -> String {
+    format!(
+        "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1) at {path}; \
+         not representable identically across implementations"
+    )
+}
+
+fn check_number(n: &serde_json::Number, path: &str) -> Result<(), String> {
+    if let Some(u) = n.as_u64() {
+        return if i128::from(u) > MAX_SAFE_INTEGER {
+            Err(out_of_range(path))
+        } else {
+            Ok(())
+        };
+    }
+    if let Some(i) = n.as_i64() {
+        return if i128::from(i).abs() > MAX_SAFE_INTEGER {
+            Err(out_of_range(path))
+        } else {
+            Ok(())
+        };
+    }
+    let f = n
+        .as_f64()
+        .ok_or_else(|| format!("JCS: non-finite number at {path}"))?;
+    if !f.is_finite() {
+        return Err(format!("JCS: non-finite number at {path}"));
+    }
+    let magnitude = f.abs();
+    if f.fract() == 0.0 && magnitude > MAX_SAFE_INTEGER as f64 && magnitude < PLAIN_INTEGER_CEILING
+    {
+        return Err(out_of_range(path));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +272,60 @@ mod tests {
     }
 
     #[test]
+    fn check_ijson_rejects_plain_integer_literal_out_of_range() {
+        // A 20-digit integer literal: serde_json parses it as u64, serde_jcs
+        // would happily echo it, and a JS reader would round it. Refuse.
+        let v: Value = serde_json::from_str(r#"{"payload":{"ts":10000000000000000000}}"#)
+            .expect("valid json");
+        let err = check_ijson(&v).expect_err("must be rejected");
+        assert!(
+            err.contains("integer outside IEEE-754 exact range"),
+            "unexpected message: {err}"
+        );
+        assert!(
+            err.contains("$.payload.ts"),
+            "message must name the path: {err}"
+        );
+    }
+
+    #[test]
+    fn check_ijson_rejects_exponent_input_that_serializes_as_plain_integer() {
+        // `1e19` arrives as an f64 but Number::toString lays it out as
+        // 10000000000000000000 - the same unsafe plain literal.
+        let v: Value = serde_json::from_str("[1e19]").expect("valid json");
+        assert!(check_ijson(&v).is_err());
+        assert_eq!(String::from_utf8(jcs(&v)).unwrap(), "[10000000000000000000]");
+    }
+
+    #[test]
+    fn check_ijson_accepts_max_safe_and_exponent_form() {
+        let safe: Value = serde_json::from_str("9007199254740991").expect("valid json");
+        assert!(check_ijson(&safe).is_ok());
+        // 1e21 and above serialize in exponent form, which round-trips
+        // through every lane's double path.
+        let big: Value = serde_json::from_str("1e21").expect("valid json");
+        assert!(check_ijson(&big).is_ok());
+        assert_eq!(String::from_utf8(jcs(&big)).unwrap(), "1e+21");
+    }
+
+    #[test]
+    fn serde_json_rejects_lone_surrogate_escape_at_parse() {
+        // The string half of the acceptance boundary is enforced by the
+        // parser in this lane: Rust `String` cannot hold a lone surrogate.
+        assert!(
+            serde_json::from_str::<Value>(r#"{"s":"x\ud83dy"}"#).is_err(),
+            "an unpaired high surrogate escape must not parse"
+        );
+        assert!(
+            serde_json::from_str::<Value>(r#"{"s":"x\udc00"}"#).is_err(),
+            "an unpaired low surrogate escape must not parse"
+        );
+        // The well-formed pair is accepted and yields one astral scalar.
+        let ok: Value = serde_json::from_str(r#"{"s":"x🙂"}"#).expect("valid pair");
+        assert_eq!(String::from_utf8(jcs(&ok)).unwrap().chars().count(), 10);
+    }
+
+    #[test]
     fn deterministic_sha256_of_canonical_form() {
         // Cross-check with the Task 1 crypto helper: hashing the canonical
         // bytes is deterministic across invocations, regardless of the input
@@ -245,6 +375,16 @@ mod vector_tests {
             let value = f64::from_bits(bits);
             let num = serde_json::Number::from_f64(value)
                 .expect("vectors contain only finite doubles");
+            if entry["accepted"] == Value::Bool(false) {
+                // Outside the I-JSON acceptance boundary
+                // (spec/canonicalization.md): `expected` documents the
+                // Number::toString layout, but the value must be refused.
+                assert!(
+                    super::check_ijson(&Value::Number(num)).is_err(),
+                    "bits {hex} (would serialize as {expected}) must be rejected"
+                );
+                continue;
+            }
             let got = String::from_utf8(jcs(&Value::Number(num))).expect("utf8");
             assert_eq!(got, expected, "bits {hex}");
         }
