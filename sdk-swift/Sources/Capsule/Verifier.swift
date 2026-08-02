@@ -541,6 +541,15 @@ public enum CapsuleVerifier {
         if !actorSetBound {
             notes.append("manifest.participants empty: chain actors are not bound to a declared participant set")
         }
+        // spec/manifest.md field rules (A06): every DECLARED actor_id must
+        // sit in the closed namespace set (human/ai/system/capsule,
+        // non-empty id). Unlike an empty participants[], an
+        // uninterpretable declared entry is not a weaker claim — it is a
+        // malformed one, rejected fail-closed. Conformance vector:
+        // chain-rules/invalid-actor-namespace.
+        let participantProblems = CapsuleReader.participantActorIdProblems(parsed.manifest)
+        record("participants", participantProblems.isEmpty,
+               participantProblems.map { "manifest.\($0)" }.joined(separator: "; "))
 
         // Originator binding (invariant): the manifest names an originator
         // key — that key must actually have sealed the capsule with a valid

@@ -251,6 +251,40 @@ class ActorKindTest {
         }
     }
 
+    // --- participants[].actor_id namespace grammar (manifest.md, A06) ------
+    //
+    // The namespace set is CLOSED: human:, ai:, system:, capsule:, each
+    // with a non-empty <id>. The builder refuses to declare a participant
+    // outside the grammar; the verifier side is pinned by the
+    // chain-rules/invalid-actor-namespace registry vector.
+
+    @Test
+    fun isValidActorIdAcceptsExactlyTheFourNamespaces() {
+        for (good in listOf(
+            "human:alice@acme.example", "ai:claude-opus-4-7", "system:host", "capsule:abc",
+        )) {
+            assertTrue(Chain.isValidActorId(good), good)
+        }
+        for (bad in listOf(
+            "robot:r2d2", "human", "human:", ":alice", "", "Human:alice", " human:alice",
+        )) {
+            assertFalse(Chain.isValidActorId(bad), bad)
+        }
+    }
+
+    @Test
+    fun setParticipantsRejectsOutOfNamespaceActorId() {
+        val e = assertFailsWith<IllegalArgumentException> {
+            newBuilder().setParticipants(
+                listOf(CapsuleBuilder.Participant("robot:origin", "originator", "R"))
+            )
+        }
+        assertTrue(
+            e.message!!.contains("does not match an allowed namespace"),
+            "unexpected message: ${e.message}",
+        )
+    }
+
     private fun newBuilder() = CapsuleBuilder(
         originator = CapsuleBuilder.Originator(
             keyPair = CapsuleCrypto.generateEd25519(), label = "Acme",

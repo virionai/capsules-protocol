@@ -30,7 +30,7 @@ export async function buildExampleCapsule({
     originator: { publicKey: originator.publicKeyHex, label: "Example Originator" },
     participants: [
       { actor_id: "human:originator", role: "originator", label: "Example Originator" },
-      { actor_id: "tool:renderer", role: "tool", label: "Example Renderer" },
+      { actor_id: "system:renderer", role: "tool", label: "Example Renderer" },
     ],
     createdAt: FIXED_CREATED_AT,
   });
@@ -39,7 +39,7 @@ export async function buildExampleCapsule({
   builder.setAgents(`# Agents
 
 - human:originator may create and sign this generic example capsule.
-- tool:renderer may render generic work products from included data.
+- system:renderer may render generic work products from included data.
 
 This example is illustrative only and carries no warranty.
 `);

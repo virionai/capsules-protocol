@@ -184,6 +184,37 @@ object CapsuleReader {
     }
 
     /**
+     * Validate `manifest.participants[]` against the actor-id namespace
+     * grammar (spec/manifest.md field rules, finding A06). Returns
+     * problem strings prefixed `participants[i]` (empty = well-formed).
+     * Unlike [participantActorIds], entries that cannot be interpreted
+     * are FLAGGED, not skipped: a declared set that cannot be
+     * interpreted is not a weaker claim, it is a malformed one.
+     */
+    fun participantActorIdProblems(manifest: JCSValue): List<String> {
+        val obj = manifest as? JCSValue.Obj ?: return emptyList()
+        val ps = obj.pairs.firstOrNull { it.first == "participants" }?.second
+        val arr = ps as? JCSValue.Arr ?: return emptyList()
+        val grammar = "(human:, ai:, system:, capsule:)"
+        val problems = mutableListOf<String>()
+        for ((i, item) in arr.items.withIndex()) {
+            val id = when (item) {
+                is JCSValue.Str -> item.v
+                is JCSValue.Obj ->
+                    (item.pairs.firstOrNull { it.first == "actor_id" }?.second as? JCSValue.Str)?.v
+                else -> null
+            }
+            if (id == null) {
+                problems += "participants[$i].actor_id must be a string in an allowed namespace $grammar"
+            } else if (!Chain.isValidActorId(id)) {
+                problems += "participants[$i].actor_id ${Chain.debugQuoted(id)} " +
+                    "does not match an allowed namespace $grammar"
+            }
+        }
+        return problems
+    }
+
+    /**
      * [parseJson] with the offending file named in the error, so a reader
      * rejection can be attributed to a specific document (mirrors the Rust
      * verifier's "failed to parse manifest.json").

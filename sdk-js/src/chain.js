@@ -32,6 +32,56 @@ export function isValidEventKind(kind) {
 }
 
 /**
+ * The CLOSED actor-id namespace set from spec/manifest.md "Field rules":
+ * `participants[].actor_id` must match `human:<id>`, `ai:<id>`,
+ * `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+ */
+export const ACTOR_NAMESPACES = Object.freeze(["human", "ai", "system", "capsule"]);
+
+const ACTOR_NAMESPACE_SET = new Set(ACTOR_NAMESPACES);
+
+/** True when `actorId` is `<namespace>:<id>` with a known namespace and
+ *  non-empty id. Case-sensitive; no surrounding whitespace allowed. */
+export function isValidActorId(actorId) {
+  if (typeof actorId !== "string") return false;
+  const sep = actorId.indexOf(":");
+  if (sep <= 0 || sep === actorId.length - 1) return false;
+  return ACTOR_NAMESPACE_SET.has(actorId.slice(0, sep));
+}
+
+/**
+ * Validate a manifest `participants[]` array against the actor-id
+ * namespace grammar. Returns a list of problem strings (empty =
+ * well-formed); each is prefixed `participants[i]` so callers can add
+ * their own context (`manifest.` in the verifier). Accepts the same
+ * shapes participantActorIds does — bare actor-id strings or objects
+ * with `actor_id` — and, unlike it, FLAGS entries it cannot interpret:
+ * a declared set that cannot be interpreted is not a weaker claim, it
+ * is a malformed one, and silently ignoring an entry here would let a
+ * capsule smuggle an unbindable participant past every conformant
+ * check. A non-array (or absent) participants value is outside this
+ * function's scope.
+ */
+export function participantActorIdProblems(participants) {
+  const problems = [];
+  if (!Array.isArray(participants)) return problems;
+  const grammar = "(human:, ai:, system:, capsule:)";
+  participants.forEach((p, i) => {
+    const id = typeof p === "string" ? p : (p != null && typeof p === "object" && !Array.isArray(p) ? p.actor_id : undefined);
+    if (typeof id !== "string") {
+      problems.push(
+        `participants[${i}].actor_id must be a string in an allowed namespace ${grammar}`,
+      );
+    } else if (!isValidActorId(id)) {
+      problems.push(
+        `participants[${i}].actor_id ${JSON.stringify(id)} does not match an allowed namespace ${grammar}`,
+      );
+    }
+  });
+  return problems;
+}
+
+/**
  * The normative `untrusted_payload_fields` path grammar from spec/chain.md
  * "Untrusted content":
  *

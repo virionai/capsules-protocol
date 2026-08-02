@@ -49,6 +49,25 @@ object Chain {
     fun isValidEventKind(kind: String?): Boolean = kind != null && kind in EVENT_KINDS
 
     /**
+     * The CLOSED actor-id namespace set from spec/manifest.md "Field
+     * rules": `participants[].actor_id` must match `human:<id>`,
+     * `ai:<id>`, `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+     */
+    val ACTOR_NAMESPACES: List<String> = listOf("human", "ai", "system", "capsule")
+
+    /**
+     * True when [actorId] is `<namespace>:<id>` with a known namespace
+     * and non-empty id. Case-sensitive; no surrounding whitespace.
+     * Pinned by the chain-rules/invalid-actor-namespace vector.
+     */
+    fun isValidActorId(actorId: String?): Boolean {
+        if (actorId == null) return false
+        val sep = actorId.indexOf(':')
+        if (sep <= 0 || sep == actorId.length - 1) return false
+        return actorId.substring(0, sep) in ACTOR_NAMESPACES
+    }
+
+    /**
      * The normative `untrusted_payload_fields` path grammar from
      * spec/chain.md "Untrusted content":
      *

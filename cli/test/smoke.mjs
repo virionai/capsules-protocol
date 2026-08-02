@@ -72,7 +72,7 @@ async function buildFixtures() {
     originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke" },
     participants: [
       { actor_id: "human:cli", role: "originator", label: "CLI Test" },
-      { actor_id: "tool:smoke", role: "verifier", label: "Smoke Test" },
+      { actor_id: "system:smoke", role: "verifier", label: "Smoke Test" },
     ],
   });
 
@@ -94,7 +94,7 @@ async function buildFixtures() {
     payload: { summary: "Created CLI smoke fixture" },
   });
   await builder.appendEvent({
-    actor: "tool:smoke",
+    actor: "system:smoke",
     kind: "observation",
     action: "reviewed",
     target: "payload/observation.txt",

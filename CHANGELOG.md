@@ -41,6 +41,29 @@ incompatible wire changes ship as `0.7`).
   no encryption path. Pinned by `sdk-js/test/key-curve.test.js` and
   `sdk-py/tests/test_key_curve.py`.
 
+- **The `participants[].actor_id` namespace grammar is now enforced in
+  every lane (A06).** `spec/manifest.md` has always required
+  `human:<id>`, `ai:<id>`, `system:<id>`, or `capsule:<id>`, but no
+  builder or verifier checked it — a capsule declaring `robot:origin`
+  (or any uninterpretable participant entry) sailed through all five
+  verifiers with the actor set reported as bound. The namespace set is
+  now CLOSED normatively (`<id>` any non-empty string,
+  case-sensitive), builders refuse to declare a participant outside
+  the grammar (sdk-js/sdk-py at construction and seal, sdk-swift and
+  sdk-kotlin in `setParticipants`), and all five verifiers reject a
+  declared out-of-grammar entry fail-closed — including entries with a
+  missing or non-string `actor_id`, which the membership check used to
+  skip silently. This is distinct from the empty-participants tier: an
+  EMPTY set is a weaker claim made honestly (still verifies, reported
+  unbound); a DECLARED entry no reader can interpret is malformed. New
+  chain-rules vector `invalid-actor-namespace` (declared and event
+  actor both `robot:origin`, so membership passes and only the grammar
+  decides) is consumed by all five lanes. The repo's own examples and
+  CLI smoke fixtures used `tool:renderer`/`tool:smoke` — themselves
+  spec violations — and are renamed to the `system:` namespace.
+  `capsule:<id>` remains grammar-only: nothing else in the codebase
+  assigns it semantics (composition is future work).
+
 - **The semantic-binding layer: manifest claims are now tied to the
   signed envelope, the chain, and the files in every lane.**
   `capsule_id` is derived from `manifest.first_event_hash`, but no lane

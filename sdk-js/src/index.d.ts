@@ -289,6 +289,16 @@ export const EVENT_KINDS: readonly EventKind[];
 /** The one actor that never needs a participant entry: the host runtime. */
 export const HOST_ACTOR: "system:host";
 export function isValidEventKind(kind: unknown): kind is EventKind;
+
+/** Closed actor-id namespace set (spec/manifest.md field rules). */
+export type ActorNamespace = "human" | "ai" | "system" | "capsule";
+export const ACTOR_NAMESPACES: readonly ActorNamespace[];
+/** True for `<namespace>:<id>` with a known namespace and non-empty id. */
+export function isValidActorId(actorId: unknown): boolean;
+/** Grammar problems for a declared participants[] array ([] = well-formed). */
+export function participantActorIdProblems(
+  participants?: Array<Participant | string> | null,
+): string[];
 export function participantActorIds(
   participants?: Array<Participant | string> | null,
 ): Set<string>;

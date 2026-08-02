@@ -108,7 +108,7 @@ final class ActorKindTests: XCTestCase {
         // Swap the declared participant AFTER appending: the sealed
         // manifest still declares a NON-EMPTY set — just not the actor the
         // chain names. Only the actor rule can catch this.
-        builder.setParticipants([
+        try builder.setParticipants([
             .init(actorId: "human:bob", role: "originator", label: "Bob"),
         ])
         let result = try builder.seal(signedAt: Self.ts)
@@ -173,10 +173,10 @@ final class ActorKindTests: XCTestCase {
 
     // MARK: - CapsuleBuilder.appendEvent: writer obligations
 
-    func testAppendEventRejectsActorOutsideDeclaredParticipants() {
+    func testAppendEventRejectsActorOutsideDeclaredParticipants() throws {
         let kp = Ed25519KeyPair.generate()
         let builder = CapsuleBuilder(originator: .init(keyPair: kp))
-        builder.setParticipants([
+        try builder.setParticipants([
             .init(actorId: "human:alice", role: "originator", label: "Alice"),
         ])
         XCTAssertThrowsError(
@@ -203,10 +203,10 @@ final class ActorKindTests: XCTestCase {
         )
     }
 
-    func testAppendEventAcceptsSystemHostWithoutParticipantEntry() {
+    func testAppendEventAcceptsSystemHostWithoutParticipantEntry() throws {
         let kp = Ed25519KeyPair.generate()
         let builder = CapsuleBuilder(originator: .init(keyPair: kp))
-        builder.setParticipants([
+        try builder.setParticipants([
             .init(actorId: "human:alice", role: "originator", label: "Alice"),
         ])
         XCTAssertNoThrow(
@@ -217,10 +217,10 @@ final class ActorKindTests: XCTestCase {
         )
     }
 
-    func testAppendEventRejectsUnknownKind() {
+    func testAppendEventRejectsUnknownKind() throws {
         let kp = Ed25519KeyPair.generate()
         let builder = CapsuleBuilder(originator: .init(keyPair: kp))
-        builder.setParticipants([
+        try builder.setParticipants([
             .init(actorId: "human:alice", role: "originator", label: "Alice"),
         ])
         XCTAssertThrowsError(
@@ -245,5 +245,36 @@ final class ActorKindTests: XCTestCase {
                 action: "a", target: "t"
             )
         )
+    }
+
+    // MARK: - participants[].actor_id namespace grammar (manifest.md, A06)
+    //
+    // The namespace set is CLOSED: human:, ai:, system:, capsule:, each
+    // with a non-empty <id>. The builder refuses to declare a participant
+    // outside the grammar; the verifier side is pinned by the
+    // chain-rules/invalid-actor-namespace registry vector.
+
+    func testIsValidActorIdAcceptsExactlyTheFourNamespaces() {
+        for good in ["human:alice@acme.example", "ai:claude-opus-4-7", "system:host", "capsule:abc"] {
+            XCTAssertTrue(Chain.isValidActorId(good), good)
+        }
+        for bad in ["robot:r2d2", "human", "human:", ":alice", "", "Human:alice", " human:alice"] {
+            XCTAssertFalse(Chain.isValidActorId(bad), bad)
+        }
+    }
+
+    func testSetParticipantsRejectsOutOfNamespaceActorId() {
+        let kp = Ed25519KeyPair.generate()
+        let builder = CapsuleBuilder(originator: .init(keyPair: kp))
+        XCTAssertThrowsError(
+            try builder.setParticipants([
+                .init(actorId: "robot:origin", role: "originator", label: "R"),
+            ])
+        ) { error in
+            XCTAssertTrue(
+                "\(error)".contains("does not match an allowed namespace"),
+                "unexpected error: \(error)"
+            )
+        }
     }
 }

@@ -15,6 +15,7 @@ from .chain import (
     first_and_entry_hash,
     is_valid_event_kind,
     is_valid_untrusted_payload_path,
+    participant_actor_id_problems,
     participant_actor_ids,
 )
 from .crypto import (
@@ -40,6 +41,13 @@ from .pith import compress_event_payload
 from .zip_io import pack_zip
 
 _SKILL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _assert_valid_participants(participants: object) -> None:
+    """Raise when a declared ``participants`` list fails the actor-id grammar."""
+    problems = participant_actor_id_problems(participants)
+    if problems:
+        raise ValueError("; ".join(problems))
 
 
 @dataclass
@@ -68,6 +76,12 @@ class CapsuleBuilder:
             "public_key": to_key_hex(originator_key, "originator.public_key"),
             "label": _field(originator, "label") or "",
         }
+        # spec/manifest.md field rules: every declared actor_id must sit in
+        # the closed namespace set. Refuse the shape at the call site that
+        # introduced it — a capsule declaring an uninterpretable participant
+        # fails every conformant verifier. Re-checked at seal() because
+        # builder.participants is a mutable attribute.
+        _assert_valid_participants(participants or [])
         self.participants = participants or []
         self.created_at = created_at or now_iso()
         self.program_md: str | None = None
@@ -198,6 +212,9 @@ class CapsuleBuilder:
         ``signed_at``: optional ISO 8601 UTC string; defaults to now.
         Pass an explicit value for reproducible builds.
         """
+        # builder.participants is mutable between construction and seal;
+        # never emit a manifest that fails the namespace grammar.
+        _assert_valid_participants(self.participants)
         if signers is None:
             signer_items = []
         elif isinstance(signers, (list, tuple)):

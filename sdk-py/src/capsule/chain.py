@@ -52,6 +52,52 @@ def is_valid_untrusted_payload_path(path: object) -> bool:
     return isinstance(path, str) and _UNTRUSTED_PAYLOAD_PATH.match(path) is not None
 
 
+#: The CLOSED actor-id namespace set from spec/manifest.md "Field rules":
+#: ``participants[].actor_id`` must match ``human:<id>``, ``ai:<id>``,
+#: ``system:<id>``, or ``capsule:<id>`` with a non-empty ``<id>``.
+ACTOR_NAMESPACES: tuple[str, ...] = ("human", "ai", "system", "capsule")
+
+_ACTOR_NAMESPACE_SET = frozenset(ACTOR_NAMESPACES)
+
+
+def is_valid_actor_id(actor_id: object) -> bool:
+    """True when ``actor_id`` is ``<namespace>:<id>`` with a known namespace
+    and non-empty id. Case-sensitive; no surrounding whitespace allowed."""
+    if not isinstance(actor_id, str):
+        return False
+    namespace, sep, ident = actor_id.partition(":")
+    return sep == ":" and namespace in _ACTOR_NAMESPACE_SET and len(ident) > 0
+
+
+def participant_actor_id_problems(participants: object) -> list[str]:
+    """Validate a manifest ``participants[]`` list against the actor-id
+    namespace grammar. Returns a list of problem strings (empty =
+    well-formed); each is prefixed ``participants[i]`` so callers can add
+    their own context (``manifest.`` in the verifier). Accepts the same
+    shapes ``participant_actor_ids`` does — bare actor-id strings or
+    mappings with ``actor_id`` — and, unlike it, FLAGS entries it cannot
+    interpret: a declared set that cannot be interpreted is not a weaker
+    claim, it is a malformed one. A non-list participants value is
+    outside this function's scope.
+    """
+    problems: list[str] = []
+    if not isinstance(participants, (list, tuple)):
+        return problems
+    grammar = "(human:, ai:, system:, capsule:)"
+    for i, p in enumerate(participants):
+        actor_id = p if isinstance(p, str) else (p.get("actor_id") if isinstance(p, dict) else None)
+        if not isinstance(actor_id, str):
+            problems.append(
+                f"participants[{i}].actor_id must be a string in an allowed namespace {grammar}"
+            )
+        elif not is_valid_actor_id(actor_id):
+            problems.append(
+                f"participants[{i}].actor_id {json.dumps(actor_id)} "
+                f"does not match an allowed namespace {grammar}"
+            )
+    return problems
+
+
 def participant_actor_ids(participants: object) -> set[str]:
     """Normalize a manifest ``participants[]`` list into a set of actor ids.
 
