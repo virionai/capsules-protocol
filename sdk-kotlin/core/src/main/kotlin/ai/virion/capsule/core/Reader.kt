@@ -26,25 +26,31 @@ object CapsuleReader {
         val manifestBytes = files["manifest.json"]
             ?: throw CapsuleException("missing manifest.json")
         val envelopeBytes = files["provenance/envelope.json"]
-            ?: throw CapsuleException("missing envelope")
-        val eventsBytes = files["chain/events.jsonl"]
-            ?: throw CapsuleException("missing chain")
-        val programBytes = files["program.md"]
-            ?: throw CapsuleException("missing program.md")
+            ?: throw CapsuleException("missing provenance/envelope.json")
 
-        val manifest = parseJson(manifestBytes)
-        val envelope = parseJson(envelopeBytes)
-        val events = String(eventsBytes, Charsets.UTF_8)
-            .split('\n').filter { it.isNotEmpty() }
-            .map { parseJson(it.toByteArray(Charsets.UTF_8)) }
-        val programMd = String(programBytes, Charsets.UTF_8)
-        val agentsMd = files["agents.md"]?.let { String(it, Charsets.UTF_8) }
+        val manifest = parseJsonFile(manifestBytes, "manifest.json")
+        val envelope = parseJsonFile(envelopeBytes, "provenance/envelope.json")
 
+        // Refuse encrypted capsules BEFORE demanding the plain-capsule
+        // layout: the chain and program live inside the ciphertext, so
+        // requiring them first would misattribute the refusal as
+        // "missing chain".
         val encryption = (manifest as? JCSValue.Obj)?.pairs
             ?.firstOrNull { it.first == "encryption" }?.second
         if (encryption != null && encryption != JCSValue.Null) {
             throw CapsuleException("encrypted capsule; v0 reader supports plain only")
         }
+
+        val eventsBytes = files["chain/events.jsonl"]
+            ?: throw CapsuleException("missing chain")
+        val programBytes = files["program.md"]
+            ?: throw CapsuleException("missing program.md")
+        val events = String(eventsBytes, Charsets.UTF_8)
+            .split('\n').filter { it.isNotEmpty() }
+            .map { parseJsonFile(it.toByteArray(Charsets.UTF_8), "chain/events.jsonl") }
+        val programMd = String(programBytes, Charsets.UTF_8)
+        val agentsMd = files["agents.md"]?.let { String(it, Charsets.UTF_8) }
+
         return ParsedCapsule(manifest, envelope, events, programMd, agentsMd, files)
     }
 
@@ -58,6 +64,18 @@ object CapsuleReader {
         }
         return (cur as? JCSValue.Str)?.v
     }
+
+    /**
+     * [parseJson] with the offending file named in the error, so a reader
+     * rejection can be attributed to a specific document (mirrors the Rust
+     * verifier's "failed to parse manifest.json").
+     */
+    fun parseJsonFile(bytes: ByteArray, name: String): JCSValue =
+        try {
+            parseJson(bytes)
+        } catch (_: Exception) {
+            throw CapsuleException("failed to parse $name")
+        }
 
     /** Parse JSON bytes via Gson, then convert to JCSValue keeping insertion order. */
     fun parseJson(bytes: ByteArray): JCSValue =
