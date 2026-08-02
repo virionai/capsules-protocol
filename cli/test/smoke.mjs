@@ -12,6 +12,7 @@ import {
   CapsuleBuilder,
   CapsuleReader,
   generateEd25519,
+  generateX25519,
   packZip,
 } from "@capsule/sdk-v0.6-prototype";
 
@@ -23,6 +24,7 @@ const TMP = join(tmpdir(), `capsule-cli-smoke-${process.pid}`);
 const FIXTURES = join(TMP, "fixtures");
 const CLEAN = join(FIXTURES, "clean.capsule");
 const TAMPERED = join(FIXTURES, "tampered-payload.capsule");
+const ENCRYPTED = join(FIXTURES, "encrypted.capsule");
 const VECTORS = join(FIXTURES, "parity-vectors.json");
 const EXTRACT_DIR = join(TMP, "extract");
 
@@ -107,6 +109,28 @@ async function buildFixtures() {
     signedAt: "2026-05-21T12:00:02Z",
   });
   writeFileSync(CLEAN, Buffer.from(cleanBytes));
+
+  // Encrypted fixture: same originator, one X25519 recipient.
+  const encBuilder = new CapsuleBuilder({
+    originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke Enc" },
+  });
+  encBuilder.setProgram("# CLI Smoke (encrypted)\n");
+  await encBuilder.appendEvent({
+    actor: "human:cli",
+    kind: "decision",
+    action: "created",
+    target: "program.md",
+    timestamp: "2026-05-21T12:00:00Z",
+    payload: { summary: "Created encrypted CLI smoke fixture" },
+  });
+  const encBytes = await encBuilder.seal({
+    signers: [
+      { role: "originator", publicKey: originator.publicKey, privateKey: originator.privateKey },
+    ],
+    recipients: generateX25519(),
+    signedAt: "2026-05-21T12:00:02Z",
+  });
+  writeFileSync(ENCRYPTED, Buffer.from(encBytes));
 
   const reader = await CapsuleReader.fromBytes(cleanBytes);
   const files = new Map(reader.files_());
@@ -426,6 +450,31 @@ section("args - unknown flags and extra positionals fail closed (F03)");
   const help = run(["verify", "--help"]);
   check("verify --help exits 0", help.code === 0);
   check("verify --help prints usage", /usage: capsule verify/.test(help.stderr));
+}
+
+// ----------------------------------------------------------------------
+
+section("encrypted capsules - honest decryption pointers (F47)");
+
+{
+  // No capsule-CLI command implements decryption, so no message may
+  // point users at a `verify --decryption-key` flag that does not exist.
+  const c = run(["chain", ENCRYPTED]);
+  check("chain on encrypted capsule exits 2", c.code === 2);
+  check("chain error says this CLI does not decrypt", /does not decrypt/.test(c.stderr));
+  check("chain error does not recommend a nonexistent flag",
+    !/capsule verify.*--decryption-key/.test(c.stderr));
+
+  const i = run(["inspect", ENCRYPTED]);
+  check("inspect on encrypted capsule exits 0", i.code === 0);
+  check("inspect shows encryption cipher", /encrypted/.test(i.stdout));
+  check("inspect chain-length note says this CLI cannot decrypt", /cannot decrypt/.test(i.stdout));
+  check("inspect does not recommend a nonexistent flag", !/--decryption-key/.test(i.stdout));
+
+  // The encrypted capsule still verifies at L2 (chain deferred), and the
+  // trust policy applies to the outer envelope like any other capsule.
+  const v = run(["verify", ENCRYPTED, "--allowlist", KEYS.originatorPublicKeyHex]);
+  check("encrypted capsule verifies at L2 with trust satisfied", v.code === 0);
 }
 
 // ----------------------------------------------------------------------

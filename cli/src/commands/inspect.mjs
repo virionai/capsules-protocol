@@ -79,7 +79,7 @@ export async function inspectCmd(argv) {
   out(`Sealed at (attested):   ${env.signed_at}`);
   out(`Encryption:             ${encrypted ? `${env.cipher} (encrypted)` : "none (plain)"}`);
   out(`Content-index entries:  ${m.content_index?.files?.length ?? 0}`);
-  out(`Chain length:           ${encrypted ? "(encrypted — run verify --decryption-key to inspect)" : chainLen}`);
+  out(`Chain length:           ${encrypted ? "(encrypted — this CLI cannot decrypt; use the SDK reader.decrypt() or the Rust capsule-verify-cli)" : chainLen}`);
 
   if (m.participants?.length) {
     out("");
