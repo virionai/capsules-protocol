@@ -1,6 +1,6 @@
 # Capsule v0.6 Vectors
 
-This directory contains checked-in protocol vectors. Six shapes exist, all
+This directory contains checked-in protocol vectors. Seven shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 
@@ -84,6 +84,24 @@ lane):
    negative). Only the native profile is pinned: Ed25519 signatures are
    deterministic, ECDSA (the JWT profile) is not.
 
+7. **JCS key-ordering set** (`jcs-key-order.json`, detected by
+   `meta.kind: "jcs-key-order"`) — a `vectors` array of `{ name, note, keys,
+   expected_key_order, canonical_utf8_hex, sha256_hex }` entries. Build a
+   JSON object whose members are `keys`, each mapped to its 0-based index in
+   `keys`, canonicalize it, and reproduce `canonical_utf8_hex`
+   byte-for-byte. RFC 8785 §3.2.3 sorts members on their **UTF-16 code-unit
+   sequences** — not Unicode code-point order (the two disagree once a
+   supplementary-plane key meets a key in U+E000..U+FFFF) and not a
+   normalization- or collation-aware order (which can report canonically
+   equivalent keys as equal). `supplementary-vs-high-bmp` and
+   `canonically-equivalent-keys-are-distinct` are the negative witnesses for
+   those two wrong comparators. The same ordering governs
+   `content_index.files` (a JSON array, so its order is inside the hashed
+   bytes) and ZIP entry order. All five lanes consume this set: JS
+   (`sdk-js/test/jcs-key-order.test.js` plus the checker), Python
+   (`test_jcs_key_order_registry`), Rust (`jcs_key_order_registry`), Swift
+   (`testJcsKeyOrderRegistry`) and Kotlin (`jcsKeyOrderRegistry`).
+
 Other JSON here (e.g. `tamper-detection/output/keys.json`,
 `unknown-fields/output/keys.json`, and `signer-set/output/keys.json`) is
 supporting material, not a vector, and is ignored by the checker.
@@ -103,6 +121,9 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-ed25519-key-validation-vector.mjs` →
   `ed25519-key-validation.json` (searches node:crypto's raw verify for the
   acceptance witnesses; `--check` detects drift)
+- `sdk-js/tools/generate-jcs-key-order-vector.mjs` → `jcs-key-order.json`
+  (self-contained; the case list lives in the generator, and the output is
+  pure ASCII with surrogate halves escaped individually)
 - `sdk-js/tools/generate-attestation-vectors.mjs` →
   `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
   byte-stable, supports `--check`)

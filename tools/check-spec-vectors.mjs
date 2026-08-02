@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Five vector shapes are recognized under spec/vectors/ (plus the
+// Six vector shapes are recognized under spec/vectors/ (plus the
 // signing-input doc, documented at checkSigningInput below):
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
@@ -34,6 +34,13 @@
 //      verification context they must be checked against, with an expected
 //      `{ ok, status, error_includes? }`. `status` is the attestation-layer
 //      vocabulary of spec/federation.md "Failure reporting".
+//
+//   6. A JCS key-ordering vector set (meta.kind === "jcs-key-order"): a
+//      `vectors` array of `{ name, keys, expected_key_order,
+//      canonical_utf8_hex, sha256_hex }` entries. Build an object mapping
+//      each key to its index in `keys`, canonicalize, and reproduce the
+//      pinned bytes. RFC 8785 3.2.3 sorts members on UTF-16 code units,
+//      which is neither code-point order nor a collation-aware order.
 //
 // keys.json (the tamper-detection fixture keypair, consumed by the
 // Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
@@ -289,6 +296,57 @@ function checkNumberVectors(path, doc) {
   });
 }
 
+// Array-index-like keys ("0", "1", ...) are reordered by JS engines when a
+// canonical object is reparsed, which would make expected_key_order
+// unverifiable here. Vectors must not use them.
+const ARRAY_INDEX_KEY = /^(0|[1-9][0-9]*)$/;
+
+// JCS object-member ordering (meta.kind === "jcs-key-order"): RFC 8785
+// 3.2.3 sorts members on their UTF-16 code-unit sequences. This lane gets
+// that for free (`a < b` on a JS string IS UTF-16 order), so the set is
+// both the oracle's regression pin and the negative witness for lanes that
+// sort by code point or with a collation-aware comparator.
+function checkKeyOrderVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const entry of doc.vectors) {
+    checked++;
+    const label = `${path} [${entry?.name}]`;
+    const keys = entry?.keys;
+    if (!Array.isArray(keys) || keys.length === 0 || keys.some((k) => typeof k !== "string")) {
+      fail(`${label}: keys must be a non-empty array of strings`);
+      continue;
+    }
+    if (new Set(keys).size !== keys.length) {
+      fail(`${label}: keys must be distinct`);
+      continue;
+    }
+    if (keys.some((k) => ARRAY_INDEX_KEY.test(k))) {
+      fail(`${label}: array-index-like keys are not allowed in ordering vectors`);
+      continue;
+    }
+    const obj = {};
+    keys.forEach((k, i) => {
+      obj[k] = i;
+    });
+    const canonical = jcs(obj);
+    const gotHex = bytesToHex(canonical);
+    if (gotHex !== entry.canonical_utf8_hex) {
+      fail(`${label}: JS SDK canonicalizes to ${gotHex}, vector says ${entry.canonical_utf8_hex}`);
+      continue;
+    }
+    if (bytesToHex(sha256(canonical)) !== entry.sha256_hex) {
+      fail(`${label}: sha256_hex does not match SHA-256 of canonical_utf8_hex`);
+    }
+    const order = Object.keys(JSON.parse(Buffer.from(canonical).toString("utf8")));
+    if (JSON.stringify(order) !== JSON.stringify(entry.expected_key_order)) {
+      fail(`${label}: expected_key_order ${JSON.stringify(entry.expected_key_order)} != ${JSON.stringify(order)}`);
+    }
+  }
+}
+
 // Byte-level signing-input vector (meta.kind === "signing-input"): every
 // canonical byte string and hash must be reproducible from the referenced
 // embedded capsule, and each pinned signature must verify over the
@@ -518,6 +576,9 @@ async function checkFile(path) {
     return;
   }
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
+  // Must sit before isCollection, which would otherwise swallow the file
+  // (it also carries a `vectors` array).
+  else if (doc?.meta?.kind === "jcs-key-order") checkKeyOrderVectors(path, doc);
   else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
   else if (isKeyValidationVector(doc)) checkKeyValidationVectors(path, doc);
   else if (isAttestationVectorSet(doc)) checkAttestationVectors(path, doc);
@@ -527,7 +588,7 @@ async function checkFile(path) {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
         `an outcome-vector collection, a signing-input doc, an ed25519-verify doc, ` +
-        `an identity-attestation set, or a jcs number set)`
+        `an identity-attestation set, a jcs number set, or a jcs key-order set)`
     );
   }
 }
