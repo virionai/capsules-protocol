@@ -293,3 +293,29 @@ def test_decrypt_third_of_three_recipients():
         recipient_private_key=third.private_key,
     )
     assert inner.program() == "# encrypted loan\n"
+
+
+def test_is_encrypted_ignores_a_smuggled_content_enc():
+    """The SIGNED envelope.cipher decides, not file presence.
+
+    smuggled-blob-broken-chain.capsule is a plain (cipher="none") capsule
+    with a content.enc appended and a corrupt chain. OR-semantics here
+    flip the reader into encrypted mode, and verify_capsule then defers
+    the chain to L3 and reports chain.ok=True for a chain nobody walked.
+    """
+    import pathlib
+
+    from capsule.verifier import verify_capsule
+
+    path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "spec/vectors/semantic-binding/output/smuggled-blob-broken-chain.capsule"
+    )
+    reader = CapsuleReader.from_bytes(path.read_bytes())
+    assert reader.envelope()["cipher"] == "none"
+    assert "content.enc" in reader.files()
+    assert reader.is_encrypted() is False
+
+    result = verify_capsule(reader)
+    assert "note" not in result["chain"], "the chain must be walked, not deferred"
+    assert result["chain"]["ok"] is False, "the corrupt chain must fail"

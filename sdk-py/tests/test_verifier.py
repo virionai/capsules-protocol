@@ -245,3 +245,55 @@ def test_l3_detects_cross_envelope_mismatch():
     )
     assert result["ok"] is False
     assert any("L3" in e for e in result["errors"])
+
+
+def _semantic(name: str) -> bytes:
+    import pathlib
+
+    return (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "spec/vectors/semantic-binding/output"
+        / name
+    ).read_bytes()
+
+
+def _fixture_originator() -> str:
+    import pathlib
+
+    keys = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "spec/vectors/tamper-detection/output/keys.json"
+        ).read_text()
+    )
+    return keys["originator"]["publicKey"]
+
+
+def test_manifest_first_event_hash_must_match_envelope():
+    # manifest.first_event_hash is the capsule_id preimage; the fixture's
+    # manifest.id and envelope.capsule_id are derived from a decoy value and
+    # the envelope is validly signed, so only the cross-check catches it.
+    reader = CapsuleReader.from_bytes(_semantic("first-event-hash-drift.capsule"))
+    result = verify_capsule(reader, allowlist=[_fixture_originator()])
+    assert result["ok"] is False
+    assert any("manifest.first_event_hash mismatch" in e for e in result["errors"]), result[
+        "errors"
+    ]
+
+
+def test_manifest_encryption_must_agree_with_envelope_cipher():
+    declared = verify_capsule(
+        CapsuleReader.from_bytes(_semantic("encryption-declared-plain.capsule")),
+        allowlist=[_fixture_originator()],
+    )
+    assert declared["ok"] is False
+    assert any("manifest.encryption must be" in e for e in declared["errors"]), declared["errors"]
+
+    dangling = verify_capsule(
+        CapsuleReader.from_bytes(_semantic("encryption-metadata-path-dangling.capsule")),
+        allowlist=[_fixture_originator()],
+    )
+    assert dangling["ok"] is False
+    assert any("manifest.encryption.metadata_path" in e for e in dangling["errors"]), dangling[
+        "errors"
+    ]

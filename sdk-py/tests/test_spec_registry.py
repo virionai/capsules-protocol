@@ -40,6 +40,7 @@ MALFORMED_SHAPE = VECTORS / "malformed-shape" / "vectors.json"
 UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 CHAIN_BINDING = VECTORS / "chain-binding" / "vectors.json"
+SEMANTIC = VECTORS / "semantic-binding" / "vectors.json"
 CHAIN_RULES = VECTORS / "chain-rules" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
@@ -66,6 +67,20 @@ OPEN_REASON_PATTERNS = {
     "directory_marker_shape": r"directory (attribute on non-directory name|marker with nonzero size)",
     "local_central_name_mismatch": r"local/central name mismatch",
 }
+
+# Per-lane mapping of the registry's normative verify-stage reason
+# categories (semantic-binding/vectors.json) onto this SDK's error strings.
+VERIFY_REASON_NEEDLES = {
+    "first_event_hash_binding": "manifest.first_event_hash mismatch",
+    "encryption_shape": "manifest.encryption must be",
+    "encryption_metadata_path": "manifest.encryption.metadata_path",
+}
+
+# Optional lane capabilities a semantic-binding vector may declare in
+# requires[]. This SDK implements all of them, so nothing is skipped; the
+# set exists so an unknown requirement fails loudly instead of silently
+# skipping a vector.
+KNOWN_REQUIREMENTS = {"encryption"}
 
 AREA_PREDICATES = {
     "content_index": lambda r: r["content_index"]["ok"] is False,
@@ -279,6 +294,50 @@ def test_ijson_acceptance_boundary(vector: dict):
     assert vector["reason"] in IJSON_REASONS, f"{name}: unknown reason {vector['reason']!r}"
     with pytest.raises(ValueError):
         jcs(parsed)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(SEMANTIC))
+def test_semantic_binding_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Manifest claims must agree with the signed envelope, chain, and files.
+
+    Every fixture is well-formed and correctly signed; only its semantics
+    are wrong, so nothing but an explicit cross-check catches it
+    (manifest.first_event_hash vs envelope vs chain event 1;
+    manifest.encryption vs the signed cipher; encrypted-mode detection off
+    the signed cipher, never file presence).
+    """
+    for req in vector.get("requires", []):
+        assert req in KNOWN_REQUIREMENTS, f"{vector['name']}: unknown requirement {req!r}"
+    data = (base / vector["capsule_file"]).read_bytes()
+    expected = vector["expected"]
+    name = vector["name"]
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(name, expected, result)
+
+    if expected.get("reason"):
+        needle = VERIFY_REASON_NEEDLES.get(expected["reason"])
+        assert needle is not None, f"{name}: unknown verify-stage reason {expected['reason']!r}"
+        assert needle in _error_haystack(result), (
+            f"{name}: expected an error for reason {expected['reason']!r}; got {result['errors']}"
+        )
+
+    if expected.get("decryptable_with"):
+        # L3 pin: decrypt with the named keypair — resolving the metadata
+        # through manifest.encryption.metadata_path, never a hardcoded
+        # path — and the inner capsule must verify against the outer.
+        keys = _load((base / doc["keys_file"]).resolve())
+        pair = keys[expected["decryptable_with"]]
+        inner = reader.decrypt(
+            recipient_public_key=pair["publicKey"],
+            recipient_private_key=pair["privateKey"],
+        )
+        inner_result = verify_capsule(
+            inner, allowlist=_allowlist(doc, base), outer_envelope=reader.envelope()
+        )
+        assert inner_result["ok"] is True, (
+            f"{name}: inner capsule must verify; got {inner_result['errors']}"
+        )
 
 
 def test_signing_input_pins():

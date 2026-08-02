@@ -131,11 +131,16 @@ class CapsuleReader:
         return self._files
 
     def is_encrypted(self) -> bool:
-        if isinstance(self._manifest.get("encryption"), dict):
-            return True
-        if self._envelope.get("cipher") not in (None, "none"):
-            return True
-        return "content.enc" in self._files
+        """True only for a genuine encrypted-outer capsule.
+
+        Mirrors ``sdk-js/src/reader.js``: the SIGNED ``envelope.cipher``
+        AND the presence of ``content.enc``. The manifest's ``encryption``
+        declaration is deliberately NOT an input — it is cross-checked by
+        ``verify_capsule`` instead. With OR-semantics an attacker who
+        merely appends a ``content.enc`` flips the capsule into encrypted
+        mode, and chain verification is skipped.
+        """
+        return self._envelope.get("cipher") != "none" and "content.enc" in self._files
 
     def encrypted_blob_bytes(self) -> bytes:
         blob = self._files.get("content.enc")

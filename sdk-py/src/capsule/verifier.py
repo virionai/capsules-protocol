@@ -174,6 +174,20 @@ def _verify_capsule_impl(
     except (KeyError, ValueError, TypeError) as e:
         errors.append(f"capsule_id derivation failed: {e}")
 
+    # Semantic binding: manifest.first_event_hash is the capsule_id input;
+    # envelope.first_event_hash is what the chain walk below is checked
+    # against. spec/manifest.md and spec/envelope.md both pin them to the
+    # hash of chain event 1, so they must be equal — otherwise capsule_id
+    # (the identity federation attestations bind to) names a chain the
+    # capsule does not carry. None==None is the legal empty-chain shape;
+    # the chain walk enforces anchor/event-count consistency separately.
+    if manifest.get("first_event_hash") != envelope.get("first_event_hash"):
+        errors.append(
+            "manifest.first_event_hash mismatch: "
+            f"{manifest.get('first_event_hash')} vs envelope.first_event_hash "
+            f"{envelope.get('first_event_hash')}"
+        )
+
     # Manifest hash
     try:
         recomputed_mf_hash = manifest_hash(manifest)
@@ -260,6 +274,39 @@ def _verify_capsule_impl(
             errors.append("plain capsule must have envelope.encrypted_blob_hash=null")
         if envelope.get("cipher") != "none":
             errors.append(f"plain capsule must have cipher='none', got {envelope.get('cipher')!r}")
+
+    # Encryption declaration. spec/manifest.md fixes manifest.encryption as
+    # null for plain capsules and {metadata_path, cipher} for encrypted ones.
+    # The SIGNED envelope.cipher is authoritative; the manifest declaration
+    # must agree with it, and the declared metadata_path must resolve to a
+    # file that exists AND is covered by the content index.
+    declared_encryption = manifest.get("encryption")
+    if envelope.get("cipher") == "none":
+        if declared_encryption is not None:
+            errors.append("manifest.encryption must be null when envelope.cipher is 'none'")
+    elif not isinstance(declared_encryption, dict):
+        errors.append(
+            "manifest.encryption must be an object when envelope.cipher is "
+            f"{envelope.get('cipher')!r}"
+        )
+    else:
+        if declared_encryption.get("cipher") != envelope.get("cipher"):
+            errors.append(
+                f"manifest.encryption.cipher mismatch: {declared_encryption.get('cipher')!r} "
+                f"vs envelope.cipher {envelope.get('cipher')!r}"
+            )
+        metadata_path = declared_encryption.get("metadata_path")
+        if not isinstance(metadata_path, str) or not metadata_path:
+            errors.append("manifest.encryption.metadata_path must be a non-empty string")
+        elif metadata_path not in files:
+            errors.append(
+                f"manifest.encryption.metadata_path missing from capsule: {metadata_path}"
+            )
+        elif not any(f.get("path") == metadata_path for f in stored_files):
+            errors.append(
+                "manifest.encryption.metadata_path not covered by content index: "
+                f"{metadata_path}"
+            )
 
     # Chain
     if not reader.is_encrypted():
