@@ -9,6 +9,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
   - signer-set/vectors.json         (signer-set binding outcomes)
   - signing-input.json              (byte-level signing/hashing pins)
+  - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -34,6 +35,7 @@ UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
+KEY_ORDER = VECTORS / "jcs-key-order.json"
 
 # Per-lane mapping of the registry's normative open-stage reason
 # categories onto this SDK's error messages. Every reader error here is a
@@ -246,3 +248,27 @@ def test_ed25519_key_validation_registry(vector: dict):
         f"{vector['name']}: expected valid={vector['expected']['valid']} "
         f"({vector['reason']}), got {got}"
     )
+
+
+def _key_order_params():
+    doc = json.loads(KEY_ORDER.read_text())
+    return [pytest.param(v, id=v["name"]) for v in doc["vectors"]]
+
+
+@pytest.mark.parametrize("vector", _key_order_params())
+def test_jcs_key_order_registry(vector: dict):
+    """RFC 8785 §3.2.3: members sort on their UTF-16 code-unit sequences.
+
+    Python's default ``str`` ordering is Unicode *code point* order, which
+    is a different order: the two disagree whenever a supplementary-plane
+    key (>= U+10000, UTF-16 lead surrogate 0xD800..0xDBFF) meets a key in
+    U+E000..U+FFFF. Those entries are the negative witnesses — a lane that
+    sorts by code point produces different canonical bytes, a different
+    hash, and a cross-lane verification failure on an honest capsule.
+    """
+    obj = {key: i for i, key in enumerate(vector["keys"])}
+    canon = jcs(obj)
+    assert bytes_to_hex(canon) == vector["canonical_utf8_hex"], vector["name"]
+    assert sha256_hex(canon) == vector["sha256_hex"], vector["name"]
+    order = list(json.loads(canon.decode("utf-8")).keys())
+    assert order == vector["expected_key_order"], vector["name"]

@@ -12,6 +12,29 @@ def jcs(value: Any) -> bytes:
     return _jcs_value(value).encode("utf-8")
 
 
+def utf16_sort_key(s: str) -> bytes:
+    """RFC 8785 §3.2.3 sort key: the string's UTF-16 code units, big-endian.
+
+    Comparing UTF-16BE byte strings lexicographically is identical to
+    comparing UTF-16 code-unit sequences, because every code unit occupies
+    exactly two bytes at a fixed offset. Python's default ``str`` ordering
+    is Unicode *code point* order, which disagrees whenever a
+    supplementary-plane character (>= U+10000, UTF-16 lead surrogate
+    0xD800..0xDBFF) is compared against a BMP character in U+E000..U+FFFF:
+    by code point the BMP character sorts first, by UTF-16 code units the
+    supplementary one does. The JS reference lane gets the right order for
+    free (``a < b`` on a JS string IS UTF-16 order), so a code-point sort
+    here yields different canonical bytes, a different hash, and a
+    cross-lane verification failure on an honest capsule.
+
+    Raises UnicodeEncodeError on a lone surrogate — which could never reach
+    canonical output anyway, since the final ``.encode("utf-8")`` in
+    :func:`jcs` raises the same exception class on the same input. The fix
+    moves that failure a few frames earlier; it does not create one.
+    """
+    return s.encode("utf-16-be")
+
+
 def _jcs_value(v: Any) -> str:
     if v is None:
         return "null"
@@ -33,7 +56,7 @@ def _jcs_value(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(_jcs_value(x) for x in v) + "]"
     if isinstance(v, dict):
-        keys = sorted(v.keys())
+        keys = sorted(v.keys(), key=utf16_sort_key)
         parts = [_jcs_string(k) + ":" + _jcs_value(v[k]) for k in keys]
         return "{" + ",".join(parts) + "}"
     raise TypeError(f"JCS: unsupported type {type(v).__name__}")
