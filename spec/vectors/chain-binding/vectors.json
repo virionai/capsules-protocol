@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "name": "chain-binding",
+    "spec_version": "0.6",
+    "description": "Language-neutral expected verifier outcomes for the envelope-to-chain binding rules (spec/chain.md 'Empty chains', spec/envelope.md field rules, spec/chain.md 'Unknown members'). A chain with ZERO events is legal — the weakest honest shape (template/draft) — and then manifest.first_event_hash, envelope.first_event_hash and envelope.entry_hash MUST all be null; capsule_id derives with 32 zero bytes standing in for first_event_hash_raw. A capsule claiming any chain anchor while carrying no events is lying about its own bytes and MUST fail closed: in a plain capsule those anchors are the only envelope-to-chain binding. Verifiers MUST report machine-readably that a zero-event chain was not walked (expected.notes_includes). Separately, the per-event hash preimage is rebuilt from the STORED line: an event omitting the optional untrusted_payload_fields member MUST verify — re-serializing a typed projection injects the default and spuriously fails an intact chain.",
+    "generator": "sdk-js/tools/generate-chain-binding-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "empty-chain-null-anchors",
+      "capsule_file": "output/empty-chain-null-anchors.capsule",
+      "expected": { "ok": true, "notes_includes": "empty chain" },
+      "note": "Positive control: zero events, all three anchor claims null, originator-signed with a signer commitment. Absence of history is a weaker claim made honestly; the verifier reports that no events were walked rather than rendering an unqualified pass."
+    },
+    {
+      "name": "empty-chain-claimed-anchors",
+      "capsule_file": "output/empty-chain-claimed-anchors.capsule",
+      "expected": { "ok": false, "error_includes": "must be null when the chain has no events" },
+      "note": "Zero events but manifest + envelope claim anchors (internally consistent, so capsule_id derivation and every hash check pass). The empty-chain null-anchor rule is the ONLY thing standing between this capsule and a PASS — a verifier that treats an empty chain as 'nothing to check' verifies an envelope bound to nothing."
+    },
+    {
+      "name": "event-without-untrusted-fields",
+      "capsule_file": "output/event-without-untrusted-fields.capsule",
+      "expected": { "ok": true },
+      "note": "One event whose stored bytes omit the optional untrusted_payload_fields member. The event hash commits to JCS(stored line minus hash); a verifier that recomputes from a re-serialized typed projection injects 'untrusted_payload_fields':[] and reports a spurious hash mismatch on an intact chain."
+    }
+  ]
+}

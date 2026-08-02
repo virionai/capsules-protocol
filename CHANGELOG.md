@@ -11,6 +11,50 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **Empty chains are legal — and then the anchors must be null.** A
+  plain capsule's only envelope-to-chain binding is the
+  `envelope.first_event_hash` / `entry_hash` comparison against the
+  recomputed chain, and every verifier skipped it when the chain had
+  zero events (there was no first event to compare), so a capsule
+  claiming anchors over an empty `chain/events.jsonl` verified with the
+  chain check rendered as an unqualified pass; the JS verifier
+  additionally failed the empty case with an *empty* errors array (a
+  dead `??=` assignment). The settled rule, normative in
+  `spec/chain.md` ("Empty chains"): a zero-event chain is a legitimate
+  weaker shape (templates, drafts — the open tier), and then
+  `manifest.first_event_hash`, `envelope.first_event_hash` and
+  `envelope.entry_hash` MUST all be `null` — claiming any of them over
+  zero events fails closed; `capsule_id` derives with 32 zero bytes
+  (the genesis prev-hash value) standing in for
+  `first_event_hash_raw`; and verifiers report machine-readably
+  (`chain.note` + `notes`) that no events were walked, never a bare
+  pass. A `null` anchor over a non-empty chain keeps failing as a
+  mismatch. Implemented in sdk-js, sdk-py, and verifier-rust (whose
+  CLI now renders the chain note and no longer forces the line to PASS
+  when a note is present); the Swift and Kotlin lanes still skip the
+  comparison and are tracked as follow-up. New conformance collection
+  `spec/vectors/chain-binding/` (deterministic generator
+  `sdk-js/tools/generate-chain-binding-fixtures.mjs`, `--check` wired
+  into the conformance harness) pins the passing null-anchor shape
+  (with a `notes_includes` honest-reporting pin, newly supported by the
+  JS/Python/Rust registry consumers), the failing claimed-anchor shape,
+  and an event-without-`untrusted_payload_fields` positive that
+  witnesses stored-line event hashing.
+
+- **verifier-rust allowlist entries are validated and never fail
+  silently.** A truncated or mangled `--allowlist` value never matched
+  any signer, and because the vector was non-empty the "no allowlist
+  provided" advisory was suppressed too — the run reported PASS with
+  `trusted=false` and an empty notes array. `verify_capsule` now drops
+  any entry that is not exactly 64 hex chars (any case, normalized to
+  lowercase — JS `toKeyHex` parity) with a per-entry
+  `ignored invalid allowlist[i]` note, keys the no-allowlist advisory
+  off the well-formed entries, and adds an
+  "allowlist provided but matched no signer" advisory (outer and L3
+  inner signers considered). The Rust CLI also rejects a malformed
+  `--allowlist` entry up front with exit 2, mirroring
+  `--decryption-key`.
+
 - **The envelope signer set is now bound by the seal
   (`manifest.signer_commitment`).** The signing input is
   `JCS(envelope minus signers)`, so `signers[]` was never an input to

@@ -9,6 +9,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - malformed-shape/vectors.json    (open-stage reasons + verify-stage)
   - unknown-fields/vectors.json     (unknown-member preservation outcomes)
   - signer-set/vectors.json         (signer-set binding outcomes)
+  - chain-binding/vectors.json      (empty-chain anchor + stored-line hashing)
   - signing-input.json              (byte-level signing/hashing pins)
 
 The `reason` categories are normative; the regexes below map each
@@ -34,6 +35,7 @@ MALFORMED = VECTORS / "malformed-layout" / "vectors.json"
 MALFORMED_SHAPE = VECTORS / "malformed-shape" / "vectors.json"
 UNKNOWN_FIELDS = VECTORS / "unknown-fields" / "vectors.json"
 SIGNER_SET = VECTORS / "signer-set" / "vectors.json"
+CHAIN_BINDING = VECTORS / "chain-binding" / "vectors.json"
 SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 
@@ -107,6 +109,13 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
             f"{name}: expected signer_set.bound={expected['signer_set_bound']}, "
             f"got {result['signer_set']}"
         )
+    if expected.get("notes_includes"):
+        # Honest-reporting pin: the verifier must REPORT the weaker claim
+        # machine-readably (e.g. a zero-event chain that was not walked).
+        assert expected["notes_includes"] in " ".join(result["notes"]), (
+            f"{name}: expected a note containing {expected['notes_includes']!r}; "
+            f"got {result['notes']!r}"
+        )
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(TAMPER))
@@ -147,6 +156,26 @@ def test_signer_set_registry_outcomes(doc: dict, vector: dict, base: pathlib.Pat
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
     _assert_verify_outcome(vector["name"], vector["expected"], result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(CHAIN_BINDING))
+def test_chain_binding_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Empty-chain anchor rule + stored-line hashing (spec/chain.md).
+
+    A chain with zero events is legal — the weakest honest shape — and
+    then manifest.first_event_hash, envelope.first_event_hash and
+    envelope.entry_hash MUST all be null (claiming an anchor over zero
+    events fails closed; those anchors are the only envelope-to-chain
+    binding in a plain capsule). The verifier must REPORT that no events
+    were walked (notes pin). And an event whose stored bytes omit the
+    optional untrusted_payload_fields member must verify: the hash
+    preimage is the stored line, never a typed-struct round-trip.
+    """
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    _assert_verify_outcome(vector["name"], vector["expected"], result)
+
 
 
 def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None:

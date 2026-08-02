@@ -19,8 +19,8 @@ registry defines them.
 {
   "version": "0.6",
   "capsule_id": "<64-hex>",
-  "first_event_hash": "<64-hex>",
-  "entry_hash": "<64-hex>",
+  "first_event_hash": "<64-hex> | null",
+  "entry_hash": "<64-hex> | null",
   "manifest_hash": "<64-hex>",
   "content_index_hash": "<64-hex>",
   "encrypted_blob_hash": "<64-hex> | null",
@@ -44,7 +44,16 @@ registry defines them.
 - `first_event_hash`: 32-byte SHA-256 hex; equals chain event 1's hash.
 - `entry_hash`: 32-byte SHA-256 hex; equals the final event's hash at
   seal time. Together with `first_event_hash`, commits to the chain
-  range covered by the seal.
+  range covered by the seal. In a plain capsule these two anchors are
+  the ONLY binding between the envelope and the chain — a verifier MUST
+  actually compare them.
+- **Empty chain:** when the chain has zero events (see
+  [chain.md](chain.md) "Empty chains"), `first_event_hash` and
+  `entry_hash` MUST both be `null`; there is no chain range to commit
+  to, and a non-null anchor over an empty chain fails verification
+  closed. `null` anchors over a non-empty chain fail the anchor
+  comparison like any other mismatch. Conformance vectors:
+  `spec/vectors/chain-binding/`.
 - `manifest_hash`: SHA-256 of the JCS-canonical bytes of the manifest
   *with `id` populated and no other modifications*.
 - `content_index_hash`: matches `manifest.content_index.index_hash`.
@@ -208,7 +217,10 @@ Then:
 3. Recompute `content_index_hash` from `manifest.content_index.files`.
    Compare.
 4. Recompute `first_event_hash` and `entry_hash` from the chain.
-   Compare.
+   Compare. With zero events there is nothing to recompute: require
+   both anchors (and `manifest.first_event_hash`) to be `null`
+   instead, fail-closed, and report that the chain walk covered no
+   events (chain.md "Empty chains").
 5. For encrypted capsules: recompute SHA-256 of `content.enc`. Compare
    to `encrypted_blob_hash`.
 6. Signer-set binding: when `manifest.signer_commitment` is present,

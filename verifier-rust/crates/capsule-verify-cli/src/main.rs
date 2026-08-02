@@ -88,6 +88,15 @@ fn run_verify(
         }
     };
 
+    // Reject a malformed --allowlist before verification runs: a value
+    // that is not a 32-byte Ed25519 public key can never match a signer,
+    // so the run would otherwise report trusted=false with only a note
+    // buried in the result to explain why.
+    if let Err(msg) = validate_allowlist(&allowlist) {
+        eprintln!("{msg}");
+        return ExitCode::from(2);
+    }
+
     // Resolve --decryption-key (if given) into a 32-byte X25519 private key.
     // Any parse / length failure exits 2 with a clear stderr message;
     // omitting the flag preserves v0.2 behavior exactly.
@@ -181,18 +190,22 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         r.content_index.errors.clone(),
     );
 
-    // Chain check. For encrypted outers the verifier sets `chain.note`
-    // to record that the chain walk was deferred to L3 — render the line
-    // as a PASS with the note as the indented sub-line, NOT as a failure
-    // and NOT as the verifier's chain.errors. For plain capsules,
-    // `chain.note` is None and we render walk + anchor errors normally.
+    // Chain check. `chain.note` records a walk that legitimately did not
+    // run: "deferred to L3 (encrypted outer)", or a zero-event chain whose
+    // anchors were checked for null instead. The note always renders as
+    // the indented sub-line so a not-walked chain is never presented as an
+    // unqualified pass — but it does NOT force the glyph to PASS: anchor
+    // violations (e.g. a claimed anchor over an empty chain) still render
+    // the line as a failure with their messages underneath.
+    let mut chain_msgs: Vec<String> = Vec::new();
     if let Some(note) = r.chain.note.as_deref() {
-        print_check("chain", true, vec![note.to_string()]);
-    } else {
-        let mut chain_msgs = r.chain.errors.clone();
-        chain_msgs.extend(strings_of(errors_for(r, TopErrorCategory::ChainAnchor)));
-        print_check("chain", r.chain.ok && chain_msgs.is_empty(), chain_msgs);
+        chain_msgs.push(note.to_string());
     }
+    chain_msgs.extend(r.chain.errors.clone());
+    let anchor_msgs = strings_of(errors_for(r, TopErrorCategory::ChainAnchor));
+    let chain_ok = r.chain.ok && r.chain.errors.is_empty() && anchor_msgs.is_empty();
+    chain_msgs.extend(anchor_msgs);
+    print_check("chain", chain_ok, chain_msgs);
 
     print_check(
         "envelope_signature",
@@ -463,6 +476,31 @@ fn parse_decryption_key(value: &str) -> Result<[u8; 32], String> {
     ))
 }
 
+/// Reject any `--allowlist` entry that cannot be an Ed25519 public key.
+///
+/// An Ed25519 public key is 32 raw bytes — exactly 64 hex characters
+/// (any case; the library normalizes to lowercase, matching the JS
+/// reference). A truncated or mangled entry simply never matches a
+/// signer, and before F44 the non-empty vector also suppressed the
+/// library's "no allowlist provided" advisory, so the operator saw a
+/// PASS with `trusted=false` and no diagnostic. Fail loudly at the
+/// argument boundary instead (exit 2), the same way an unparseable
+/// `--decryption-key` does.
+///
+/// On the first bad entry, returns the formatted error string ready to
+/// print to stderr.
+fn validate_allowlist(allowlist: &[String]) -> Result<(), String> {
+    for entry in allowlist {
+        let well_formed = entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit());
+        if !well_formed {
+            return Err(format!(
+                "error: --allowlist entry must be 64 hex chars (a 32-byte Ed25519 public key); got: {entry}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// True iff `s` is exactly 64 ASCII characters drawn from `0-9a-f`.
 fn is_lower_hex_64(s: &str) -> bool {
     s.len() == 64
@@ -479,4 +517,50 @@ fn decode_hex_32(s: &str) -> Result<[u8; 32], hex::FromHexError> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The originator key shape from the fixture registries: 64 hex chars.
+    #[test]
+    fn validate_allowlist_accepts_64_hex() {
+        let good =
+            vec!["cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc".to_string()];
+        assert!(validate_allowlist(&good).is_ok());
+        assert!(validate_allowlist(&[]).is_ok(), "no allowlist is not an error");
+        // The library accepts any-case hex (JS toKeyHex parity), so the
+        // CLI boundary must not reject what the library would honour.
+        let upper =
+            vec!["CC76CE271ED61E515B598D73290A2B3905F40F280FA1548ED7F0513BDBE0C2BC".to_string()];
+        assert!(validate_allowlist(&upper).is_ok());
+    }
+
+    /// A truncated paste is the exact failure this guard exists for: it
+    /// can never match a signer, yet before F44 it also suppressed the
+    /// "no allowlist provided" advisory — PASS, trusted=false, silence.
+    #[test]
+    fn validate_allowlist_rejects_truncated_entry() {
+        let truncated = vec!["cc76ce271ed61e515b598d73290a2b39".to_string()];
+        let err = validate_allowlist(&truncated).expect_err("truncated key must be rejected");
+        assert!(err.contains("--allowlist"), "message must name the flag; got: {err}");
+        assert!(
+            err.contains("64 hex"),
+            "message must state the expected shape; got: {err}"
+        );
+        assert!(
+            err.contains("cc76ce271ed61e515b598d73290a2b39"),
+            "message must name the offending entry; got: {err}"
+        );
+    }
+
+    /// Non-hex garbage (a path, a 0x prefix, base64) is rejected outright.
+    #[test]
+    fn validate_allowlist_rejects_non_hex() {
+        let non_hex =
+            vec!["zz76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc".to_string()];
+        assert!(validate_allowlist(&non_hex).is_err());
+        assert!(validate_allowlist(&["./keys.json".to_string()]).is_err());
+    }
 }

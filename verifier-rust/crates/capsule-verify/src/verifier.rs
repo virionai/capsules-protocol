@@ -156,10 +156,18 @@ impl fmt::Display for TopError {
 /// Caller-supplied verification configuration.
 #[derive(Debug, Default, Clone)]
 pub struct VerifyOptions {
-    /// Trusted Ed25519 public keys (lowercase hex, 64 chars). A signer is
+    /// Trusted Ed25519 public keys (64 hex chars; any case, normalized to
+    /// lowercase — matching the JS reference's `toKeyHex`). A signer is
     /// marked `trusted` only when its key appears here AND its signature
-    /// verifies. An empty allowlist surfaces an advisory note in
-    /// [`VerifyResult::notes`].
+    /// verifies.
+    ///
+    /// Entries are validated: anything that is not exactly 64 hex chars
+    /// cannot be a 32-byte Ed25519 key, so it is dropped and reported
+    /// per-entry in [`VerifyResult::notes`]. The "no allowlist provided"
+    /// advisory is keyed off the *well-formed* entries, so an allowlist
+    /// made up entirely of malformed values still raises it; and an
+    /// allowlist that matched no signer at all raises its own advisory —
+    /// a PASS with `trusted=false` is never silent about why.
     pub allowlist: Vec<String>,
     /// Recipient's X25519 32-byte secret. When `Some` and the capsule is
     /// encrypted, the verifier will decrypt `content.enc`, parse the inner
@@ -290,6 +298,20 @@ pub struct SignerOutcome {
 pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     let mut errors: Vec<TopError> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+
+    // ---- (0) allowlist hygiene ------------------------------------------
+    // A caller-supplied key that is not 64 hex chars can never match a
+    // signer's public key. Silently keeping it in the vector loses the
+    // operator's intent AND suppresses the "no allowlist provided"
+    // advisory below (the vector is non-empty), so a truncated
+    // --allowlist used to report PASS with trusted=false and an empty
+    // notes array — no diagnostic at all (F44). Report each bad entry
+    // and match only the well-formed ones (normalized to lowercase,
+    // matching the JS reference's toKeyHex).
+    let (allowlist, allowlist_notes) = normalize_allowlist(&options.allowlist);
+    notes.extend(allowlist_notes);
+    let no_allowlist = allowlist.is_empty();
+
     let mut chain_check = ChainCheck::default();
     let mut content_index_check = ContentIndexCheck::default();
     let mut envelope_check = EnvelopeCheck::default();
@@ -320,7 +342,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -344,7 +366,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -370,7 +392,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -392,7 +414,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -415,7 +437,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -440,7 +462,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -462,7 +484,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -504,8 +526,12 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (5) capsule_id derivation --------------------------------------
+    // A None manifest anchor (zero-event capsule) derives with 32 zero
+    // bytes standing in; whether None is LEGAL here is decided by the
+    // chain walk below, which fails closed on any anchor/event-count
+    // inconsistency (spec/chain.md "Empty chains").
     match hex_to_bytes(&manifest.originator.public_key) {
-        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, &manifest.first_event_hash) {
+        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, manifest.first_event_hash.as_deref()) {
             Ok(expected_id) => {
                 if expected_id != manifest.id {
                     errors.push(TopError::outer(
@@ -645,6 +671,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                         &envelope,
                         &mut chain_check,
                         &mut errors,
+                        &mut notes,
                         TopErrorScope::Outer,
                     );
                 }
@@ -687,18 +714,19 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 &envelope,
                 &manifest,
                 &files,
-                options,
+                &allowlist,
                 &mut chain_check,
                 &mut inner_envelope_check,
                 &mut inner_content_index_check,
                 &mut errors,
+                &mut notes,
                 &mut level,
             );
         }
     }
 
     // ---- (10) envelope signature verification ---------------------------
-    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &options.allowlist);
+    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &allowlist);
     // Duplicate (role, public_key) signer entries are malformed — surface
     // the envelope-check note as a categorized top-level error too, so
     // structured consumers and the registry haystack both see it.
@@ -744,13 +772,28 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // quorum.
     let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
 
-    // ---- (12) advisory note ---------------------------------------------
-    let no_allowlist = options.allowlist.is_empty();
+    // ---- (12) advisory notes --------------------------------------------
+    // `no_allowlist` came from step 0 and counts only well-formed entries,
+    // so an allowlist made up entirely of malformed values still gets the
+    // advisory on top of its per-entry notes. And an allowlist that
+    // matched nothing says so: a PASS with trusted=false is never silent
+    // about why.
     if no_allowlist {
         notes.push(
             "no allowlist provided; trusted=false for all signers regardless of signature validity"
                 .to_string(),
         );
+    } else {
+        let any_trusted = trusted_signer_count > 0
+            || inner_envelope_check
+                .as_ref()
+                .is_some_and(|e| e.signers.iter().any(|s| s.trusted));
+        if !any_trusted {
+            notes.push(
+                "allowlist provided but matched no signer; trusted=false for all signers"
+                    .to_string(),
+            );
+        }
     }
 
     // ---- (13) final ok --------------------------------------------------
@@ -1053,22 +1096,79 @@ pub(crate) fn verify_content_index(
     content_index_check
 }
 
+/// Display form for a nullable anchor: the stored hex, or `null`.
+pub(crate) fn anchor_or_null(anchor: &Option<String>) -> &str {
+    anchor.as_deref().unwrap_or("null")
+}
+
+/// The note recorded (in `ChainCheck::note` AND `VerifyResult::notes`)
+/// when a zero-event chain is verified: honest reporting that the
+/// per-event walk did not run and what was checked instead. Shared with
+/// the JS and Python lanes verbatim; the chain-binding registry pins it
+/// via `notes_includes`.
+pub(crate) const EMPTY_CHAIN_NOTE: &str =
+    "empty chain: no events to walk; envelope anchors checked to be null instead";
+
 /// Walk `events` against `manifest` + `envelope` and accumulate per-event
-/// failures into `chain_check`. The two `ChainAnchor` cross-checks
+/// failures into `chain_check`. The `ChainAnchor` cross-checks
 /// (`envelope.first_event_hash` and `envelope.entry_hash` vs the recomputed
 /// chain anchors) push into `errors` via the `scope`-aware constructor —
 /// callers in the outer pipeline pass `TopErrorScope::Outer`; the L3 caller
 /// pushes the same logical mismatches against the *inner* envelope and
 /// therefore passes `TopErrorScope::Inner`.
+///
+/// ZERO events is legal — the weakest honest shape (a template or draft
+/// capsule, spec/chain.md "Empty chains") — and then the capsule must not
+/// claim chain anchors it does not have: `manifest.first_event_hash`,
+/// `envelope.first_event_hash` and `envelope.entry_hash` must all be
+/// null, fail-closed otherwise. In a plain capsule those anchors are the
+/// only envelope-to-chain binding, so skipping the comparison because
+/// `first_and_entry_hash` has nothing to return would verify an envelope
+/// bound to nothing (F22). The zero-event case is reported honestly via
+/// [`EMPTY_CHAIN_NOTE`] in both `chain_check.note` and `notes`.
 pub(crate) fn chain_walk_into(
     events: &[ParsedEvent],
     manifest: &Manifest,
     envelope: &Envelope,
     chain_check: &mut ChainCheck,
     errors: &mut Vec<TopError>,
+    notes: &mut Vec<String>,
     scope: TopErrorScope,
 ) {
     chain_check.event_count = events.len();
+
+    // Build anchor errors via whichever constructor the caller's scope
+    // dictates so the resulting `TopError` carries the right `scope`.
+    let make_anchor = |msg: String| -> TopError {
+        match scope {
+            TopErrorScope::Outer => TopError::outer(TopErrorCategory::ChainAnchor, msg),
+            TopErrorScope::Inner => TopError::inner(TopErrorCategory::ChainAnchor, msg),
+        }
+    };
+
+    if events.is_empty() {
+        // Legal, but only as the honest null-anchor shape.
+        chain_check.ok = true;
+        chain_check.note = Some(EMPTY_CHAIN_NOTE.to_string());
+        notes.push(EMPTY_CHAIN_NOTE.to_string());
+        if let Some(v) = envelope.first_event_hash.as_deref() {
+            errors.push(make_anchor(format!(
+                "envelope.first_event_hash must be null when the chain has no events; got {v}"
+            )));
+        }
+        if let Some(v) = envelope.entry_hash.as_deref() {
+            errors.push(make_anchor(format!(
+                "envelope.entry_hash must be null when the chain has no events; got {v}"
+            )));
+        }
+        if let Some(v) = manifest.first_event_hash.as_deref() {
+            errors.push(make_anchor(format!(
+                "manifest.first_event_hash must be null when the chain has no events; got {v}"
+            )));
+        }
+        return;
+    }
+
     let walk_errors = verify_chain(events);
     chain_check
         .errors
@@ -1093,27 +1193,29 @@ pub(crate) fn chain_walk_into(
 
     chain_check.ok = chain_check.errors.is_empty();
 
-    // Cross-check first/entry against envelope. Build the error via whichever
-    // constructor the caller's scope dictates so the resulting `TopError`
-    // carries the right `scope` for JSON consumers.
-    let make_anchor = |msg: String| -> TopError {
-        match scope {
-            TopErrorScope::Outer => TopError::outer(TopErrorCategory::ChainAnchor, msg),
-            TopErrorScope::Inner => TopError::inner(TopErrorCategory::ChainAnchor, msg),
-        }
-    };
+    // Cross-check first/entry against envelope. A `None` anchor over a
+    // non-empty chain fails here like any other mismatch (rendered as
+    // "null").
     if let Some((first_hash, entry_hash)) = first_and_entry_hash(events) {
-        if first_hash != envelope.first_event_hash {
+        if envelope.first_event_hash.as_deref() != Some(first_hash) {
             errors.push(make_anchor(format!(
                 "envelope.first_event_hash mismatch: {} vs {}",
-                envelope.first_event_hash, first_hash
+                anchor_or_null(&envelope.first_event_hash),
+                first_hash
             )));
         }
-        if entry_hash != envelope.entry_hash {
+        if envelope.entry_hash.as_deref() != Some(entry_hash) {
             errors.push(make_anchor(format!(
                 "envelope.entry_hash mismatch: {} vs {}",
-                envelope.entry_hash, entry_hash
+                anchor_or_null(&envelope.entry_hash),
+                entry_hash
             )));
+        }
+        if manifest.first_event_hash.is_none() {
+            errors.push(make_anchor(
+                "manifest.first_event_hash must not be null when the chain has events"
+                    .to_string(),
+            ));
         }
     }
 }
@@ -1182,6 +1284,32 @@ pub(crate) fn verify_envelope_signatures(
     envelope_check
 }
 
+/// Split a caller-supplied allowlist into the normalized (lowercase hex)
+/// entries this verifier will actually match against, plus one
+/// human-readable note per rejected entry.
+///
+/// An Ed25519 public key is 32 raw bytes — exactly 64 hex characters
+/// (accepted in any case, normalized to lowercase, matching the JS
+/// reference's `toKeyHex`). Anything else — a truncated paste, a `0x`
+/// prefix, a base64 blob, a file path — can never equal a signer's
+/// `public_key`, so keeping it would silently mean "allowlist supplied,
+/// nothing trusted, no explanation" (F44).
+pub(crate) fn normalize_allowlist(allowlist: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut valid: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for (i, entry) in allowlist.iter().enumerate() {
+        if entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit()) {
+            valid.push(entry.to_lowercase());
+        } else {
+            notes.push(format!(
+                "ignored invalid allowlist[{i}]: must be a 64-char hex string \
+                 (32-byte Ed25519 public key); got {entry:?}"
+            ));
+        }
+    }
+    (valid, notes)
+}
+
 /// Build a final `VerifyResult` from the accumulated state. Used by the
 /// early-return paths.
 ///
@@ -1243,7 +1371,7 @@ fn assemble_result(
 mod tests {
     use super::*;
     use crate::test_support::{
-        clean_capsule_bytes, recipient_x25519_private_key,
+        chain_binding_capsule_bytes, clean_capsule_bytes, recipient_x25519_private_key,
         synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes,
     };
 
@@ -2784,5 +2912,208 @@ mod tests {
             &envelope,
         );
         assert!(null_commitment.bound && !null_commitment.ok);
+    }
+
+    /// A truncated or otherwise malformed allowlist entry can never match
+    /// a 32-byte Ed25519 public key, but because the vector was non-empty
+    /// the "no allowlist provided" advisory used to be suppressed —
+    /// leaving a PASS with trusted=false and no diagnostic anywhere in the
+    /// result (F44). Malformed entries must be reported per-entry in
+    /// `notes` and must not count as an allowlist for the advisory.
+    #[test]
+    fn malformed_allowlist_entry_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                // Truncated: 32 hex chars where 64 are required.
+                allowlist: vec!["cc76ce271ed61e515b598d73290a2b39".to_string()],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(
+            result.ok,
+            "a malformed allowlist must not fail the capsule itself; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.trusted_signer_count, 0, "nothing can be trusted");
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an all-malformed allowlist must still raise the no-allowlist advisory; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// The sibling case: a well-formed entry alongside a malformed one
+    /// still trusts the good key, and only the bad entry is reported.
+    #[test]
+    fn malformed_allowlist_entry_does_not_suppress_valid_one() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk = manifest.originator.public_key.clone();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["not-hex".to_string(), pk],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "the well-formed key must still be honoured, got {}",
+            result.trusted_signer_count
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "one valid entry means the allowlist is NOT empty; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("matched no signer")),
+            "a trusted signer means the no-match advisory must not fire; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// A syntactically valid allowlist that simply matches no signer must
+    /// say so: silence there is how an operator misreads PASS +
+    /// trusted=false as "trusted".
+    #[test]
+    fn allowlist_with_no_matching_signer_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["ab".repeat(32)],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.trusted_signer_count, 0);
+        assert!(
+            result.notes.iter().any(|n| n.contains("matched no signer")),
+            "expected the matched-no-signer advisory; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an allowlist WAS provided; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// JS-reference parity (`toKeyHex`): a 64-hex entry in ANY case is a
+    /// valid key and is normalized to lowercase, not dropped.
+    #[test]
+    fn uppercase_allowlist_entry_still_matches() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk_upper = manifest.originator.public_key.to_uppercase();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![pk_upper],
+                recipient_private_key: None,
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "uppercase hex is a valid key; got {} trusted",
+            result.trusted_signer_count
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "uppercase hex must not be dropped; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// A zero-event chain is LEGAL when the capsule claims no anchors
+    /// (spec/chain.md "Empty chains"): the weakest honest shape must
+    /// verify, and the result must be honest that nothing was walked —
+    /// `chain.note` and `notes` both carry the empty-chain report.
+    #[test]
+    fn empty_chain_with_null_anchors_verifies() {
+        let bytes = chain_binding_capsule_bytes("empty-chain-null-anchors.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(result.chain.ok, "chain: {:?}", result.chain);
+        assert_eq!(result.chain.event_count, 0);
+        assert_eq!(result.chain.note.as_deref(), Some(EMPTY_CHAIN_NOTE));
+        assert!(
+            result.notes.iter().any(|n| n.contains("empty chain")),
+            "expected the empty-chain note; got {:?}",
+            result.notes
+        );
+    }
+
+    /// A capsule claiming first_event_hash / entry_hash while carrying no
+    /// events is the lie F22 is about: with zero events the anchor
+    /// cross-checks used to never execute, so the envelope was bound to
+    /// nothing and the capsule PASSED. All three anchor claims must be
+    /// null over an empty chain, fail-closed.
+    #[test]
+    fn empty_chain_with_claimed_anchors_fails_closed() {
+        let bytes = chain_binding_capsule_bytes("empty-chain-claimed-anchors.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(!result.ok, "claimed anchors over zero events must not verify");
+        for field in [
+            "envelope.first_event_hash",
+            "envelope.entry_hash",
+            "manifest.first_event_hash",
+        ] {
+            assert!(
+                result.errors.iter().any(|e| {
+                    e.category == TopErrorCategory::ChainAnchor
+                        && e.message.contains(field)
+                        && e.message.contains("must be null when the chain has no events")
+                }),
+                "expected a null-anchor violation for {field}; got {:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// Reverse direction: a chain WITH events must claim them — null
+    /// envelope anchors fail as plain mismatches (rendered "null"), and a
+    /// null manifest anchor is called out explicitly.
+    #[test]
+    fn non_empty_chain_with_null_anchors_fails() {
+        let bytes = synthesize_capsule_with_envelope_mutation("clean.capsule", |env| {
+            env["first_event_hash"] = serde_json::Value::Null;
+            env["entry_hash"] = serde_json::Value::Null;
+        });
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(!result.ok);
+        assert!(
+            result.errors.iter().any(|e| {
+                e.category == TopErrorCategory::ChainAnchor
+                    && e.message.contains("envelope.first_event_hash mismatch: null vs ")
+            }),
+            "expected a null-vs-hash mismatch; got {:?}",
+            result.errors
+        );
     }
 }

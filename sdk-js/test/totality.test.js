@@ -192,8 +192,11 @@ test("a missing chain file produces a displayable chain error", async () => {
   const result = await verifyCapsule(tampered, { allowlist: [ed.publicKeyHex] });
   assert.equal(result.ok, false);
   assert.equal(result.chain.ok, false);
+  // The chain FILE being absent is a container defect and must be named as
+  // such. An empty-but-present chain is a different case and is legal — see
+  // the chain-binding vectors — so the two must not share a message.
   assert.ok(
-    result.chain.errors.some((e) => /missing or empty/.test(e.message)),
+    result.chain.errors.some((e) => /missing chain\/events\.jsonl/.test(e.message)),
     `expected a chain error message, got: ${JSON.stringify(result.chain.errors)}`,
   );
 });

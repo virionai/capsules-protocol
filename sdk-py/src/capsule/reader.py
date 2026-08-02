@@ -48,9 +48,14 @@ def _validate_manifest_shape(manifest) -> None:
         raise MalformedCapsuleError(
             "manifest.originator.public_key must be a 64-char lowercase hex string"
         )
-    if not _is_hex64(manifest.get("first_event_hash")):
+    # null is legal: an empty chain is the weakest honest shape, and then
+    # there is no first event for this to commit to. The verifier enforces
+    # the null-anchor / event-count consistency; the reader only rejects
+    # values that are neither null nor well-formed hex. Mirrors sdk-js.
+    first_event_hash = manifest.get("first_event_hash")
+    if first_event_hash is not None and not _is_hex64(first_event_hash):
         raise MalformedCapsuleError(
-            "manifest.first_event_hash must be a 64-char lowercase hex string"
+            "manifest.first_event_hash must be a 64-char lowercase hex string or null"
         )
     _validate_content_index_shape(manifest.get("content_index"))
 

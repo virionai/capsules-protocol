@@ -38,12 +38,22 @@ def content_index_exclusions(encrypted: bool) -> frozenset[str]:
     return CONTENT_INDEX_EXCLUDED if encrypted else STRUCTURAL_EXCLUDED
 
 
-def compute_capsule_id(originator_pub_raw: bytes, first_event_hash_hex: str) -> str:
+def compute_capsule_id(originator_pub_raw: bytes, first_event_hash_hex: str | None) -> str:
+    """Derive capsule_id; all inputs are raw bytes, no hex strings.
+
+    A zero-event capsule (spec/chain.md "Empty chains") has no first
+    event: its manifest carries ``first_event_hash: null``, and the
+    derivation uses 32 zero bytes — the genesis prev-hash value — in
+    place of ``first_event_hash_raw`` (spec/manifest.md "id").
+    """
     if len(originator_pub_raw) != 32:
         raise ValueError("originator pubkey must be 32 bytes")
-    if not isinstance(first_event_hash_hex, str) or len(first_event_hash_hex) != 64:
-        raise ValueError("first_event_hash must be 64-hex")
-    feh_raw = hex_to_bytes(first_event_hash_hex)
+    if first_event_hash_hex is None:
+        feh_raw = b"\x00" * 32  # genesis stand-in for an empty chain
+    elif isinstance(first_event_hash_hex, str) and len(first_event_hash_hex) == 64:
+        feh_raw = hex_to_bytes(first_event_hash_hex)
+    else:
+        raise ValueError("first_event_hash must be 64-hex or null (empty chain)")
     out = sha256(concat_bytes(_ID_DOMAIN, bytes(originator_pub_raw), feh_raw))
     return bytes_to_hex(out)
 

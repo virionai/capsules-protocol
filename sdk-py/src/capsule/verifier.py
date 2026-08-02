@@ -248,17 +248,38 @@ def _verify_capsule_impl(
         try:
             events = reader.events()
         except ValueError as e:  # MalformedCapsuleError is a ValueError
-            events = []
+            events = None
             result["chain"] = {"ok": False, "errors": [{"seq": 0, "message": str(e)}]}
-        else:
-            if events:
-                result["chain"] = verify_chain(events)
-            else:
-                result["chain"] = {
-                    "ok": False,
-                    "errors": [{"seq": 0, "message": "chain/events.jsonl missing or empty"}],
-                }
-        if events:
+        if events is not None and not events:
+            # Empty chain is LEGAL — the weakest honest shape (a template
+            # or draft capsule with no events yet). But the capsule must
+            # not claim chain anchors it does not have: with zero events
+            # all three anchor claims MUST be null. Claiming an anchor
+            # over an empty chain is the capsule lying about its own
+            # bytes — rejected fail-closed (spec/chain.md "Empty chains").
+            empty_note = (
+                "empty chain: no events to walk; "
+                "envelope anchors checked to be null instead"
+            )
+            result["chain"] = {"ok": True, "errors": [], "note": empty_note}
+            notes.append(empty_note)
+            if envelope.get("first_event_hash") is not None:
+                errors.append(
+                    "envelope.first_event_hash must be null when the chain has no "
+                    f"events; got {envelope.get('first_event_hash')}"
+                )
+            if envelope.get("entry_hash") is not None:
+                errors.append(
+                    "envelope.entry_hash must be null when the chain has no "
+                    f"events; got {envelope.get('entry_hash')}"
+                )
+            if manifest.get("first_event_hash") is not None:
+                errors.append(
+                    "manifest.first_event_hash must be null when the chain has no "
+                    f"events; got {manifest.get('first_event_hash')}"
+                )
+        elif events is not None:
+            result["chain"] = verify_chain(events)
             first_eh, entry_h = first_and_entry_hash(events)
             if first_eh != envelope.get("first_event_hash"):
                 errors.append(
@@ -268,6 +289,10 @@ def _verify_capsule_impl(
             if entry_h != envelope.get("entry_hash"):
                 errors.append(
                     f"envelope.entry_hash mismatch: {envelope.get('entry_hash')} vs {entry_h}"
+                )
+            if manifest.get("first_event_hash") is None:
+                errors.append(
+                    "manifest.first_event_hash must not be null when the chain has events"
                 )
     else:
         # Encrypted outer — chain verification deferred to L3.

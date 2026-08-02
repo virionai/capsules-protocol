@@ -261,6 +261,16 @@ async function checkCollection(path, doc) {
         fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
       }
     }
+    // Honest-reporting pins: some rules require the verifier to REPORT a
+    // weaker claim machine-readably (e.g. a zero-event chain that was not
+    // walked), not just to pass/fail. Those vectors pin a notes substring.
+    if (v.expected.notes_includes) {
+      if (!(result.notes ?? []).join(" ").includes(v.expected.notes_includes)) {
+        fail(
+          `${label}: expected a note containing '${v.expected.notes_includes}', got ${JSON.stringify(result.notes ?? [])}`,
+        );
+      }
+    }
   }
 }
 
