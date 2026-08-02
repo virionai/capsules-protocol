@@ -166,15 +166,27 @@ export function verifyJwt(compact, { trustRoots, now, issuer, audience } = {}) {
  * Verify an identity attestation offline and confirm it binds THIS capsule's
  * signer. Returns { ok, subject, claims, errors }.
  *
- * options:
+ * options (capsuleId and signerPublicKeyHex are REQUIRED — an attestation
+ * that is not checked against a specific capsule and signer binds nothing;
+ * see spec/federation.md "Identity attestation"):
  *   trustRoots          issuer public keys / JWKS (required for a real check)
  *   now                 Date | ms | undefined (defaults to Date.now)
- *   capsuleId           expected capsule_id the attestation must bind
- *   signerPublicKeyHex  expected signer key the attestation must bind
+ *   capsuleId           expected capsule_id the attestation MUST bind
+ *   signerPublicKeyHex  expected signer key the attestation MUST bind
  *   jwtBindingClaim     for JWT profile: claim key holding the capsule binding
  *                       object (default "cap")
  */
 export function verifyIdentityAttestation(attestation, options = {}) {
+  if (typeof options.capsuleId !== "string" || options.capsuleId.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.capsuleId: an attestation is only meaningful against a specific capsule (spec/federation.md)",
+    );
+  }
+  if (typeof options.signerPublicKeyHex !== "string" || options.signerPublicKeyHex.length === 0) {
+    throw new TypeError(
+      "verifyIdentityAttestation requires options.signerPublicKeyHex: an attestation is only meaningful against a specific signer (spec/federation.md)",
+    );
+  }
   const errors = [];
   const now = options.now instanceof Date ? options.now.getTime() : options.now ?? Date.now();
   if (!attestation || attestation.typ !== ATTESTATION_TYP) {
@@ -231,15 +243,27 @@ export function verifyIdentityAttestation(attestation, options = {}) {
     errors.push("attestation issued in the future");
   }
 
-  // Binding checks: the attestation must be for THIS capsule and signer.
-  if (options.capsuleId && claims.capsule_id !== options.capsuleId) {
-    errors.push(`capsule_id binding mismatch: ${claims.capsule_id} vs ${options.capsuleId}`);
+  // The binding claims are MANDATORY (spec/federation.md "Identity
+  // attestation"): an attestation whose claims omit them binds nothing. A raw
+  // provider session token — which carries no `cap` object at all — lands
+  // here and is rejected (spec/profiles/clerk.md "Security notes").
+  let bindingComplete = true;
+  for (const field of ["capsule_id", "signer_public_key", "signer_role"]) {
+    const value = claims?.[field];
+    if (typeof value !== "string" || value.length === 0) {
+      errors.push(`attestation missing required binding claim '${field}'`);
+      bindingComplete = false;
+    }
   }
-  if (
-    options.signerPublicKeyHex &&
-    claims.signer_public_key?.toLowerCase() !== options.signerPublicKeyHex.toLowerCase()
-  ) {
-    errors.push("signer_public_key binding mismatch");
+
+  // Binding checks: the attestation MUST be for THIS capsule and signer.
+  if (bindingComplete) {
+    if (claims.capsule_id !== options.capsuleId) {
+      errors.push(`capsule_id binding mismatch: ${claims.capsule_id} vs ${options.capsuleId}`);
+    }
+    if (claims.signer_public_key.toLowerCase() !== options.signerPublicKeyHex.toLowerCase()) {
+      errors.push("signer_public_key binding mismatch");
+    }
   }
 
   return { ok: errors.length === 0, subject: claims.subject ?? null, claims, errors };

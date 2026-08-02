@@ -100,7 +100,10 @@ test("ed25519-jcs attestation fails when a claim is tampered", () => {
     },
   });
   att.claims.subject.org_role = "admin"; // privilege escalation attempt
-  const res = verifyIdentityAttestation(att, { trustRoots, now: new Date(TS) });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+  });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("signature invalid")));
 });
@@ -116,7 +119,10 @@ test("ed25519-jcs attestation fails when expired", () => {
       issued_at: TS, expires_at: "2026-05-08T12:00:00Z",
     },
   });
-  const res = verifyIdentityAttestation(att, { trustRoots, now: new Date("2026-06-01T00:00:00Z") });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date("2026-06-01T00:00:00Z"),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+  });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("expired")));
 });
@@ -134,6 +140,7 @@ test("ed25519-jcs attestation fails on capsule/signer binding mismatch", () => {
   });
   const wrong = verifyIdentityAttestation(att, {
     trustRoots, now: new Date(TS), capsuleId: "b".repeat(64),
+    signerPublicKeyHex: signer.publicKeyHex,
   });
   assert.equal(wrong.ok, false);
   assert.ok(wrong.errors.some((e) => e.includes("capsule_id binding mismatch")));
@@ -149,7 +156,10 @@ test("attestation cannot be verified without the issuer trust root", () => {
       signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
     },
   });
-  const res = verifyIdentityAttestation(att, { trustRoots: { keys: [] }, now: new Date(TS) });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: { keys: [] }, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+  });
   assert.equal(res.ok, false);
   assert.ok(res.errors.some((e) => e.includes("no trust-root key")));
 });
@@ -361,4 +371,67 @@ test("Clerk-directory recipients: seal encrypted, decrypt fully offline", async 
     recipientPrivateKey: recipient.privateKey,
   });
   assert.match(inner.program(), /Confidential/);
+});
+
+// --------------------------------------------------------------------------
+// Binding is mandatory (spec/federation.md "Identity attestation")
+// --------------------------------------------------------------------------
+
+test("a validly-signed token with NO cap binding claim is rejected", () => {
+  const clerk = makeClerkInstance();
+  const signer = generateEd25519();
+  const capsuleId = "c".repeat(64);
+  const nowSec = Math.floor(Date.parse(TS) / 1000);
+  // A raw Clerk session token: correctly signed by the instance key, but it
+  // binds no capsule at all. spec/profiles/clerk.md forbids embedding one.
+  const jwt = clerk.mintJwt({
+    iss: "https://clerk.acme.example", sub: "user_attacker", org_id: "org_9",
+    org_role: "admin", email: "e@acme.example", iat: nowSec, exp: nowSec + 3600,
+  });
+  const att = { typ: "capsule-identity-attestation", spec_version: "0.6", alg: "ES256", issuer: "https://clerk.acme.example", jwt };
+  const res = verifyIdentityAttestation(att, {
+    trustRoots: clerk.jwks, now: new Date(TS),
+    capsuleId, signerPublicKeyHex: signer.publicKeyHex,
+  });
+  assert.equal(res.ok, false, "an unbound token must never verify");
+  assert.ok(res.errors.some((e) => e.includes("missing required binding claim 'capsule_id'")));
+  assert.ok(res.errors.some((e) => e.includes("missing required binding claim 'signer_public_key'")));
+});
+
+test("an ed25519-jcs attestation with an empty binding claim is rejected", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  const res = verifyIdentityAttestation(att, {
+    trustRoots, now: new Date(TS),
+    capsuleId: "a".repeat(64), signerPublicKeyHex: signer.publicKeyHex,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("missing required binding claim 'signer_role'")));
+});
+
+test("verifyIdentityAttestation refuses to run without binding options", () => {
+  const { issuer, kid, ed, trustRoots } = makeIssuer();
+  const signer = generateEd25519();
+  const att = signIdentityAttestation({
+    issuer, kid, ed25519PrivateKeyHex: ed.privateKeyHex,
+    claims: {
+      capsule_id: "a".repeat(64), signer_public_key: signer.publicKeyHex,
+      signer_role: "originator", subject: {}, issued_at: TS, expires_at: "2027-05-07T12:00:00Z",
+    },
+  });
+  assert.throws(
+    () => verifyIdentityAttestation(att, { trustRoots, now: new Date(TS) }),
+    /requires options\.capsuleId/,
+  );
+  assert.throws(
+    () => verifyIdentityAttestation(att, { trustRoots, now: new Date(TS), capsuleId: "a".repeat(64) }),
+    /requires options\.signerPublicKeyHex/,
+  );
 });
