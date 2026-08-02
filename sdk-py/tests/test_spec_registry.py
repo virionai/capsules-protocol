@@ -13,6 +13,7 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - signing-input.json              (byte-level signing/hashing pins)
   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
+  - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -42,6 +43,7 @@ SIGNING_INPUT = VECTORS / "signing-input.json"
 KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
 IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
+UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
 IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate"}
@@ -201,6 +203,17 @@ def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None
     reader = CapsuleReader.from_bytes(data)
     result = verify_capsule(reader, allowlist=_allowlist(doc, base))
     _assert_verify_outcome(vector["name"], expected, result)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(UNICODE_BOUNDARY))
+def test_unicode_boundary_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """A JS-built capsule carrying Pith-truncated astral text must verify here.
+
+    A failure means this lane's canonicalization disagrees on well-formed
+    astral text, not that the capsule was tampered with
+    (spec/canonicalization.md, spec/pith.md).
+    """
+    _assert_registry_vector(doc, vector, base)
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED))

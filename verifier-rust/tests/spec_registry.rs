@@ -13,6 +13,7 @@
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
+//!   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 //!
 //! The registry's `reason` categories are normative; the substring tables
 //! below map each category onto this lane's error messages.
@@ -224,6 +225,24 @@ fn signer_set_registry_outcomes() {
 #[test]
 fn chain_binding_registry_outcomes() {
     let path = vectors_dir().join("chain-binding/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// A JS-built capsule carrying Pith-truncated astral text must verify here.
+/// A failure means this lane's canonicalization disagrees on well-formed
+/// astral text — not that the capsule was tampered with.
+#[test]
+fn unicode_boundary_registry_outcomes() {
+    let path = vectors_dir().join("unicode-boundary/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);

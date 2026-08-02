@@ -9,6 +9,7 @@
 //   - tamper-detection/vectors.json   (verify-stage outcomes)
 //   - malformed-layout/vectors.json   (open-stage reasons + verify-stage)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
+//   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 //
 // The registry's `reason` categories are normative; the substring table
 // below maps each category onto this lane's error messages.
@@ -149,6 +150,27 @@ final class SpecRegistryTests: XCTestCase {
         let keys = try allowlist(doc, base: base)
         let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
         XCTAssertFalse(vectors.isEmpty, "tamper-detection registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - unicode-boundary/vectors.json
+
+    /// A JS-built capsule carrying Pith-truncated astral text must verify
+    /// here. A failure means this lane's canonicalization disagrees on
+    /// well-formed astral text — not that the capsule was tampered with.
+    func testUnicodeBoundaryRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("unicode-boundary/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "unicode-boundary registry is empty")
         for vector in vectors {
             let name = vector["name"] as? String ?? "<unnamed>"
             let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")

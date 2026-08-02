@@ -44,6 +44,13 @@ lane):
    value is `1e999`). No fixture in that collection may make a verifier
    raise an unhandled exception: verification is a total function.
 
+   `unicode-boundary/vectors.json` is a positive collection: a capsule whose
+   event summary is 200 astral code points, long enough that the Pith
+   normalizer must truncate it. Every implementation MUST verify it
+   `ok: true`. Before the surrogate-pair-safe cut it verified only in the
+   lane that produced it and failed everywhere else with a chain-hash error
+   that read like tampering (`spec/canonicalization.md`, `spec/pith.md`).
+
    Independent implementations SHOULD reproduce these outcomes; the Python
    (`sdk-py/tests/test_spec_registry.py`) lane consumes all of these
    collections and the Rust (`verifier-rust/tests/spec_registry.rs`) lane
@@ -149,6 +156,10 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-jcs-key-order-vector.mjs` → `jcs-key-order.json`
   (self-contained; the case list lives in the generator, and the output is
   pure ASCII with surrogate halves escaped individually)
+- `sdk-js/tools/generate-unicode-boundary-fixture.mjs` →
+  `unicode-boundary/output/` (fixed throwaway TEST keypair; byte-stable,
+  supports `--check`). Builds through `CapsuleBuilder.appendEvent`, so the
+  Pith truncation path is the thing under test.
 - `sdk-js/tools/generate-attestation-vectors.mjs` →
   `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
   byte-stable, supports `--check`)
