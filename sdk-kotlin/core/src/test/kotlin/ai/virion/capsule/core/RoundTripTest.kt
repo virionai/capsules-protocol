@@ -51,7 +51,6 @@ class RoundTripTest {
                 id = "demo",
                 json = "{\"id\":\"demo\",\"actions\":[]}".toByteArray(Charsets.UTF_8),
                 markdown = "# Demo\n\nSkill markdown.\n",
-                signed = false,
             )
             .addPayload(
                 CapsuleBuilder.PayloadFile(

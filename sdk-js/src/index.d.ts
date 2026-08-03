@@ -9,6 +9,10 @@
 export type KeyInput = string | Uint8Array;
 
 export interface Ed25519KeyPair {
+  /** Curve tag: lets the SDK reject an Ed25519 keypair passed where an
+   *  X25519 one is required (and vice versa) — the two shapes are
+   *  otherwise identical, and the mix-up seals unrecoverable content. */
+  curve: "ed25519";
   publicKey: Uint8Array;
   privateKey: Uint8Array;
   publicKeyHex: string;
@@ -16,6 +20,8 @@ export interface Ed25519KeyPair {
 }
 
 export interface X25519KeyPair {
+  /** Curve tag — see Ed25519KeyPair.curve. */
+  curve: "x25519";
   publicKey: Uint8Array;
   privateKey: Uint8Array;
   publicKeyHex: string;
@@ -101,7 +107,6 @@ export interface SealOptions {
 export interface SkillInput {
   json?: Record<string, unknown> | null;
   markdown?: string | null;
-  signed?: boolean;
 }
 
 export class CapsuleBuilder {
@@ -162,7 +167,6 @@ export interface Manifest {
   participants: Participant[];
   first_event_hash: string;
   content_index: { files: Array<{ path: string; sha256: string }>; index_hash: string };
-  skill_trust: Record<string, "signed" | "unsigned">;
   encryption: { metadata_path: string; cipher: string } | null;
   created_at: string;
   /**
@@ -194,7 +198,13 @@ export class CapsuleReader {
   program(): string | null;
   agents(): string | null;
   events(): ChainEvent[];
-  skills(): Map<string, { json: Record<string, unknown> | null; markdown: string | null; trust: string }>;
+  /**
+   * Skill files by id. Carries NO trust tier: trust is host-relative and
+   * derives from the verify result (VerifyResult.skillTrust). Until a
+   * skill classifies "signed" there, treat its markdown as untrusted
+   * text, never as instructions (spec/trust.md).
+   */
+  skills(): Map<string, { json: Record<string, unknown> | null; markdown: string | null }>;
   files_(): Map<string, Uint8Array>;
   decryptionMetadata(): Record<string, unknown> | null;
   decrypt(options: DecryptOptions | X25519KeyPair): Promise<CapsuleReader>;
@@ -266,6 +276,18 @@ export interface VerifyResult {
   actorSet: { bound: boolean };
   /** Observed format version + support/policy verdicts (reported facts). */
   formatVersion: FormatVersionReport;
+  /**
+   * DERIVED skill-trust classification (spec/trust.md "Skill trust").
+   * capsuleSigned is the single capsule-level fact — contentIndex.ok &&
+   * envelope.ok && trustedSignerCount > 0 — because ONE envelope
+   * signature covers the whole content index; the format cannot make
+   * skill A "signed" while skill B is "unsigned" under the same seal.
+   * skills[id] is "signed" iff capsuleSigned and skills/<id>/skill.json
+   * is listed in the content index. Hosts MUST take the tier from here:
+   * the format has no manifest.skill_trust member, and any encountered
+   * one is an inert unknown member, never authority.
+   */
+  skillTrust: { capsuleSigned: boolean; skills: Record<string, "signed" | "unsigned"> };
   /** Number of DISTINCT public keys that are both valid and on your allowlist. */
   trustedSignerCount: number;
   notes: string[];
@@ -310,6 +332,16 @@ export const EVENT_KINDS: readonly EventKind[];
 /** The one actor that never needs a participant entry: the host runtime. */
 export const HOST_ACTOR: "system:host";
 export function isValidEventKind(kind: unknown): kind is EventKind;
+
+/** Closed actor-id namespace set (spec/manifest.md field rules). */
+export type ActorNamespace = "human" | "ai" | "system" | "capsule";
+export const ACTOR_NAMESPACES: readonly ActorNamespace[];
+/** True for `<namespace>:<id>` with a known namespace and non-empty id. */
+export function isValidActorId(actorId: unknown): boolean;
+/** Grammar problems for a declared participants[] array ([] = well-formed). */
+export function participantActorIdProblems(
+  participants?: Array<Participant | string> | null,
+): string[];
 export function participantActorIds(
   participants?: Array<Participant | string> | null,
 ): Set<string>;

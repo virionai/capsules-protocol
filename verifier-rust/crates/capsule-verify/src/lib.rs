@@ -21,7 +21,7 @@ pub mod zip_reader;
 #[cfg(test)]
 mod test_support;
 
-pub use chain::{is_valid_event_kind, EVENT_KINDS};
+pub use chain::{is_valid_actor_id, is_valid_event_kind, ACTOR_NAMESPACES, EVENT_KINDS};
 pub use crypto::{
     bytes_to_hex, ed25519_verify, hex_to_bytes, sha256, sha256_hex, CryptoError,
 };

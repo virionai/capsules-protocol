@@ -284,7 +284,6 @@ async function sealWithoutCommitment(keys, role = "originator") {
     participants: [{ actor_id: "human:alice", role: "originator", label: "Alice" }],
     contentIndex,
     firstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: TS,
   });
@@ -356,7 +355,6 @@ test("unsorted commitment with honest membership fails closed", async () => {
     participants: [{ actor_id: "human:alice", role: "originator", label: "Alice" }],
     contentIndex,
     firstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: TS,
     signerCommitment: members,

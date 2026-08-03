@@ -63,7 +63,7 @@ final class IJsonAcceptanceTests: XCTestCase {
         let keys = Ed25519KeyPair.generate()
         let builder = CapsuleBuilder(originator: .init(keyPair: keys, label: "T"),
                                      createdAt: "2026-05-07T12:00:00Z")
-        builder.setParticipants([.init(actorId: "human:a", role: "originator", label: "A")])
+        try builder.setParticipants([.init(actorId: "human:a", role: "originator", label: "A")])
         // appendEvent became throwing when the closed `kind` enum landed.
         try builder.appendEvent(
             actor: "human:a", kind: "observation", action: "note", target: "capsule",

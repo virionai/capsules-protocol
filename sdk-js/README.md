@@ -180,7 +180,9 @@ const l3 = await verifyCapsule(inner, {
 - `builder.setAgents(md)` — who may do what, carried with the work
 - `builder.addPayload("payload/data.json", bytes)` — arbitrary attachments,
   bound by the content index
-- `builder.addSkill(id, { json, markdown, signed })` — portable skills
+- `builder.addSkill(id, { json, markdown })` — portable skills. Trust is
+  never author-declared: `verifyCapsule(...).skillTrust` derives it from
+  the host's allowlist at verify time (spec/trust.md)
 - `builder.previewCapsuleId()` — know the capsule id before sealing
 - `builder.appendEvent(e, { pith: false })` — skip payload normalization
 - CLI: [`../cli/`](../cli/) (`capsule verify`, `capsule inspect`, ...)

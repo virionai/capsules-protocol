@@ -52,6 +52,91 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **Skill trust is now a DERIVED classification — the author-declared
+  `manifest.skill_trust` member is removed from the format (finding
+  A01).** spec/trust.md defines the `signed` tier in terms of the
+  HOST'S allowlist, which exists only at verify time, but the tier was
+  whatever the author passed to `addSkill(..., signed)` and no verifier
+  in any lane cross-referenced it: an attacker-authored capsule, sealed
+  with the attacker's own key at a host that does NOT allowlist it,
+  reported `trust: "signed"` for a SKILL.md full of prompt-injection
+  text — and a host enforcing the tier exactly as documented was
+  enforcing the attacker's own claim. The field was a category error
+  twice over: a build-time member claiming a verify-time, host-relative
+  property (the author cannot know the host's allowlist), with per-skill
+  granularity a single envelope signature cannot back. All five lanes
+  now derive the tier in the verify result — `capsule_signed =
+  content_index.ok AND envelope.ok AND trusted_signer_count > 0`; a
+  skill is `signed` iff `capsule_signed` and its `skill.json` is listed
+  in the content index — reported as `skill_trust: {capsule_signed,
+  skills}` (`skillTrust` in JS/Swift/Kotlin). Reader skill accessors
+  (`reader.skills()`, `CapsuleSkill`) no longer carry a trust member —
+  a reader without the host's allowlist cannot know one — and sdk-py
+  gained the previously missing `skills()` accessor so every lane
+  exposes the same surface. Builders reject the removed `signed`
+  declaration loudly. A capsule from an earlier draft that still
+  carries `skill_trust` verifies (unknown member: preserved, hashed,
+  inert) but the member is NEVER read as a trust input. spec/trust.md's
+  adversary matrix no longer claims the author-declared tier as an
+  author-resistant control; the derived tier genuinely is one.
+  Conformance vectors: `spec/vectors/skill-trust/` (the
+  `declared-signed-not-allowlisted` vector pins the attack), consumed
+  by all five lanes and registered in `spec/vectors/registry.json`;
+  fixtures for signer-set, chain-binding, chain-rules and
+  unknown-fields regenerated without the removed member.
+- **Typed key material: keypair objects now carry a `curve` tag, and
+  the sdk-js/sdk-py API boundary rejects cross-curve key confusion
+  (A04).** `Ed25519KeyPair` and `X25519KeyPair` objects are
+  structurally identical, and this changelog itself advertised the
+  reachable hazard ("keypair objects work as-is as … recipients"):
+  passing an Ed25519 keypair where an X25519 recipient is required was
+  accepted silently — X25519 clamps and accepts any 32-byte
+  u-coordinate, ECDH "succeeds", and the sealed content is
+  unrecoverable by the Ed25519 holder, with nothing erroring until a
+  decryption attempt potentially years later. Seal-time round-trip
+  verification cannot catch it (the sealer holds no recipient private
+  key) and 400/400 sampled X25519 public keys parsed as valid Ed25519
+  points, so the only fix is typing at the boundary:
+  `generateEd25519()`/`generate_ed25519()` now tag `curve: "ed25519"`,
+  `generateX25519()`/`generate_x25519()` tag `curve: "x25519"`,
+  `toSigner`/`to_signer` reject an object tagged with the wrong curve,
+  and `toRecipient`/`to_recipient` additionally reject any
+  keypair-shaped object (private key material present) with NO tag —
+  the branded path is the only object path for keypairs. HONEST
+  LIMITS: raw hex, raw bytes, and public-key-only `{publicKey}` inputs
+  remain untagged and accepted (indistinguishable by construction —
+  the caller extracting bytes asserts the curve), and untagged
+  `{role, publicKey, privateKey}` signer dicts remain accepted because
+  a cross-curve signing mistake fails loudly at first verification
+  rather than silently. sdk-swift is not exposed on the object path
+  (nominal `Curve25519.Signing` vs `.KeyAgreement` key types cannot be
+  interchanged; its `Recipient` takes raw `Data`); sdk-kotlin core has
+  no encryption path. Pinned by `sdk-js/test/key-curve.test.js` and
+  `sdk-py/tests/test_key_curve.py`.
+
+- **The `participants[].actor_id` namespace grammar is now enforced in
+  every lane (A06).** `spec/manifest.md` has always required
+  `human:<id>`, `ai:<id>`, `system:<id>`, or `capsule:<id>`, but no
+  builder or verifier checked it — a capsule declaring `robot:origin`
+  (or any uninterpretable participant entry) sailed through all five
+  verifiers with the actor set reported as bound. The namespace set is
+  now CLOSED normatively (`<id>` any non-empty string,
+  case-sensitive), builders refuse to declare a participant outside
+  the grammar (sdk-js/sdk-py at construction and seal, sdk-swift and
+  sdk-kotlin in `setParticipants`), and all five verifiers reject a
+  declared out-of-grammar entry fail-closed — including entries with a
+  missing or non-string `actor_id`, which the membership check used to
+  skip silently. This is distinct from the empty-participants tier: an
+  EMPTY set is a weaker claim made honestly (still verifies, reported
+  unbound); a DECLARED entry no reader can interpret is malformed. New
+  chain-rules vector `invalid-actor-namespace` (declared and event
+  actor both `robot:origin`, so membership passes and only the grammar
+  decides) is consumed by all five lanes. The repo's own examples and
+  CLI smoke fixtures used `tool:renderer`/`tool:smoke` — themselves
+  spec violations — and are renamed to the `system:` namespace.
+  `capsule:<id>` remains grammar-only: nothing else in the codebase
+  assigns it semantics (composition is future work).
+
 - **The semantic-binding layer: manifest claims are now tied to the
   signed envelope, the chain, and the files in every lane.**
   `capsule_id` is derived from `manifest.first_event_hash`, but no lane

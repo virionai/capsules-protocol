@@ -1,6 +1,13 @@
 // CapsuleSkill — typed access to the `skills/<id>/` subtree of a capsule.
 // A skill is two files: `skill.json` (typed metadata) and `SKILL.md`
-// (instructions, in one of two trust tiers per spec/trust.md).
+// (instructions).
+//
+// Deliberately trust-free: the trust tier is host-relative — it depends
+// on the allowlist the host supplies at verify time — so file access can
+// never know it. Take the classification from
+// `CapsuleVerifier.verify(...).skillTrust`, and until a skill classifies
+// "signed" there, treat its SKILL.md as untrusted text, never as
+// instructions (spec/trust.md "Skill trust").
 
 import Foundation
 import Capsule
@@ -9,18 +16,10 @@ public struct CapsuleSkill: Equatable {
     public let id: String
     public let json: Data?
     public let markdown: String?
-    /// "signed" or "unsigned" per manifest.skill_trust. A signed skill's
-    /// `skill.json` is covered by an envelope signature; an unsigned skill
-    /// is passed to a host LLM as untrusted instruction-bearing content.
-    public let trust: TrustTier
 
-    public enum TrustTier: String, Equatable {
-        case signed, unsigned
-    }
-
-    public init(id: String, json: Data?, markdown: String?, trust: TrustTier) {
+    public init(id: String, json: Data?, markdown: String?) {
         precondition(!id.isEmpty)
-        self.id = id; self.json = json; self.markdown = markdown; self.trust = trust
+        self.id = id; self.json = json; self.markdown = markdown
     }
 
     /// Decoded `skill.json` as a JCSValue object, or nil if absent or unparseable.
@@ -47,21 +46,8 @@ public extension ParsedCapsule {
                 byId[id, default: (nil, nil)].md = String(decoding: data, as: UTF8.self)
             }
         }
-        // Read trust tiers from manifest.skill_trust if present.
-        var trustMap: [String: CapsuleSkill.TrustTier] = [:]
-        if case .object(let pairs) = manifest,
-           let st = pairs.first(where: { $0.0 == "skill_trust" }),
-           case .object(let trustPairs) = st.1
-        {
-            for (k, v) in trustPairs {
-                if case .string(let s) = v, let tier = CapsuleSkill.TrustTier(rawValue: s) {
-                    trustMap[k] = tier
-                }
-            }
-        }
         return byId.map { (id, files) in
-            CapsuleSkill(id: id, json: files.json, markdown: files.md,
-                         trust: trustMap[id] ?? .unsigned)
+            CapsuleSkill(id: id, json: files.json, markdown: files.md)
         }
         .sorted { $0.id < $1.id }
     }

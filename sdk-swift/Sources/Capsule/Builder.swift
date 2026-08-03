@@ -55,7 +55,7 @@ public final class CapsuleBuilder {
     private var programMd: String = "# Program\n"
     private var agentsMd: String? = nil
     private var bareEvents: [BareEvent] = []
-    private var skills: [String: (json: Data?, markdown: String?, signed: Bool)] = [:]
+    private var skills: [String: (json: Data?, markdown: String?)] = [:]
     private var payload: [String: Data] = [:]
     private var createdAt: String
 
@@ -74,9 +74,21 @@ public final class CapsuleBuilder {
         self.agentsMd = md; return self
     }
 
+    /// Declare the participant set. Throws (spec/manifest.md field rules,
+    /// finding A06) when any `actorId` falls outside the closed namespace
+    /// grammar — `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>`
+    /// with a non-empty `<id>` — because a capsule declaring an
+    /// uninterpretable participant fails every conformant verifier.
     @discardableResult
-    public func setParticipants(_ ps: [Participant]) -> CapsuleBuilder {
-        self.participants = ps; return self
+    public func setParticipants(_ ps: [Participant]) throws -> CapsuleBuilder {
+        for (i, p) in ps.enumerated() where !Chain.isValidActorId(p.actorId) {
+            throw CapsuleError.malformed(
+                "participants[\(i)].actor_id \(Chain.debugQuoted(p.actorId)) "
+                    + "does not match an allowed namespace (human:, ai:, system:, capsule:)"
+            )
+        }
+        self.participants = ps
+        return self
     }
 
     /// Append a chain event. The seq, event_id, prev_hash, and hash are
@@ -132,16 +144,19 @@ public final class CapsuleBuilder {
         return self
     }
 
-    /// Add a Capsule skill (skills/<id>/skill.json + SKILL.md).
+    /// Add a Capsule skill (skills/<id>/skill.json + SKILL.md). There is
+    /// no trust declaration here: skill trust is host-relative and DERIVED
+    /// at verify time (CapsuleVerification.skillTrust), so an author
+    /// cannot assert it (spec/trust.md "Skill trust").
     @discardableResult
-    public func addSkill(id: String, json: Data?, markdown: String?, signed: Bool = false)
+    public func addSkill(id: String, json: Data?, markdown: String?)
         -> CapsuleBuilder
     {
         precondition(id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
                      "invalid skill id: \(id)")
         precondition(id != "decryption",
                      "'decryption' is reserved for encryption metadata; not a skill")
-        skills[id] = (json, markdown, signed)
+        skills[id] = (json, markdown)
         return self
     }
 
@@ -167,7 +182,6 @@ public final class CapsuleBuilder {
             },
             contentIndex: contentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: parts.skillTrust,
             signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
@@ -250,7 +264,6 @@ public final class CapsuleBuilder {
             },
             contentIndex: innerContentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: parts.skillTrust,
             encryption: .null,
             signerCommitment: signerCommitment(),
             createdAt: createdAt,
@@ -352,7 +365,6 @@ public final class CapsuleBuilder {
             },
             contentIndex: outerContentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: [], // decryption metadata is not a skill
             encryption: .object([
                 ("metadata_path", .string("skills/decryption/decryption.json")),
                 ("cipher", .string("ChaCha20-Poly1305")),
@@ -424,7 +436,6 @@ public final class CapsuleBuilder {
         let capsuleId: String
         let firstHash: String
         let entryHash: String
-        let skillTrust: [(String, String)]
     }
 
     private func buildInnerParts(sealedAt: String) throws -> InnerParts {
@@ -457,7 +468,6 @@ public final class CapsuleBuilder {
         if let agents = agentsMd {
             innerFiles.append(("agents.md", Data(agents.utf8)))
         }
-        var skillTrust: [(String, String)] = []
         for (id, s) in skills {
             if let json = s.json {
                 innerFiles.append(("skills/\(id)/skill.json", json))
@@ -465,7 +475,6 @@ public final class CapsuleBuilder {
             if let md = s.markdown {
                 innerFiles.append(("skills/\(id)/SKILL.md", Data(md.utf8)))
             }
-            skillTrust.append((id, s.signed ? "signed" : "unsigned"))
         }
         for (path, bytes) in payload {
             innerFiles.append((path, bytes))
@@ -478,8 +487,7 @@ public final class CapsuleBuilder {
             innerFiles: innerFiles,
             capsuleId: capsuleId,
             firstHash: firstHash,
-            entryHash: entryHash,
-            skillTrust: skillTrust
+            entryHash: entryHash
         )
     }
 }

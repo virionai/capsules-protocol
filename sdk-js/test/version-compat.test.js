@@ -107,7 +107,6 @@ async function capsuleDeclaringVersion(version, { envelopeVersion = version } = 
     participants: [{ actor_id: "human:alice", role: "originator", label: "Alice" }],
     contentIndex,
     firstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: TS,
   });

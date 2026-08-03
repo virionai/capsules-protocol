@@ -139,7 +139,6 @@ public enum Manifest {
         participants: [Participant],
         contentIndex: ContentIndex,
         firstEventHash: String,
-        skillTrust: [(String, String)] = [],
         encryption: JCSValue = .null,
         signerCommitment: [SignerCommitmentMember] = [],
         createdAt: String,
@@ -150,7 +149,6 @@ public enum Manifest {
             participants: participants,
             contentIndex: contentIndex,
             firstEventHash: firstEventHash,
-            skillTrust: skillTrust,
             encryption: encryption,
             createdAt: createdAt,
             capsuleId: capsuleId
@@ -168,7 +166,6 @@ public enum Manifest {
         participants: [Participant],
         contentIndex: ContentIndex,
         firstEventHash: String,
-        skillTrust: [(String, String)],
         encryption: JCSValue,
         createdAt: String,
         capsuleId: String
@@ -199,7 +196,6 @@ public enum Manifest {
                 })),
                 ("index_hash", .string(contentIndex.indexHash)),
             ])),
-            ("skill_trust", .object(skillTrust.map { ($0.0, .string($0.1)) })),
             ("encryption", encryption),
             ("created_at", .string(createdAt)),
         ]

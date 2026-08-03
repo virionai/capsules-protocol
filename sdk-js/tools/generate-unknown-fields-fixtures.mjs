@@ -119,7 +119,6 @@ async function buildUnknownFieldsCapsule(originator) {
     participants: [{ actor_id: "human:origin", role: "originator", label: "Origin" }],
     contentIndex,
     firstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: SIGNED_AT,
   });

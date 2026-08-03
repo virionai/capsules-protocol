@@ -31,6 +31,13 @@
 //                                  event names human:origin anyway.
 //                                  ok=true with actor_set_bound=false
 //                                  and the unbound-actor-set note.
+//   invalid-actor-namespace.capsule participants[] declares
+//                                  robot:origin — outside the CLOSED
+//                                  actor_id namespace set (manifest.md:
+//                                  human/ai/system/capsule). The event
+//                                  actor is the same string, so the
+//                                  membership rule passes and ONLY the
+//                                  namespace grammar decides. FAIL.
 //   keys.json                      originator keypair.
 //
 // The reference builder REFUSES to emit the two failing shapes — that is
@@ -52,7 +59,18 @@ import { fileURLToPath } from "node:url";
 
 import { hexToBytes, bytesToHex } from "../src/canonical.js";
 import { ed25519PrivateFromRaw, ed25519PublicToRaw } from "../src/crypto.js";
+import { buildChainEvents, eventsToJsonl, firstAndEntryHash } from "../src/chain.js";
+import {
+  buildContentIndex,
+  buildManifest,
+  buildSignerCommitment,
+  computeCapsuleId,
+  manifestBytes,
+  manifestHash,
+} from "../src/manifest.js";
+import { buildEnvelope, signEnvelope } from "../src/envelope.js";
 import { CapsuleBuilder } from "../src/index.js";
+import { packZip } from "../src/zip.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -107,6 +125,55 @@ async function seal(builder, keys) {
   );
 }
 
+/**
+ * Low-level single-event capsule for shapes the CapsuleBuilder refuses to
+ * emit at construction/seal time (not just at appendEvent) — currently
+ * the out-of-namespace participant declaration. Mirrors the builder's
+ * plain path exactly: real signature, correct manifest hash, correct
+ * content index, so ONLY the rule under test decides the outcome.
+ */
+async function buildLowLevelCapsule(keys, { participants, event }) {
+  const events = buildChainEvents([event]);
+  const { firstEventHash, entryHash } = firstAndEntryHash(events);
+  const files = new Map();
+  files.set(
+    "program.md",
+    Buffer.from("# Chain Rule Fixture\n\nOne event, one field rule under test.\n", "utf8"),
+  );
+  files.set("chain/events.jsonl", eventsToJsonl(events));
+  const contentIndex = buildContentIndex(files);
+  const manifest = buildManifest({
+    originator: { public_key: keys.publicKeyHex, label: "ChainRuleFixture" },
+    participants,
+    contentIndex,
+    firstEventHash,
+    encryption: null,
+    createdAt: SIGNED_AT,
+    signerCommitment: buildSignerCommitment([
+      { role: "originator", public_key: keys.publicKeyHex },
+    ]),
+  });
+  const capsuleId = computeCapsuleId(keys.publicKey, firstEventHash);
+  manifest.id = capsuleId;
+  const envelope = buildEnvelope({
+    capsuleId,
+    firstEventHash,
+    entryHash,
+    manifestHash: manifestHash(manifest),
+    contentIndexHash: contentIndex.index_hash,
+    encryptedBlobHash: null,
+    cipher: "none",
+    signedAt: SIGNED_AT,
+  });
+  signEnvelope(envelope, [
+    { role: "originator", publicKey: keys.publicKey, privateKey: keys.privateKey },
+  ]);
+  const all = new Map(files);
+  all.set("manifest.json", manifestBytes(manifest));
+  all.set("provenance/envelope.json", Buffer.from(JSON.stringify(envelope, null, 2), "utf8"));
+  return Buffer.from(await packZip(all));
+}
+
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -153,6 +220,17 @@ async function main() {
   noLabelBuilder.appendEvent(bareEvent());
   const participantWithoutLabel = await seal(noLabelBuilder, originator);
 
+  // (7) invalid-actor-namespace: the DECLARED participant's actor_id uses
+  // a namespace outside the closed manifest.md set (human/ai/system/
+  // capsule). The event names the same actor, so the step-6 membership
+  // rule passes and only the namespace grammar decides the outcome. The
+  // builder refuses this shape at construction/seal, so it is built
+  // through the low-level path — what a non-conformant writer produces.
+  const invalidActorNamespace = await buildLowLevelCapsule(originator, {
+    participants: [{ actor_id: "robot:origin", role: "originator", label: "Origin" }],
+    event: bareEvent({ actor: "robot:origin" }),
+  });
+
   // (6) invalid-untrusted-path: untrusted_payload_fields carries an entry
   // outside the normative grammar (chain.md "Untrusted content":
   // payload(.segment)+). Correctly hashed and signed — the marking is
@@ -178,6 +256,7 @@ async function main() {
     ["non-contiguous-seq.capsule", nonContiguousSeq],
     ["participant-without-label.capsule", participantWithoutLabel],
     ["invalid-untrusted-path.capsule", invalidUntrustedPath],
+    ["invalid-actor-namespace.capsule", invalidActorNamespace],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

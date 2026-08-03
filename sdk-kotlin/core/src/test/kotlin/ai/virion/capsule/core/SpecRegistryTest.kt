@@ -62,6 +62,39 @@ class SpecRegistryTest {
     }
 
     /**
+     * Skill trust is DERIVED from the verify result, never read from the
+     * capsule (spec/trust.md "Skill trust"). The same capsule bytes
+     * classify differently at hosts with different allowlists, so each
+     * vector in skill-trust/vectors.json pins its own trust
+     * configuration: the per-vector `allowlist` names keypairs in
+     * keys_file ([] = verify with no allowlist). A lane that surfaces the
+     * fixture's own `skill_trust` manifest member as trust hands
+     * prompt-injection text to a host LLM as trusted instructions — the
+     * defect (A01) this collection keeps closed.
+     */
+    @Test
+    fun skillTrustRegistryOutcomes() {
+        val file = File(vectorsDir(), "skill-trust/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val keys = JsonParser.parseString(
+            File(base, doc.get("keys_file").asString).readText()
+        ).asJsonObject
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "skill-trust registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val allowlist = v.getAsJsonArray("allowlist").map { keyName ->
+                keys.getAsJsonObject(keyName.asString)?.get("publicKey")?.asString
+                    ?: error("$name: allowlist entry ${keyName.asString} not in keys_file")
+            }.toSet()
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
+    /**
      * A JS-built capsule carrying Pith-truncated astral text must verify
      * here. A failure means this lane's canonicalization disagrees on
      * well-formed astral text — not that the capsule was tampered with
@@ -527,6 +560,22 @@ class SpecRegistryTest {
             assertTrue(
                 result.notes.any { it.contains(needle) },
                 "$name: expected a note containing $needle; got ${result.notes}",
+            )
+        }
+        // Skill-trust derivation (spec/trust.md "Skill trust"): the tier
+        // MUST come from the verify result — capsuleSigned plus the exact
+        // per-id map — never from any skill_trust member in the capsule.
+        if (expected.has("skill_trust")) {
+            val want = expected.getAsJsonObject("skill_trust")
+            assertEquals(
+                want.get("capsule_signed").asBoolean, result.skillTrust.capsuleSigned,
+                "$name: skillTrust.capsuleSigned mismatch",
+            )
+            val wantSkills = want.getAsJsonObject("skills")?.entrySet()
+                ?.associate { it.key to it.value.asString } ?: emptyMap()
+            assertEquals(
+                wantSkills, result.skillTrust.skills,
+                "$name: skillTrust.skills mismatch",
             )
         }
     }

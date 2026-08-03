@@ -98,7 +98,7 @@ procedure.
 - [versioning.md](versioning.md) — version compatibility: known versions
   open forever, unknown ones fail closed with a non-tamper diagnosis,
   domain strings keyed by declared version, the v0.6 algorithm suite
-- [trust.md](trust.md) — trust model, allowlists, skill trust tiers
+- [trust.md](trust.md) — trust model, allowlists, derived skill trust
 - [pith.md](pith.md) — context-style discipline for narrative fields
 - [federation.md](federation.md) — key discovery, issuer metadata, and
   temporal anchoring (informative draft, proposed for v0.7)

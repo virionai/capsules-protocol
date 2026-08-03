@@ -51,7 +51,6 @@ async function sealEmptyChainCapsule({
     participants: [{ actor_id: "human:drafter", role: "originator", label: "Drafter" }],
     contentIndex,
     firstEventHash: manifestFirstEventHash,
-    skillTrust: {},
     encryption: null,
     createdAt: TS,
     signerCommitment: buildSignerCommitment([

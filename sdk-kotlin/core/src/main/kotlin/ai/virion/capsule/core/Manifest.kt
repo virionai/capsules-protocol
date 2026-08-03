@@ -111,7 +111,6 @@ object Manifest {
         participants: List<Participant>,
         contentIndex: ContentIndex,
         firstEventHash: String,
-        skillTrust: List<Pair<String, String>> = emptyList(),
         encryption: JCSValue = JCSValue.Null,
         signerCommitment: List<SignerCommitmentMember> = emptyList(),
         createdAt: String,
@@ -151,7 +150,6 @@ object Manifest {
                 }),
                 "index_hash" to JCSValue.Str(contentIndex.indexHash),
             )),
-            "skill_trust" to JCSValue.Obj(skillTrust.map { it.first to JCSValue.Str(it.second) }),
             "encryption" to encryption,
             "created_at" to JCSValue.Str(createdAt),
         ) + commitmentPairs)

@@ -7,6 +7,7 @@ import {
   firstAndEntryHash,
   isValidEventKind,
   isValidUntrustedPayloadPath,
+  participantActorIdProblems,
   participantActorIds,
   EVENT_KINDS,
   HOST_ACTOR,
@@ -39,6 +40,12 @@ import { packZip } from "./zip.js";
 import { CURRENT_VERSION, keyWrapInfo } from "./versions.js";
 import { nowIso, toKeyHex, toRecipient, toSigner } from "./keys.js";
 
+/** Throw when a declared participants[] fails the actor-id grammar. */
+function assertValidParticipants(participants) {
+  const problems = participantActorIdProblems(participants);
+  if (problems.length > 0) throw new Error(problems.join("; "));
+}
+
 export class CapsuleBuilder {
   constructor({ originator, participants = [], createdAt, pith = true } = {}) {
     // `originator` accepts { publicKey, label? } with the key as a hex
@@ -52,11 +59,17 @@ export class CapsuleBuilder {
       public_key: toKeyHex(originatorKey, "originator.publicKey"),
       label: originator.label ?? "",
     };
+    // spec/manifest.md field rules: every declared actor_id must sit in
+    // the closed namespace set. Refuse the shape at the call site that
+    // introduced it — a capsule declaring an uninterpretable participant
+    // fails every conformant verifier. Re-checked at seal() because
+    // builder.participants is a mutable property.
+    assertValidParticipants(participants);
     this.participants = participants;
     this.createdAt = createdAt ?? nowIso();
     this.programMd = null;
     this.agentsMd = null;
-    this.skills = new Map(); // id -> { json, markdown, signed }
+    this.skills = new Map(); // id -> { json, markdown }
     this.payload = new Map(); // path -> bytes
     this.bareEvents = [];
     this.pith = pith !== false; // default on; pass {pith:false} to disable
@@ -72,14 +85,28 @@ export class CapsuleBuilder {
     return this;
   }
 
-  addSkill(id, { json, markdown, signed = false }) {
+  /**
+   * Add a skill (skills/<id>/skill.json + SKILL.md). There is no trust
+   * declaration here: skill trust is host-relative and DERIVED at verify
+   * time (verifyCapsule(...).skillTrust), so an author cannot assert it —
+   * the removed v0.5-draft `signed` flag is rejected loudly rather than
+   * silently ignored.
+   */
+  addSkill(id, { json, markdown, ...rest } = {}) {
+    if ("signed" in rest) {
+      throw new Error(
+        "addSkill: the 'signed' declaration was removed — skill trust is derived by the " +
+          "verifier from the host's allowlist (verifyCapsule(...).skillTrust), not declared " +
+          "by the author (spec/trust.md)",
+      );
+    }
     if (typeof id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(id)) {
       throw new Error(`invalid skill id: ${id}`);
     }
     if (id === "decryption") {
       throw new Error("'decryption' is reserved for encryption metadata; not a skill");
     }
-    this.skills.set(id, { json: json ?? null, markdown: markdown ?? null, signed: !!signed });
+    this.skills.set(id, { json: json ?? null, markdown: markdown ?? null });
     return this;
   }
 
@@ -201,6 +228,9 @@ export class CapsuleBuilder {
    *               an explicit value for reproducible builds.
    */
   async seal({ signers, recipients = [], signedAt } = {}) {
+    // builder.participants is mutable between construction and seal;
+    // never emit a manifest that fails the namespace grammar.
+    assertValidParticipants(this.participants);
     const signerList = (Array.isArray(signers) ? signers : signers ? [signers] : []).map(toSigner);
     if (signerList.length === 0) throw new Error("seal requires at least one signer");
     const recipientList = (Array.isArray(recipients) ? recipients : [recipients]).map(toRecipient);
@@ -232,7 +262,6 @@ export class CapsuleBuilder {
       innerFiles.set("agents.md", Buffer.from(this.agentsMd, "utf8"));
     }
     innerFiles.set("chain/events.jsonl", eventsJsonl);
-    const skillTrust = {};
     for (const [id, s] of this.skills.entries()) {
       if (s.json != null) {
         innerFiles.set(`skills/${id}/skill.json`, Buffer.from(JSON.stringify(s.json, null, 2), "utf8"));
@@ -240,7 +269,6 @@ export class CapsuleBuilder {
       if (s.markdown != null) {
         innerFiles.set(`skills/${id}/SKILL.md`, Buffer.from(s.markdown, "utf8"));
       }
-      skillTrust[id] = s.signed ? "signed" : "unsigned";
     }
     for (const [path, bytes] of this.payload.entries()) {
       innerFiles.set(path, bytes);
@@ -266,7 +294,6 @@ export class CapsuleBuilder {
         participants: this.participants,
         contentIndex,
         firstEventHash,
-        skillTrust,
         encryption: null,
         createdAt: this.createdAt,
         signerCommitment,
@@ -302,7 +329,6 @@ export class CapsuleBuilder {
       participants: this.participants,
       contentIndex: innerContentIndex,
       firstEventHash,
-      skillTrust,
       encryption: null,
       createdAt: this.createdAt,
       signerCommitment,
@@ -397,7 +423,6 @@ export class CapsuleBuilder {
       participants: this.participants,
       contentIndex: outerContentIndex,
       firstEventHash,
-      skillTrust: {}, // decryption metadata is not a skill
       encryption: {
         metadata_path: "skills/decryption/decryption.json",
         cipher: "ChaCha20-Poly1305",

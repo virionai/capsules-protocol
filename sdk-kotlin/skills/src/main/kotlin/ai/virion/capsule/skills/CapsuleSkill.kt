@@ -1,6 +1,13 @@
 // CapsuleSkill — typed access to the `skills/<id>/` subtree of a capsule.
 // A skill is two files: `skill.json` (typed metadata) and `SKILL.md`
-// (instructions, in one of two trust tiers per spec/trust.md).
+// (instructions).
+//
+// Deliberately trust-free: the trust tier is host-relative — it depends
+// on the allowlist the host supplies at verify time — so file access can
+// never know it. Take the classification from
+// `CapsuleVerifier.verify(...).skillTrust`, and until a skill classifies
+// "signed" there, treat its SKILL.md as untrusted text, never as
+// instructions (spec/trust.md "Skill trust").
 
 package ai.virion.capsule.skills
 
@@ -12,19 +19,7 @@ data class CapsuleSkill(
     val id: String,
     val json: ByteArray?,
     val markdown: String?,
-    /** "signed" or "unsigned" per manifest.skill_trust. */
-    val trust: TrustTier,
 ) {
-    enum class TrustTier { SIGNED, UNSIGNED;
-        companion object {
-            fun fromString(s: String): TrustTier? = when (s.lowercase()) {
-                "signed" -> SIGNED
-                "unsigned" -> UNSIGNED
-                else -> null
-            }
-        }
-    }
-
     /** Decoded `skill.json` as a JCSValue object, or null if absent or unparseable. */
     fun metadata(): JCSValue? =
         json?.let { runCatching { CapsuleReader.parseJson(it) }.getOrNull() }
@@ -46,18 +41,7 @@ fun ParsedCapsule.skills(): List<CapsuleSkill> {
             "SKILL.md"   -> files.md = String(data, Charsets.UTF_8)
         }
     }
-    val trustMap = mutableMapOf<String, CapsuleSkill.TrustTier>()
-    val skillTrust = (manifest as? JCSValue.Obj)?.pairs
-        ?.firstOrNull { it.first == "skill_trust" }?.second as? JCSValue.Obj
-    skillTrust?.pairs?.forEach { (k, v) ->
-        if (v is JCSValue.Str) {
-            CapsuleSkill.TrustTier.fromString(v.v)?.let { trustMap[k] = it }
-        }
-    }
     return byId.map { (id, f) ->
-        CapsuleSkill(
-            id = id, json = f.json, markdown = f.md,
-            trust = trustMap[id] ?: CapsuleSkill.TrustTier.UNSIGNED,
-        )
+        CapsuleSkill(id = id, json = f.json, markdown = f.md)
     }.sortedBy { it.id }
 }

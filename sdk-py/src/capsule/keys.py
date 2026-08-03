@@ -53,6 +53,30 @@ def _field(obj: Any, *names: str) -> Any:
     return None
 
 
+# Curve tags (finding A04). Ed25519 (signing) and X25519 (key agreement)
+# keypair objects are structurally identical, and the two key types are
+# indistinguishable from their bytes (any X25519 public key also parses
+# as an Ed25519 point). X25519 clamps and accepts any 32-byte
+# u-coordinate, so encrypting to an Ed25519 public key "succeeds" and
+# produces content the Ed25519 holder can never decrypt — a data-loss
+# bug that surfaces only at decryption time, potentially years later.
+# Seal-time round-trip verification cannot catch it (the sealer has no
+# recipient private key). The generators therefore tag every keypair
+# object with its curve, and the normalizers below enforce the tag on
+# the object path. Raw hex and raw bytes stay untagged and accepted:
+# a caller who extracts bytes is asserting the curve themselves.
+
+
+def _assert_curve_tag(obj: Any, expected: str, name: str) -> None:
+    """Raise when an object carries a curve tag other than ``expected``."""
+    curve = _field(obj, "curve")
+    if curve is not None and curve != expected:
+        raise ValueError(
+            f"{name} is tagged curve '{curve}' but must be an {expected} key: "
+            "Ed25519 signs, X25519 encrypts — the two are not interchangeable"
+        )
+
+
 def to_signer(signer: Any, index: int = 0) -> dict:
     """Normalize one signer.
 
@@ -60,11 +84,18 @@ def to_signer(signer: Any, index: int = 0) -> dict:
     (role defaults to "originator") or a dict of
     ``{"role"?, "public_key", "private_key"}`` with keys as hex strings
     or bytes. Returns ``{"role", "public_key": bytes, "private_key": bytes}``.
+
+    An object tagged with a non-Ed25519 curve (e.g. an ``X25519KeyPair``)
+    is rejected. Untagged dicts stay accepted: a cross-curve mistake on
+    the signing side fails loudly at first verification (the stored
+    public key does not match the signature), unlike the silent
+    recipient-side hazard.
     """
     if signer is None or isinstance(signer, (str, bytes, bytearray, memoryview)):
         raise ValueError(
             f"signers[{index}] must be a keypair or dict with public_key and private_key"
         )
+    _assert_curve_tag(signer, "ed25519", f"signers[{index}]")
     role = _field(signer, "role") or "originator"
     if not isinstance(role, str) or not role:
         raise ValueError(f"signers[{index}].role must be a non-empty string")
@@ -84,7 +115,24 @@ def to_recipient(recipient: Any, index: int = 0) -> bytes:
 
     Accepts a hex string, raw bytes, a dict with ``public_key``, or the
     ``X25519KeyPair`` returned by ``generate_x25519()``.
+
+    The keypair-object path is the branded path, and it is the ONLY
+    object path for keypair-shaped input: an object carrying private key
+    material must be tagged ``curve="x25519"`` (an Ed25519 tag, or no
+    tag at all, is rejected — the untagged shape is indistinguishable
+    from the Ed25519 hazard). Public-key-only objects, hex, and raw
+    bytes stay accepted untagged; those forms carry no evidence of curve
+    either way and are the caller's assertion.
     """
+    if not isinstance(recipient, (str, bytes, bytearray, memoryview)) and recipient is not None:
+        _assert_curve_tag(recipient, "x25519", f"recipients[{index}]")
+        has_private = _field(recipient, "private_key", "private_key_hex") is not None
+        if has_private and _field(recipient, "curve") is None:
+            raise ValueError(
+                f"recipients[{index}] is a keypair object without a curve tag: cannot tell "
+                "X25519 from Ed25519 key material by shape. Pass a generate_x25519() keypair "
+                '(curve="x25519"), or just its public_key (hex or 32 bytes)'
+            )
     value = (
         recipient
         if isinstance(recipient, (str, bytes, bytearray, memoryview))

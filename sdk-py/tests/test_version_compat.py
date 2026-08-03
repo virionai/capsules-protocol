@@ -100,7 +100,6 @@ def _capsule_declaring_version(version: str, *, envelope_version: str | None = N
         participants=[{"actor_id": "human:alice", "role": "originator", "label": "Alice"}],
         content_index=content_index,
         first_event_hash=first_event_hash,
-        skill_trust={},
         encryption=None,
         created_at=TS,
     )

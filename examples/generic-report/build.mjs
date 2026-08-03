@@ -83,7 +83,7 @@ legal, compliance, security, or operational guidance.
       payload: { summary: "Created generic report capsule." },
     },
     {
-      actor: "tool:renderer",
+      actor: "system:renderer",
       kind: "observation",
       action: "rendered_workproduct",
       target: "payload/workproduct/report.html",

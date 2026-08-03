@@ -15,6 +15,7 @@ from .chain import (
     first_and_entry_hash,
     is_valid_event_kind,
     is_valid_untrusted_payload_path,
+    participant_actor_id_problems,
     participant_actor_ids,
 )
 from .crypto import (
@@ -43,11 +44,17 @@ from .versions import CURRENT_VERSION, key_wrap_info
 _SKILL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
+def _assert_valid_participants(participants: object) -> None:
+    """Raise when a declared ``participants`` list fails the actor-id grammar."""
+    problems = participant_actor_id_problems(participants)
+    if problems:
+        raise ValueError("; ".join(problems))
+
+
 @dataclass
 class _SkillEntry:
     json: dict | None
     markdown: str | None
-    signed: bool
 
 
 class CapsuleBuilder:
@@ -69,6 +76,12 @@ class CapsuleBuilder:
             "public_key": to_key_hex(originator_key, "originator.public_key"),
             "label": _field(originator, "label") or "",
         }
+        # spec/manifest.md field rules: every declared actor_id must sit in
+        # the closed namespace set. Refuse the shape at the call site that
+        # introduced it — a capsule declaring an uninterpretable participant
+        # fails every conformant verifier. Re-checked at seal() because
+        # builder.participants is a mutable attribute.
+        _assert_valid_participants(participants or [])
         self.participants = participants or []
         self.created_at = created_at or now_iso()
         self.program_md: str | None = None
@@ -92,13 +105,19 @@ class CapsuleBuilder:
         *,
         json: dict | None = None,
         markdown: str | None = None,
-        signed: bool = False,
     ) -> CapsuleBuilder:
+        """Add a skill (skills/<id>/skill.json + SKILL.md).
+
+        There is no trust declaration here: skill trust is host-relative
+        and DERIVED at verify time (``verify_capsule(...)["skill_trust"]``),
+        so an author cannot assert it. The removed draft-era ``signed``
+        flag raises TypeError like any unknown keyword.
+        """
         if not isinstance(id, str) or not _SKILL_ID_RE.match(id):
             raise ValueError(f"invalid skill id: {id}")
         if id == "decryption":
             raise ValueError("'decryption' is reserved for encryption metadata; not a skill")
-        self.skills[id] = _SkillEntry(json=json, markdown=markdown, signed=bool(signed))
+        self.skills[id] = _SkillEntry(json=json, markdown=markdown)
         return self
 
     def add_payload(self, path: str, data: bytes) -> CapsuleBuilder:
@@ -199,6 +218,9 @@ class CapsuleBuilder:
         ``signed_at``: optional ISO 8601 UTC string; defaults to now.
         Pass an explicit value for reproducible builds.
         """
+        # builder.participants is mutable between construction and seal;
+        # never emit a manifest that fails the namespace grammar.
+        _assert_valid_participants(self.participants)
         if signers is None:
             signer_items = []
         elif isinstance(signers, (list, tuple)):
@@ -243,7 +265,6 @@ class CapsuleBuilder:
         }
         if self.agents_md is not None:
             inner["agents.md"] = self.agents_md.encode("utf-8")
-        skill_trust: dict[str, str] = {}
         for sid, entry in self.skills.items():
             if entry.json is not None:
                 inner[f"skills/{sid}/skill.json"] = json.dumps(
@@ -251,7 +272,6 @@ class CapsuleBuilder:
                 ).encode("utf-8")
             if entry.markdown is not None:
                 inner[f"skills/{sid}/SKILL.md"] = entry.markdown.encode("utf-8")
-            skill_trust[sid] = "signed" if entry.signed else "unsigned"
         inner.update(self.payload)
 
         # Manifest
@@ -274,7 +294,6 @@ class CapsuleBuilder:
                 participants=self.participants,
                 content_index=content_index,
                 first_event_hash=first_event_hash,
-                skill_trust=skill_trust,
                 encryption=None,
                 created_at=self.created_at,
                 signer_commitment=signer_commitment,
@@ -310,7 +329,6 @@ class CapsuleBuilder:
             participants=self.participants,
             content_index=inner_content_index,
             first_event_hash=first_event_hash,
-            skill_trust=skill_trust,
             encryption=None,
             created_at=self.created_at,
             signer_commitment=signer_commitment,
@@ -374,7 +392,6 @@ class CapsuleBuilder:
             participants=self.participants,
             content_index=outer_content_index,
             first_event_hash=first_event_hash,
-            skill_trust={},
             encryption={
                 "metadata_path": "skills/decryption/decryption.json",
                 "cipher": "ChaCha20-Poly1305",

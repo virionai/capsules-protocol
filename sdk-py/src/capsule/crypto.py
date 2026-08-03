@@ -27,6 +27,12 @@ class Ed25519KeyPair:
     private_key: bytes  # 32 raw bytes
     public_key_hex: str
     private_key_hex: str
+    # Curve tag (finding A04). Ed25519 and X25519 keypair objects are
+    # otherwise structurally identical, and X25519 ECDH "succeeds"
+    # against an Ed25519 public key — sealing content no one can ever
+    # decrypt. The tag lets to_signer/to_recipient reject the mix-up at
+    # the API boundary instead.
+    curve: str = "ed25519"
 
 
 def generate_ed25519() -> Ed25519KeyPair:
@@ -124,6 +130,8 @@ class X25519KeyPair:
     private_key: bytes  # 32 raw bytes
     public_key_hex: str
     private_key_hex: str
+    # Curve tag — see Ed25519KeyPair.curve.
+    curve: str = "x25519"
 
 
 def generate_x25519() -> X25519KeyPair:

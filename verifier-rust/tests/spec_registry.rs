@@ -148,6 +148,29 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
             result.notes
         );
     }
+    // Skill-trust derivation (spec/trust.md "Skill trust"): the tier MUST
+    // come from the verify result — capsule_signed plus the exact per-id
+    // map — never from any skill_trust member in the capsule itself.
+    if let Some(want) = expected.get("skill_trust") {
+        let want_signed = want["capsule_signed"].as_bool().expect("capsule_signed");
+        assert_eq!(
+            result.skill_trust.capsule_signed, want_signed,
+            "{name}: expected skill_trust.capsule_signed={want_signed}; got {:?}",
+            result.skill_trust
+        );
+        let want_skills: std::collections::BTreeMap<String, String> = want["skills"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().expect("tier").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            result.skill_trust.skills, want_skills,
+            "{name}: skill_trust.skills mismatch"
+        );
+    }
 }
 
 fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyResult {
@@ -267,6 +290,41 @@ fn chain_rule_registry_outcomes() {
     assert!(!vectors.is_empty());
     for v in vectors {
         let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Skill trust is DERIVED from the verify result, never read from the
+/// capsule (spec/trust.md "Skill trust"). The same capsule bytes classify
+/// differently at hosts with different allowlists, so each vector pins its
+/// own trust configuration: the per-vector `allowlist` names keypairs in
+/// keys_file ([] = verify with no allowlist). A lane that surfaces the
+/// fixture's own `skill_trust` manifest member as trust hands
+/// prompt-injection text to a host LLM as trusted instructions — the
+/// defect (A01) this collection exists to keep closed.
+#[test]
+fn skill_trust_registry_outcomes() {
+    let path = vectors_dir().join("skill-trust/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let keys = load_json(&base.join(doc["keys_file"].as_str().expect("keys_file")));
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let allowlist: Vec<String> = v["allowlist"]
+            .as_array()
+            .expect("per-vector allowlist")
+            .iter()
+            .map(|entry| {
+                let key_name = entry.as_str().expect("allowlist name");
+                keys.pointer(&format!("/{key_name}/publicKey"))
+                    .and_then(|k| k.as_str())
+                    .unwrap_or_else(|| panic!("{name}: allowlist entry {key_name:?} not in keys_file"))
+                    .to_string()
+            })
+            .collect();
         let result = verify_fixture(&base, &allowlist, v);
         assert_verify_outcome(name, &v["expected"], &result);
     }

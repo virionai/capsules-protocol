@@ -154,6 +154,20 @@
         "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
       }
     },
+    "skill-trust/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": ["content_index"],
+      "lanes": {
+        "js": { "consumer": "sdk-js/test/skill-trust.test.js" },
+        "python": { "consumer": "sdk-py/tests/test_spec_registry.py" },
+        "rust": { "consumer": "verifier-rust/tests/spec_registry.rs" },
+        "swift": { "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift" },
+        "kotlin": { "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt" }
+      },
+      "notes": [
+        "Skill trust is DERIVED from the verify result, never read from the capsule (spec/trust.md 'Skill trust'). Vectors in this collection carry a per-vector `allowlist` of keypair names resolved against keys_file ([] = verify with no allowlist), because the same capsule bytes must classify differently at hosts with different trust configurations; `expected.skill_trust` pins {capsule_signed, skills:{id: tier}} exactly. tools/check-spec-vectors.mjs additionally walks the collection in the js lane."
+      ]
+    },
     "signing-input.json": {
       "kind": "signing-input",
       "lanes": {

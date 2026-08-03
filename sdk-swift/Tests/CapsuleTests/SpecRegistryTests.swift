@@ -180,6 +180,21 @@ final class SpecRegistryTests: XCTestCase {
                 "\(name): expected a note containing \(needle); got \(v.notes)"
             )
         }
+        // Skill-trust derivation (spec/trust.md "Skill trust"): the tier
+        // MUST come from the verify result — capsuleSigned plus the exact
+        // per-id map — never from any skill_trust member in the capsule.
+        if let want = expected["skill_trust"] as? [String: Any] {
+            let wantSigned = want["capsule_signed"] as? Bool ?? false
+            XCTAssertEqual(
+                v.skillTrust.capsuleSigned, wantSigned,
+                "\(name): expected skillTrust.capsuleSigned=\(wantSigned)"
+            )
+            let wantSkills = (want["skills"] as? [String: String]) ?? [:]
+            XCTAssertEqual(
+                v.skillTrust.skills, wantSkills,
+                "\(name): skillTrust.skills mismatch"
+            )
+        }
     }
 
     // MARK: - tamper-detection/vectors.json
@@ -240,6 +255,41 @@ final class SpecRegistryTests: XCTestCase {
         XCTAssertFalse(vectors.isEmpty, "signer-set registry is empty")
         for vector in vectors {
             let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - skill-trust/vectors.json
+
+    /// Skill trust is DERIVED from the verify result, never read from the
+    /// capsule (spec/trust.md "Skill trust"). The same capsule bytes
+    /// classify differently at hosts with different allowlists, so each
+    /// vector pins its own trust configuration: the per-vector `allowlist`
+    /// names keypairs in keys_file ([] = verify with no allowlist). A lane
+    /// that surfaces the fixture's own `skill_trust` manifest member as
+    /// trust hands prompt-injection text to a host LLM as trusted
+    /// instructions — the defect (A01) this collection keeps closed.
+    func testSkillTrustRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("skill-trust/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keysDoc = try loadJSON(
+            base.appendingPathComponent(try XCTUnwrap(doc["keys_file"] as? String))
+                .standardizedFileURL
+        )
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "skill-trust registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let names = try XCTUnwrap(vector["allowlist"] as? [String], "\(name): allowlist")
+            var keys: Set<String> = []
+            for keyName in names {
+                let pk = (keysDoc[keyName] as? [String: Any])?["publicKey"] as? String
+                keys.insert(try XCTUnwrap(pk, "\(name): allowlist entry \(keyName) not in keys_file"))
+            }
             let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
             let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
             let bytes = try Data(contentsOf: base.appendingPathComponent(file))

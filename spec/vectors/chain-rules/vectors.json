@@ -2,7 +2,7 @@
   "meta": {
     "name": "chain-rules",
     "spec_version": "0.6",
-    "description": "Language-neutral expected verifier outcomes for the per-event field rules in chain.md (verification steps 6 and 7). The step-6 actor rule is CONDITIONAL on the manifest's own claim: a NON-EMPTY participants[] binds every event actor to the declared set (or the literal system:host), fail-closed; an EMPTY participants[] is the manifest making no claim about who acted — a weaker claim made honestly — so verification succeeds and the verifier MUST report the unbound actor set machine-readably (expected.actor_set_bound) and in notes. Conditioning on the list is safe because participants is covered by manifest_hash inside the signed payload. The kind enum is closed in EVERY tier. All three capsules are cryptographically well-formed — real signatures, correct manifest hash, correct content index — so a verifier that skips the rule under test reports the wrong outcome and fails this registry.",
+    "description": "Language-neutral expected verifier outcomes for the per-event field rules in chain.md (verification steps 6 and 7) plus the manifest.md participants[].actor_id namespace grammar. The step-6 actor rule is CONDITIONAL on the manifest's own claim: a NON-EMPTY participants[] binds every event actor to the declared set (or the literal system:host), fail-closed; an EMPTY participants[] is the manifest making no claim about who acted — a weaker claim made honestly — so verification succeeds and the verifier MUST report the unbound actor set machine-readably (expected.actor_set_bound) and in notes. Conditioning on the list is safe because participants is covered by manifest_hash inside the signed payload. The kind enum is closed in EVERY tier, and so is the actor_id namespace set (human/ai/system/capsule, non-empty id) for every DECLARED participant. All capsules are cryptographically well-formed — real signatures, correct manifest hash, correct content index — so a verifier that skips the rule under test reports the wrong outcome and fails this registry.",
     "generator": "sdk-js/tools/generate-chain-rule-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
@@ -10,7 +10,8 @@
   "notes": [
     "chain.md verification step 6: when manifest.participants[] is non-empty, confirm actor appears in it or is system:host; when empty, report the unbound actor set instead of rejecting.",
     "chain.md verification step 7: kind is one of decision | observation | mutation | session | checkpoint; readers reject unknown kinds unconditionally.",
-    "Both rules are per-event: a conformant reader reports which seq failed which check and does not stop at the first error."
+    "Both rules are per-event: a conformant reader reports which seq failed which check and does not stop at the first error.",
+    "manifest.md field rules: every declared participants[].actor_id must match human:<id>, ai:<id>, system:<id>, or capsule:<id> with a non-empty <id> — the namespace set is closed. Writers refuse the shape; verifiers reject it fail-closed (a declared set that cannot be interpreted is not a weaker claim)."
   ],
   "vectors": [
     {
@@ -72,6 +73,16 @@
         "error_includes": "untrusted_payload_fields[0] is not a valid payload path"
       },
       "note": "chain.md 'Untrusted content' path grammar: every entry must match payload(.segment)+ with segment = [A-Za-z0-9_-]+. The single event carries the entry \"not-payload.note\", correctly hashed and signed, so only the grammar rule decides it. A marking a host cannot resolve silently unmarks LLM-authored content — verifiers reject it fail-closed (addendum A15)."
+    },
+    {
+      "name": "invalid-actor-namespace",
+      "capsule_file": "output/invalid-actor-namespace.capsule",
+      "expected": {
+        "ok": false,
+        "actor_set_bound": true,
+        "error_includes": "does not match an allowed namespace"
+      },
+      "note": "manifest.md field rules (finding A06): the declared participant's actor_id is robot:origin — outside the closed namespace set human:/ai:/system:/capsule:. The single event names the SAME actor, so the step-6 membership rule passes and only the namespace grammar decides the outcome. Correctly hashed and signed: a verifier without the grammar check reports ok=true and fails this registry."
     }
   ]
 }

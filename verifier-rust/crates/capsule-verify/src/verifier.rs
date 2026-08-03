@@ -78,6 +78,10 @@ pub enum TopErrorCategory {
     /// `manifest.originator.public_key` has no valid envelope signature
     /// with role "originator"
     OriginatorBinding,
+    /// a declared `manifest.participants[].actor_id` outside the closed
+    /// namespace grammar (`human:`/`ai:`/`system:`/`capsule:` with a
+    /// non-empty id — manifest.md field rules, finding A06)
+    ActorId,
     /// cipher / encrypted-blob inconsistencies: unsupported cipher,
     /// `envelope.encrypted_blob_hash` mismatch with the recomputed
     /// `sha256(content.enc)`, or encrypted blob present with cipher='none'
@@ -243,6 +247,21 @@ pub struct VerifyResult {
     /// deserializable (defaulting to the fail-closed "unread" shape).
     #[serde(default)]
     pub format_version: FormatVersionCheck,
+    /// Derived skill-trust classification (spec/trust.md "Skill trust").
+    /// The tier is host-relative — it depends on the allowlist THIS
+    /// verification ran with — so it derives from the verify result and
+    /// is never read from the capsule: v0.6 has no `manifest.skill_trust`
+    /// member, and a capsule carrying one (earlier drafts, hostile
+    /// authors) contributes an inert unknown member to the hash and
+    /// nothing here. The classification is capsule-level in reality (one
+    /// envelope signature covers the whole content index); per-id
+    /// variation only reflects whether that skill ships an indexed
+    /// skill.json. Computed over the OUTER files: an encrypted outer has
+    /// no skills, so it reports an empty map there. `#[serde(default)]`
+    /// keeps pre-field JSON deserializable (defaulting to the
+    /// fail-closed unsigned shape).
+    #[serde(default)]
+    pub skill_trust: SkillTrustCheck,
     /// Inner envelope signature check, populated when L3 verification ran
     /// and the inner envelope was successfully parsed. None for plain
     /// capsules, L2-only paths (no recipient key), or when L3 failed
@@ -342,6 +361,20 @@ impl Default for FormatVersionCheck {
             accepted_by_policy: None,
         }
     }
+}
+
+/// Derived skill-trust classification (see [`VerifyResult::skill_trust`]).
+/// The derived `Default` — `capsule_signed: false`, empty map — is the
+/// fail-closed shape used by every early-return path.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillTrustCheck {
+    /// `content_index.ok && envelope.ok && trusted_signer_count > 0`:
+    /// every content-indexed byte is covered by at least one valid
+    /// signature from a key on the caller's allowlist.
+    pub capsule_signed: bool,
+    /// Skill id -> "signed" | "unsigned". "signed" iff `capsule_signed`
+    /// AND `skills/<id>/skill.json` is listed in the content index.
+    pub skills: std::collections::BTreeMap<String, String>,
 }
 
 /// Aggregate envelope-signature results.
@@ -1016,6 +1049,24 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 .to_string(),
         );
     }
+    // manifest.md field rules (A06): every DECLARED actor_id must sit in
+    // the closed namespace set (human/ai/system/capsule, non-empty id).
+    // Unlike an empty participants[], an uninterpretable declared entry
+    // is not a weaker claim — it is a malformed one, rejected fail-closed.
+    // Conformance vector: chain-rules/invalid-actor-namespace. (A bare
+    // non-object participants entry already fails this lane's typed
+    // manifest parse before reaching here.)
+    for (i, p) in manifest.participants.iter().enumerate() {
+        if !crate::chain::is_valid_actor_id(&p.actor_id) {
+            errors.push(TopError::outer(
+                TopErrorCategory::ActorId,
+                format!(
+                    "manifest.participants[{i}].actor_id {:?} does not match an allowed namespace (human:, ai:, system:, capsule:)",
+                    p.actor_id
+                ),
+            ));
+        }
+    }
 
     // ---- (10c) originator binding (invariant) ---------------------------
     // The manifest names an originator key — that key must actually have
@@ -1033,6 +1084,17 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // roles is one trusted key, and duplicate rows must never inflate a
     // quorum.
     let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
+
+    // ---- (11b) derived skill trust --------------------------------------
+    // DERIVED from this verification, never read from the capsule
+    // (spec/trust.md "Skill trust").
+    let skill_trust_check = derive_skill_trust(
+        &files,
+        &manifest,
+        content_index_check.ok,
+        envelope_check.ok,
+        trusted_signer_count,
+    );
 
     // ---- (12) advisory notes --------------------------------------------
     // `no_allowlist` came from step 0 and counts only well-formed entries,
@@ -1083,6 +1145,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         signer_set: signer_set_check,
         actor_set: actor_set_check,
         format_version: format_version_check,
+        skill_trust: skill_trust_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -1259,6 +1322,45 @@ pub(crate) fn originator_binding_error(
 }
 
 /// Count DISTINCT trusted public keys (lowercased), never signer rows.
+/// Derive the skill-trust classification (spec/trust.md "Skill trust"):
+/// `capsule_signed = content_index_ok && envelope_ok &&
+/// trusted_signer_count > 0`; a skill id (any `skills/<id>/skill.json` or
+/// `skills/<id>/SKILL.md` in the package, `decryption` excluded) is
+/// "signed" iff `capsule_signed` AND its `skill.json` path is listed in
+/// `manifest.content_index.files`.
+fn derive_skill_trust(
+    files: &BTreeMap<String, Vec<u8>>,
+    manifest: &Manifest,
+    content_index_ok: bool,
+    envelope_ok: bool,
+    trusted_signer_count: usize,
+) -> SkillTrustCheck {
+    let capsule_signed = content_index_ok && envelope_ok && trusted_signer_count > 0;
+    let indexed: std::collections::BTreeSet<&str> = manifest
+        .content_index
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    let mut skills = std::collections::BTreeMap::new();
+    for path in files.keys() {
+        let Some(rest) = path.strip_prefix("skills/") else { continue };
+        let mut parts = rest.splitn(2, '/');
+        let (Some(id), Some(file)) = (parts.next(), parts.next()) else { continue };
+        if id == "decryption" || (file != "skill.json" && file != "SKILL.md") {
+            continue;
+        }
+        let json_path = format!("skills/{id}/skill.json");
+        let tier = if capsule_signed && indexed.contains(json_path.as_str()) {
+            "signed"
+        } else {
+            "unsigned"
+        };
+        skills.insert(id.to_string(), tier.to_string());
+    }
+    SkillTrustCheck { capsule_signed, skills }
+}
+
 pub(crate) fn distinct_trusted_keys(outcomes: &[SignerOutcome]) -> usize {
     outcomes
         .iter()
@@ -1659,10 +1761,12 @@ fn assemble_result(
         content_index: content_index_check,
         envelope: envelope_check,
         // Early-return shape: fail-closed (bound=false, ok=false) — the
-        // capsule never reached the signer-set or actor-set checks.
+        // capsule never reached the signer-set, actor-set, or skill-trust
+        // checks.
         signer_set: SignerSetCheck::default(),
         actor_set: ActorSetCheck::default(),
         format_version,
+        skill_trust: SkillTrustCheck::default(),
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
@@ -2134,7 +2238,6 @@ mod tests {
                 "files": [],
                 "index_hash": "0".repeat(64)
             },
-            "skill_trust": {},
             "encryption": null,
             "created_at": "2026-01-01T00:00:00Z"
         });
@@ -2238,7 +2341,6 @@ mod tests {
                 "files": [],
                 "index_hash": "0".repeat(64)
             },
-            "skill_trust": {},
             "encryption": null,
             "created_at": "2026-01-01T00:00:00Z"
         });
@@ -2345,8 +2447,7 @@ mod tests {
                 "participants": [],
                 "first_event_hash": "0".repeat(64),
                 "content_index": {"files": [], "index_hash": "0".repeat(64)},
-                "skill_trust": {},
-                "encryption": null,
+                    "encryption": null,
                 "created_at": "2026-01-01T00:00:00Z"
             }),
             serde_json::json!({
@@ -2382,8 +2483,7 @@ mod tests {
                 "participants": [],
                 "first_event_hash": "2".repeat(64),
                 "content_index": {"files": [], "index_hash": "0".repeat(64)},
-                "skill_trust": {},
-                "encryption": null,
+                    "encryption": null,
                 "created_at": "2026-01-01T00:00:00Z"
             }),
             serde_json::json!({

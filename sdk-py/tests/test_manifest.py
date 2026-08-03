@@ -90,7 +90,6 @@ def test_build_manifest_shape():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
@@ -102,7 +101,7 @@ def test_build_manifest_shape():
     assert m["originator"] == {"public_key": "a" * 64, "label": "Acme"}
     assert m["first_event_hash"] == "b" * 64
     assert m["content_index"] is ci
-    assert m["skill_trust"] == {}
+    assert "skill_trust" not in m  # removed: trust derives at verify time
     assert m["encryption"] is None
     assert m["created_at"] == "2026-05-07T12:00:00Z"
 
@@ -114,7 +113,6 @@ def test_manifest_hash_recomputable():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
@@ -130,7 +128,6 @@ def test_manifest_bytes_is_jcs():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )

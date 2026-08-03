@@ -72,7 +72,7 @@ async function buildFixtures() {
     originator: { publicKey: originator.publicKeyHex, label: "CLI Smoke" },
     participants: [
       { actor_id: "human:cli", role: "originator", label: "CLI Test" },
-      { actor_id: "tool:smoke", role: "verifier", label: "Smoke Test" },
+      { actor_id: "system:smoke", role: "verifier", label: "Smoke Test" },
     ],
   });
 
@@ -82,7 +82,6 @@ async function buildFixtures() {
   builder.addSkill("smoke", {
     json: { id: "smoke", description: "CLI smoke-test skill fixture" },
     markdown: "# Smoke\n\nLocal test fixture.\n",
-    signed: true,
   });
 
   await builder.appendEvent({
@@ -94,7 +93,7 @@ async function buildFixtures() {
     payload: { summary: "Created CLI smoke fixture" },
   });
   await builder.appendEvent({
-    actor: "tool:smoke",
+    actor: "system:smoke",
     kind: "observation",
     action: "reviewed",
     target: "payload/observation.txt",
@@ -369,6 +368,14 @@ section("verify - trust policy drives the verdict (F04)");
       && missParsed.trust.policy === "allowlist"
       && missParsed.trust.satisfied === false
       && missParsed.trust.trusted_signer_count === 0);
+  // Skill trust is DERIVED from the allowlist at verify time
+  // (spec/trust.md "Skill trust"): an unmatched allowlist means the
+  // fixture's skill classifies unsigned, whatever the capsule claims.
+  check("unmatched --json derives skill_trust unsigned",
+    missParsed && missParsed.skill_trust
+      && missParsed.skill_trust.capsule_signed === false
+      && missParsed.skill_trust.skills
+      && missParsed.skill_trust.skills.smoke === "unsigned");
 
   const matchJson = run(["verify", CLEAN, "--allowlist", okKey, "--json"]);
   let matchParsed;
@@ -377,6 +384,11 @@ section("verify - trust policy drives the verdict (F04)");
     matchParsed && matchParsed.ok === true && matchParsed.trust
       && matchParsed.trust.satisfied === true
       && matchParsed.trust.trusted_signer_count === 1);
+  check("matched --json derives skill_trust signed",
+    matchParsed && matchParsed.skill_trust
+      && matchParsed.skill_trust.capsule_signed === true
+      && matchParsed.skill_trust.skills
+      && matchParsed.skill_trust.skills.smoke === "signed");
 
   // No allowlist: no policy. PASS, but the verdict must say what it covers.
   const none = run(["verify", CLEAN]);
