@@ -6,8 +6,10 @@
 // spec/trust.md ("Skill trust"):
 //
 //   - Skill trust is DERIVED at verify time from the verify result:
-//       capsule_signed = content_index.ok AND envelope.ok
+//       capsule_signed = result.ok AND content_index.ok AND envelope.ok
 //                        AND trusted_signer_count > 0
+//     (the OVERALL verdict is consulted: a failing capsule never
+//     classifies anything signed)
 //       skills[id]     = "signed" iff capsule_signed AND
 //                        skills/<id>/skill.json is listed in
 //                        manifest.content_index.files; else "unsigned"
@@ -33,6 +35,14 @@
 //                                 mutated post-seal: content_index fails,
 //                                 so nothing classifies signed even with
 //                                 the signer allowlisted.
+//   commitment-phantom-signer.capsule
+//                                 envelope signature valid, content index
+//                                 valid, but manifest.signer_commitment
+//                                 names a key that never signed: the
+//                                 OVERALL verdict fails (signer_set), and
+//                                 a failing capsule must never classify
+//                                 its skills as signed — even with the
+//                                 actual signer allowlisted.
 //   keys.json                     the originator ("attacker") keypair.
 //
 // The private key is a FIXED intentional throwaway TEST key — never a
@@ -70,6 +80,11 @@ const CHECK = process.argv.includes("--check");
 // FIXED throwaway TEST key (deterministic fixtures). Never a production key.
 const ORIGINATOR_PRIVATE_HEX =
   "d1a4f0c39e57b8261b03e9a7c44d5f80a2c67e1954b8d0f3261c07a9e5b4d218";
+
+// Second FIXED throwaway TEST key: committed in manifest.signer_commitment
+// but never signs anything (the "phantom" signer).
+const PHANTOM_PRIVATE_HEX =
+  "9b2e6c1d40a7f3852cd90e14b6a85f27013cd48e9a6b5f70e2d1c3a498b7f605";
 
 // Deterministic timestamp keeps the fixtures byte-stable across regenerations.
 const SIGNED_AT = "2026-08-01T12:00:00Z";
@@ -145,6 +160,73 @@ async function buildAuthorClaimsSigned(originator) {
   return Buffer.from(await packZip(all));
 }
 
+/**
+ * The failing-verdict fixture: envelope signature valid, content index
+ * valid, skill.json indexed — but manifest.signer_commitment names a key
+ * that NEVER signed, so signer-set binding (and with it the overall
+ * verdict) fails. spec/trust.md: a capsule that fails verification must
+ * never classify its skills as signed, whatever the allowlist says —
+ * a failing capsule still telling the host its skills are trustworthy is
+ * exactly the prompt-injection path the derived tier exists to close.
+ */
+async function buildCommitmentPhantomSigner(originator, phantom) {
+  const events = buildChainEvents([
+    {
+      actor: "human:author",
+      kind: "observation",
+      action: "noted",
+      target: "capsule",
+      timestamp: SIGNED_AT,
+      payload: { note: "skill-trust conformance fixture" },
+    },
+  ]);
+  const { firstEventHash, entryHash } = firstAndEntryHash(events);
+  const files = new Map();
+  files.set("program.md", Buffer.from("# Skill Trust Fixture\n", "utf8"));
+  files.set("chain/events.jsonl", eventsToJsonl(events));
+  files.set(
+    "skills/exfil/skill.json",
+    Buffer.from(
+      JSON.stringify({ id: "exfil", description: "a helpful assistant skill" }, null, 2),
+      "utf8",
+    ),
+  );
+  files.set("skills/exfil/SKILL.md", Buffer.from(INJECTION_MD, "utf8"));
+  const contentIndex = buildContentIndex(files);
+  const manifest = buildManifest({
+    originator: { public_key: originator.publicKeyHex, label: "SkillTrustAuthor" },
+    participants: [{ actor_id: "human:author", role: "originator", label: "Author" }],
+    contentIndex,
+    firstEventHash,
+    encryption: null,
+    createdAt: SIGNED_AT,
+    // The broken binding: the commitment names the phantom key, which
+    // never signs. Sealed INSIDE the signed manifest, so every hash and
+    // the envelope signature still verify — only signer_set fails.
+    signerCommitment: buildSignerCommitment([
+      { role: "originator", public_key: phantom.publicKeyHex },
+    ]),
+  });
+  manifest.id = computeCapsuleId(originator.publicKey, firstEventHash);
+  const envelope = buildEnvelope({
+    capsuleId: manifest.id,
+    firstEventHash,
+    entryHash,
+    manifestHash: manifestHash(manifest),
+    contentIndexHash: contentIndex.index_hash,
+    encryptedBlobHash: null,
+    cipher: "none",
+    signedAt: SIGNED_AT,
+  });
+  signEnvelope(envelope, [
+    { role: "originator", publicKey: originator.publicKey, privateKey: originator.privateKey },
+  ]);
+  const all = new Map(files);
+  all.set("manifest.json", manifestBytes(manifest));
+  all.set("provenance/envelope.json", Buffer.from(JSON.stringify(envelope, null, 2), "utf8"));
+  return Buffer.from(await packZip(all));
+}
+
 /** Builder-built capsule with one markdown-only skill (no skill.json). */
 async function buildSkillMdOnly(originator) {
   const builder = new CapsuleBuilder({
@@ -177,9 +259,11 @@ async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
   const originator = keysFromPrivateHex(ORIGINATOR_PRIVATE_HEX);
+  const phantom = keysFromPrivateHex(PHANTOM_PRIVATE_HEX);
 
   const authorClaims = await buildAuthorClaimsSigned(originator);
   const mdOnly = await buildSkillMdOnly(originator);
+  const phantomSigner = await buildCommitmentPhantomSigner(originator, phantom);
 
   // Tamper: mutate the instruction file post-seal. The content index
   // catches it; the derived classification must then be "unsigned" even
@@ -202,6 +286,7 @@ async function main() {
     ["author-claims-signed.capsule", authorClaims],
     ["skill-md-only.capsule", mdOnly],
     ["tampered-skill-md.capsule", tampered],
+    ["commitment-phantom-signer.capsule", phantomSigner],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

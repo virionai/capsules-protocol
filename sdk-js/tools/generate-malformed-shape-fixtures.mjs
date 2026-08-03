@@ -149,6 +149,20 @@ async function main() {
     // An unknown manifest member with a non-canonicalizable number: the
     // manifest-hash recompute must report, not raise.
     "manifest-hostile-number.capsule": replaceData(base, "manifest.json", hostileManifest),
+
+    // participants declared as a bare object. spec/manifest.md fixes the
+    // member as an ARRAY when present; a wrong-type declaration is a
+    // malformed shape, rejected at open — NOT silently skipped, which
+    // would no-op the actor-membership rule and the actor_id grammar
+    // check while looking exactly like an honest unbound capsule.
+    "participants-not-array.capsule": withManifest(base, (m) => {
+      m.participants = { actor_id: "robot:origin" };
+    }),
+
+    // participants declared as a bare string: same wrong-type rule.
+    "participants-string.capsule": withManifest(base, (m) => {
+      m.participants = "robot:origin";
+    }),
   };
 
   for (const [name, entries] of Object.entries(fixtures)) {

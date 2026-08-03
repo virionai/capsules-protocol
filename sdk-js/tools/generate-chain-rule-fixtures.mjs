@@ -132,7 +132,7 @@ async function seal(builder, keys) {
  * plain path exactly: real signature, correct manifest hash, correct
  * content index, so ONLY the rule under test decides the outcome.
  */
-async function buildLowLevelCapsule(keys, { participants, event }) {
+async function buildLowLevelCapsule(keys, { participants, event, mutateManifest }) {
   const events = buildChainEvents([event]);
   const { firstEventHash, entryHash } = firstAndEntryHash(events);
   const files = new Map();
@@ -153,6 +153,7 @@ async function buildLowLevelCapsule(keys, { participants, event }) {
       { role: "originator", public_key: keys.publicKeyHex },
     ]),
   });
+  if (mutateManifest) mutateManifest(manifest);
   const capsuleId = computeCapsuleId(keys.publicKey, firstEventHash);
   manifest.id = capsuleId;
   const envelope = buildEnvelope({
@@ -231,6 +232,22 @@ async function main() {
     event: bareEvent({ actor: "robot:origin" }),
   });
 
+  // (8) absent-participants (positive control): the manifest carries NO
+  // participants member at all. Absence is a weaker claim made honestly,
+  // exactly like the empty array (unbound-actors): every conformant
+  // verifier MUST verify this capsule with the actor set reported
+  // unbound. Only a PRESENT non-array declaration is malformed (see
+  // spec/vectors/malformed-shape participants-not-array). Built through
+  // the low-level path because the reference builder always writes the
+  // member.
+  const absentParticipants = await buildLowLevelCapsule(originator, {
+    participants: [],
+    event: bareEvent(),
+    mutateManifest: (m) => {
+      delete m.participants;
+    },
+  });
+
   // (6) invalid-untrusted-path: untrusted_payload_fields carries an entry
   // outside the normative grammar (chain.md "Untrusted content":
   // payload(.segment)+). Correctly hashed and signed — the marking is
@@ -257,6 +274,7 @@ async function main() {
     ["participant-without-label.capsule", participantWithoutLabel],
     ["invalid-untrusted-path.capsule", invalidUntrustedPath],
     ["invalid-actor-namespace.capsule", invalidActorNamespace],
+    ["absent-participants.capsule", absentParticipants],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

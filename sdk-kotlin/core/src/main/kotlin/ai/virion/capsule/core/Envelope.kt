@@ -3,7 +3,12 @@
 package ai.virion.capsule.core
 
 object Envelope {
-    const val VERSION = "0.6"
+    /**
+     * The version a NEW envelope declares — always the sealing version
+     * (computed, never a stored literal, so a version bump cannot leave
+     * the envelope declaring a stale era).
+     */
+    val VERSION: String get() = CapsuleVersions.CURRENT
     val SUPPORTED_CIPHERS = setOf("none", "ChaCha20-Poly1305")
 
     data class Signer(val role: String, val keyPair: CapsuleCrypto.Ed25519KeyPair)

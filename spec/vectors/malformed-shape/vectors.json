@@ -19,43 +19,106 @@
     {
       "name": "manifest-not-object",
       "capsule_file": "output/manifest-not-object.capsule",
-      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.json is not a JSON object" }
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.json is not a JSON object"
+      }
     },
     {
       "name": "missing-content-index",
       "capsule_file": "output/missing-content-index.capsule",
-      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index" }
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index"
+      }
     },
     {
       "name": "content-index-files-not-array",
       "capsule_file": "output/content-index-files-not-array.capsule",
-      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index.files" }
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index.files"
+      }
     },
     {
       "name": "content-index-entry-missing-sha256",
       "capsule_file": "output/content-index-entry-missing-sha256.capsule",
-      "expected": { "ok": false, "stage": "open", "reason": "invalid_manifest_shape", "detail": "manifest.content_index.files[0].sha256" }
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index.files[0].sha256"
+      }
     },
     {
       "name": "uppercase-event-hash",
       "capsule_file": "output/uppercase-event-hash.capsule",
-      "expected": { "ok": false, "failing": ["chain", "content_index"] }
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain",
+          "content_index"
+        ]
+      }
     },
     {
       "name": "uppercase-signer-key-hex",
       "capsule_file": "output/uppercase-signer-key-hex.capsule",
-      "expected": { "ok": false, "failing": ["envelope"] },
+      "expected": {
+        "ok": false,
+        "failing": [
+          "envelope"
+        ]
+      },
       "note": "The envelope signer's public_key is uppercased post-seal. It decodes to the same 32 key bytes, and signers[] sits outside the canonical payload, so a lane with a case-insensitive hex decoder still sees a valid signature and reports ok=true — the addendum-A11 differential. Canonical hex is lowercase on every hashed or signed surface: verifiers MUST treat a non-canonical signer key as an invalid signature (fail-closed, never an exception)."
     },
     {
       "name": "chain-event-not-object",
       "capsule_file": "output/chain-event-not-object.capsule",
-      "expected": { "ok": false, "failing": ["chain", "content_index"], "error_includes": "event is not a JSON object" }
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain",
+          "content_index"
+        ],
+        "error_includes": "event is not a JSON object"
+      }
     },
     {
       "name": "manifest-hostile-number",
       "capsule_file": "output/manifest-hostile-number.capsule",
-      "expected": { "ok": false, "error_includes": "manifest hash recompute failed" }
+      "expected": {
+        "ok": false,
+        "error_includes": "manifest hash recompute failed"
+      }
+    },
+    {
+      "name": "participants-not-array",
+      "capsule_file": "output/participants-not-array.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.participants"
+      },
+      "note": "participants declared as a bare object ({actor_id: 'robot:origin'}). The member is an ARRAY when present (spec/manifest.md); a wrong-type declaration is malformed, never silently skipped — a verifier that skips it no-ops the actor-membership rule and the actor_id namespace grammar while reporting the same shape as an honestly unbound capsule."
+    },
+    {
+      "name": "participants-string",
+      "capsule_file": "output/participants-string.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.participants"
+      },
+      "note": "participants declared as a bare string ('robot:origin'): same wrong-type rule as participants-not-array. Absence and the empty array remain legal (reduced assurance, actor_set unbound) — only a PRESENT non-array declaration is malformed."
     }
   ]
 }

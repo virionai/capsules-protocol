@@ -4,7 +4,7 @@
 // Run from the CLI directory after `npm install`: `npm test`.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -389,6 +389,35 @@ section("verify - trust policy drives the verdict (F04)");
       && matchParsed.skill_trust.capsule_signed === true
       && matchParsed.skill_trust.skills
       && matchParsed.skill_trust.skills.smoke === "signed");
+
+  // A FAILING capsule must never classify its skills as signed, even
+  // with the actual signer allowlisted (spec/trust.md: the derivation
+  // consults the OVERALL verdict). The spec vector: envelope signature
+  // valid, content index valid, but signer_commitment names a key that
+  // never signed — ok=false, and skills stay unsigned.
+  {
+    const base = join(ROOT, "..", "spec", "vectors", "skill-trust");
+    const phantom = join(base, "output", "commitment-phantom-signer.capsule");
+    const keys = JSON.parse(
+      readFileSync(join(base, "output", "keys.json"), "utf8"),
+    );
+    const res = run(["verify", phantom, "--allowlist", keys.originator.publicKey, "--json"]);
+    check("failing-verdict vector exits 1", res.code === 1);
+    let parsed;
+    try { parsed = JSON.parse(res.stdout); } catch { /* noop */ }
+    check("failing-verdict --json ok=false with signer_set failure",
+      parsed && parsed.ok === false && parsed.integrity_ok === false
+        && parsed.signer_set && parsed.signer_set.ok === false);
+    check("failing verdict never derives skill_trust signed",
+      parsed && parsed.skill_trust
+        && parsed.skill_trust.capsule_signed === false
+        && parsed.skill_trust.skills
+        && parsed.skill_trust.skills.exfil === "unsigned");
+    const human = run(["verify", phantom, "--allowlist", keys.originator.publicKey]);
+    check("failing-verdict human report FAILs", /Result: FAIL/.test(human.stdout));
+    check("failing-verdict human report derives unsigned",
+      /skills \(derived\):\s+exfil=unsigned/.test(human.stdout));
+  }
 
   // No allowlist: no policy. PASS, but the verdict must say what it covers.
   const none = run(["verify", CLEAN]);

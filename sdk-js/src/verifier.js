@@ -67,8 +67,17 @@ const SKILL_PATH = /^skills\/([^/]+)\/(skill\.json|SKILL\.md)$/;
  * the same `capsuleSigned` fact. Per-id variation only reflects whether
  * that skill ships a `skill.json` listed in the content index at all.
  */
-function deriveSkillTrust({ files, manifest, contentIndexOk, envelopeOk, trustedSignerCount }) {
-  const capsuleSigned = contentIndexOk && envelopeOk && trustedSignerCount > 0;
+function deriveSkillTrust({ files, manifest, verdictOk, contentIndexOk, envelopeOk, trustedSignerCount }) {
+  // The OVERALL verdict is consulted (spec/trust.md): a capsule that
+  // FAILS verification never classifies anything signed, whatever the
+  // allowlist says. Without result.ok, a capsule broken in a way that
+  // spares content_index and the envelope signatures (e.g. a
+  // signer_commitment naming a key that never signed) still tells the
+  // host its skills are trustworthy — the prompt-injection path the
+  // derived tier exists to close. content_index.ok / envelope.ok are
+  // kept in the conjunction for fail-closed redundancy.
+  const capsuleSigned =
+    verdictOk === true && contentIndexOk && envelopeOk && trustedSignerCount > 0;
   const indexedPaths = new Set(
     (Array.isArray(manifest?.content_index?.files) ? manifest.content_index.files : [])
       .map((f) => f?.path)
@@ -159,9 +168,12 @@ function peekFormatVersion(files) {
  *                 claim about who acted. Verification still succeeds; the
  *                 unbound actor set is reported here and in notes.
  * skillTrust is the DERIVED skill classification (spec/trust.md):
- *   capsuleSigned — contentIndex.ok && envelope.ok && trustedSignerCount>0,
- *                 i.e. every content-indexed byte is covered by at least one
- *                 valid signature from a key on THIS host's allowlist.
+ *   capsuleSigned — result.ok && contentIndex.ok && envelope.ok &&
+ *                 trustedSignerCount>0, i.e. the capsule VERIFIES and every
+ *                 content-indexed byte is covered by at least one valid
+ *                 signature from a key on THIS host's allowlist. The
+ *                 overall verdict is an input: a failing capsule never
+ *                 classifies anything signed.
  *   skills[id]  — "signed" iff capsuleSigned and skills/<id>/skill.json is
  *                 listed in the content index; otherwise "unsigned". The
  *                 fact is capsule-level (one signature covers the whole
@@ -239,6 +251,15 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   // signed payload, so an attacker cannot empty it without breaking the
   // signature). An empty set is a visibly weaker claim made honestly:
   // verification proceeds and the reduced assurance is reported.
+  // Shape defense for hand-constructed readers (the bytes path already
+  // rejects this at open): a PRESENT non-array participants is malformed,
+  // never a silent no-op of the actor rules (spec/manifest.md).
+  if (
+    manifest != null && typeof manifest === "object" &&
+    "participants" in manifest && !Array.isArray(manifest.participants)
+  ) {
+    errors.push("manifest.participants must be an array of participant objects");
+  }
   const participantIds = participantActorIds(manifest.participants);
   result.actorSet.bound = participantIds.size > 0;
   if (!result.actorSet.bound) {
@@ -553,18 +574,6 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     result.envelope.signers.filter((s) => s.trusted).map((s) => s.public_key.toLowerCase()),
   ).size;
 
-  // Skill trust: DERIVED from this verification, never read from the
-  // capsule. manifest.skill_trust does not exist in v0.6 — a capsule
-  // carrying one (earlier drafts, hostile authors) contributes an inert
-  // unknown member to the hash and NOTHING here (spec/trust.md).
-  result.skillTrust = deriveSkillTrust({
-    files,
-    manifest,
-    contentIndexOk: result.contentIndex.ok,
-    envelopeOk: result.envelope.ok,
-    trustedSignerCount: result.trustedSignerCount,
-  });
-
   // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
   // A present manifest.signer_commitment must equal the normalized
   // envelope signer set exactly (integrity invariant, fail-closed). An
@@ -660,6 +669,21 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     result.contentIndex.ok &&
     result.chain.ok &&
     result.envelope.ok;
+
+  // Skill trust: DERIVED from this verification, never read from the
+  // capsule. manifest.skill_trust does not exist in v0.6 — a capsule
+  // carrying one (earlier drafts, hostile authors) contributes an inert
+  // unknown member to the hash and NOTHING here (spec/trust.md).
+  // Derived AFTER result.ok so the overall verdict is an input: a
+  // failing capsule never classifies anything signed.
+  result.skillTrust = deriveSkillTrust({
+    files,
+    manifest,
+    verdictOk: result.ok,
+    contentIndexOk: result.contentIndex.ok,
+    envelopeOk: result.envelope.ok,
+    trustedSignerCount: result.trustedSignerCount,
+  });
 
   // Advisory notes: a PASS with trusted=false is never silent about why.
   // The unmatched case must never get LESS warning than the no-policy

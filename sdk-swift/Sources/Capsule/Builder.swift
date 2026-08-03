@@ -300,8 +300,13 @@ public final class CapsuleBuilder {
         // capsule sealed in Swift decrypts under JS and vice versa.
         let contentKey = Random.key32()
         let contentNonce = Random.nonce12()
+        // The AAD's version member is the SEALING version — the same
+        // value the manifest and envelope declare. The read side rebuilds
+        // this AAD keyed by the capsule's DECLARED version
+        // (spec/versioning.md), so a hardcoded era here would produce a
+        // capsule that verifies but cannot be decrypted after a bump.
         let aad = try JCS.bytes(.object([
-            ("version", .string("0.6")),
+            ("version", .string(CapsuleVersions.current)),
             ("capsule_id", .string(parts.capsuleId)),
             ("first_event_hash", .string(parts.firstHash)),
             ("originator_public_key", .string(originator.keyPair.publicKeyHex)),
@@ -319,10 +324,14 @@ public final class CapsuleBuilder {
         for r in recipients {
             let eph = X25519KeyPair.generate()
             let shared = try eph.dh(peerPublicKey: r.publicKey)
+            // Key-wrap HKDF info embeds the SEALING version; the reader
+            // selects it by the declared version (CapsuleVersions
+            // .keyWrapInfo(declared)), so both sides must derive from the
+            // one CapsuleVersions.current source of truth.
             let wrapKey = HKDF.sha256(
                 ikm: shared,
                 salt: r.publicKey,
-                info: Data("capsule-key-wrap-v0.6".utf8),
+                info: CapsuleVersions.keyWrapInfo(CapsuleVersions.current),
                 length: 32
             )
             let wrapNonce = Random.nonce12()

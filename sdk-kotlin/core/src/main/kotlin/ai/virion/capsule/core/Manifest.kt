@@ -27,13 +27,6 @@ object Manifest {
      */
     fun contentIndexExclusions(encrypted: Boolean): Set<String> =
         if (encrypted) CONTENT_INDEX_EXCLUDED else STRUCTURAL_EXCLUDED
-    /**
-     * The v0.6 capsule_id hash domain. Kept for byte-level reference;
-     * derivation now selects the domain BY the capsule's declared
-     * version via [CapsuleVersions.idDomain] (spec/versioning.md).
-     */
-    val ID_DOMAIN: ByteArray = CapsuleVersions.idDomain("0.6")
-
     fun computeCapsuleId(
         originatorPub: ByteArray,
         firstEventHashHex: String,
@@ -126,7 +119,10 @@ object Manifest {
         )
         return JCSValue.Obj(listOf(
             "format" to JCSValue.Obj(listOf(
-                "version" to JCSValue.Str("0.6"),
+                // The ONE sealing version (spec/versioning.md): every
+                // other version-keyed value in the seal path must agree
+                // with this declaration.
+                "version" to JCSValue.Str(CapsuleVersions.CURRENT),
                 "container" to JCSValue.Str("zip"),
                 "canonicalization" to JCSValue.Str("JCS-RFC8785"),
                 "hash_algorithm" to JCSValue.Str("SHA-256"),

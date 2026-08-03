@@ -1085,17 +1085,6 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // quorum.
     let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
 
-    // ---- (11b) derived skill trust --------------------------------------
-    // DERIVED from this verification, never read from the capsule
-    // (spec/trust.md "Skill trust").
-    let skill_trust_check = derive_skill_trust(
-        &files,
-        &manifest,
-        content_index_check.ok,
-        envelope_check.ok,
-        trusted_signer_count,
-    );
-
     // ---- (12) advisory notes --------------------------------------------
     // `no_allowlist` came from step 0 and counts only well-formed entries,
     // so an allowlist made up entirely of malformed values still gets the
@@ -1132,6 +1121,23 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         && signer_set_check.ok
         && inner_envelope_check.as_ref().is_none_or(|e| e.ok)
         && inner_content_index_check.as_ref().is_none_or(|ci| ci.ok);
+
+    // ---- (14) derived skill trust ---------------------------------------
+    // DERIVED from this verification, never read from the capsule
+    // (spec/trust.md "Skill trust"). Derived AFTER the final verdict so
+    // it is an input: a capsule that FAILS verification never classifies
+    // anything signed, whatever the allowlist says — without it, a
+    // capsule broken in a way that spares content_index and the envelope
+    // signatures (e.g. a signer_commitment naming a key that never
+    // signed) still tells the host its skills are trustworthy.
+    let skill_trust_check = derive_skill_trust(
+        &files,
+        &manifest,
+        ok,
+        content_index_check.ok,
+        envelope_check.ok,
+        trusted_signer_count,
+    );
 
     VerifyResult {
         ok,
@@ -1323,19 +1329,22 @@ pub(crate) fn originator_binding_error(
 
 /// Count DISTINCT trusted public keys (lowercased), never signer rows.
 /// Derive the skill-trust classification (spec/trust.md "Skill trust"):
-/// `capsule_signed = content_index_ok && envelope_ok &&
-/// trusted_signer_count > 0`; a skill id (any `skills/<id>/skill.json` or
-/// `skills/<id>/SKILL.md` in the package, `decryption` excluded) is
-/// "signed" iff `capsule_signed` AND its `skill.json` path is listed in
-/// `manifest.content_index.files`.
+/// `capsule_signed = verdict_ok && content_index_ok && envelope_ok &&
+/// trusted_signer_count > 0` — the OVERALL verdict is consulted, so a
+/// failing capsule never classifies anything signed; content_index /
+/// envelope stay in the conjunction for fail-closed redundancy. A skill
+/// id (any `skills/<id>/skill.json` or `skills/<id>/SKILL.md` in the
+/// package, `decryption` excluded) is "signed" iff `capsule_signed` AND
+/// its `skill.json` path is listed in `manifest.content_index.files`.
 fn derive_skill_trust(
     files: &BTreeMap<String, Vec<u8>>,
     manifest: &Manifest,
+    verdict_ok: bool,
     content_index_ok: bool,
     envelope_ok: bool,
     trusted_signer_count: usize,
 ) -> SkillTrustCheck {
-    let capsule_signed = content_index_ok && envelope_ok && trusted_signer_count > 0;
+    let capsule_signed = verdict_ok && content_index_ok && envelope_ok && trusted_signer_count > 0;
     let indexed: std::collections::BTreeSet<&str> = manifest
         .content_index
         .files

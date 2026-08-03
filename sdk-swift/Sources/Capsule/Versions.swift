@@ -17,13 +17,45 @@
 import Foundation
 
 public enum CapsuleVersions {
+    // Backing storage for the version table. Mutated ONLY by
+    // `simulatingBump` (test-only): production code reads the computed
+    // `known` / `current` and must never write these.
+    private static var knownStorage: [String] = ["0.6"]
+    private static var currentStorage: String = "0.6"
+
     /// Every format version this implementation knows, oldest → newest.
     /// A version is never removed (spec/versioning.md: dropping a
     /// version a verifier once knew is a conformance violation).
-    public static let known: [String] = ["0.6"]
+    public static var known: [String] { knownStorage }
 
-    /// The version this implementation SEALS at.
-    public static let current = "0.6"
+    /// The version this implementation SEALS at. Every version literal
+    /// the seal path emits or keys on (manifest.format.version,
+    /// envelope.version, the encryption AAD's version member, the
+    /// key-wrap HKDF info) MUST derive from this one value, so a future
+    /// bump has a single source of truth and cannot leave the encrypted
+    /// seal path keyed to a stale era.
+    public static var current: String { currentStorage }
+
+    /// TEST-ONLY: run `body` with the version table replaced, restoring
+    /// it afterwards. This simulates a future version bump in-process —
+    /// the regression class it exists for is a seal path that silently
+    /// keeps an old version in a domain string after `current` moves,
+    /// which produces capsules that VERIFY but cannot be decrypted.
+    static func simulatingBump<R>(
+        known newKnown: [String], current newCurrent: String, _ body: () throws -> R
+    ) rethrows -> R {
+        precondition(newKnown.contains(newCurrent),
+                     "current must be a member of the known table")
+        let savedKnown = knownStorage
+        let savedCurrent = currentStorage
+        knownStorage = newKnown
+        currentStorage = newCurrent
+        defer {
+            knownStorage = savedKnown
+            currentStorage = savedCurrent
+        }
+        return try body()
+    }
 
     /// Per-era algorithm-suite identifier (spec/versioning.md "Algorithm
     /// suites"): a v0.6 capsule names no algorithm anywhere in its

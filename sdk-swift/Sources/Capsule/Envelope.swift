@@ -3,7 +3,10 @@
 import Foundation
 
 public enum Envelope {
-    static let VERSION = "0.6"
+    /// The version a NEW envelope declares — always the sealing version
+    /// (computed, never a stored literal, so a version bump cannot leave
+    /// the envelope declaring a stale era).
+    static var VERSION: String { CapsuleVersions.current }
     static let SUPPORTED_CIPHERS: Set<String> = ["none", "ChaCha20-Poly1305"]
 
     public struct Signer {

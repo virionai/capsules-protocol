@@ -68,13 +68,26 @@ IS the capsule's author.
 The derivation, normative for every conforming verifier:
 
 ```
-capsule_signed = content_index.ok AND envelope.ok
+capsule_signed = result.ok AND content_index.ok AND envelope.ok
                  AND trusted_signer_count > 0
 tier(id)       = "signed"   iff capsule_signed AND
                              "skills/<id>/skill.json" is listed in
                              manifest.content_index.files
                  "unsigned" otherwise
 ```
+
+`result.ok` is the verification's OVERALL verdict, and consulting it is
+not redundancy: a capsule can fail verification in ways that spare both
+`content_index` and the envelope signatures — a `signer_commitment`
+naming a key that never signed, a broken chain, a manifest-hash
+mismatch. A derivation that skips the overall verdict lets exactly such
+a FAILING capsule classify its skills as `signed`, which is the
+prompt-injection path this tier exists to close: a host that shows the
+red verdict but still passes `SKILL.md` to its LLM as trusted
+instructions has enforced the attacker's claim anyway. `content_index.ok`
+and `envelope.ok` remain in the conjunction as fail-closed redundancy.
+Conformance vector: `failing-verdict-never-classifies-signed` in
+`spec/vectors/skill-trust/`.
 
 | Tier | Meaning | Foreign LLM treatment |
 |---|---|---|

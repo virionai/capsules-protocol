@@ -70,6 +70,17 @@ here.
   Conformance vector: `spec/vectors/signer-set/` (`originator-not-a-signer`).
 - `originator.label`: free-text, advisory only. Auditors verify the
   public key, not the label.
+- `participants`: an ARRAY of participant objects when present. The
+  member may be ABSENT, and the array may be EMPTY — both are the same
+  weaker claim made honestly (no assertion about who acted; verifiers
+  report an unbound actor set and proceed). A PRESENT `participants`
+  of any other type (object, string, number, …) is a malformed
+  manifest, rejected fail-closed: silently skipping it would no-op the
+  actor-membership rule and the `actor_id` grammar check below while
+  presenting exactly like an honest unbound capsule. Conformance
+  vectors: `spec/vectors/malformed-shape/` (`participants-not-array`,
+  `participants-string`); `spec/vectors/chain-rules/`
+  (`absent-participants`, `unbound-actors`).
 - `participants[].actor_id`: must match one of the patterns
   `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>` — the
   namespace set is CLOSED and `<id>` is any non-empty string

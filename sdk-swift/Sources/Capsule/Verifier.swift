@@ -253,8 +253,11 @@ public enum CapsuleVerifier {
             actorSetBound: outer.actorSetBound,
             formatVersion: outer.formatVersion,
             // Skills live inside the ciphertext: the inner verification's
-            // derived classification is the one that describes them.
-            skillTrust: innerResult.skillTrust,
+            // derived classification is the one that describes them —
+            // gated on the OVERALL L3 verdict (spec/trust.md): if any
+            // outer or cross-check fails, the composite result is a
+            // failing verification and must not classify anything signed.
+            skillTrust: ok ? innerResult.skillTrust : .failClosed,
             notes: outer.notes
         )
     }
@@ -686,8 +689,14 @@ public enum CapsuleVerifier {
 
         // Skill trust: DERIVED from this verification, never read from the
         // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
-        // member is an inert unknown member, never authority.
-        let capsuleSigned = contentIndexOk && env.ok && trustedCount > 0
+        // member is an inert unknown member, never authority. The OVERALL
+        // verdict is consulted: a capsule that FAILS verification never
+        // classifies anything signed — without `ok`, a capsule broken in
+        // a way that spares content_index and the envelope signatures
+        // (e.g. a signer_commitment naming a key that never signed) still
+        // tells the host its skills are trustworthy. contentIndexOk /
+        // env.ok stay in the conjunction for fail-closed redundancy.
+        let capsuleSigned = ok && contentIndexOk && env.ok && trustedCount > 0
         let indexedPaths = contentIndexPaths(parsed.manifest)
         var skillTiers: [String: String] = [:]
         for (path, _) in parsed.files {

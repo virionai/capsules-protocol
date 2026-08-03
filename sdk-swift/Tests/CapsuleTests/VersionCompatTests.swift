@@ -86,4 +86,70 @@ final class VersionCompatTests: XCTestCase {
         XCTAssertTrue(rejected.notes.contains(where: { $0.contains("accepted") }),
                       "got notes: \(rejected.notes)")
     }
+
+    /// REGRESSION — the seal path must be version-keyed end to end.
+    ///
+    /// Simulates the 0.6 → 0.7 bump the natural way (known table gains
+    /// "0.7", current moves to "0.7") and seals an ENCRYPTED capsule.
+    /// The defect this pins: Builder hardcoding the encryption AAD's
+    /// version member and the key-wrap HKDF info to "0.6" while the read
+    /// side keys both on the capsule's DECLARED version. That divergence
+    /// produces the worst failure shape — the sealed capsule VERIFIES
+    /// (AAD and wrap info are not covered by verification) but cannot be
+    /// decrypted by a conforming reader, silently destroying archival
+    /// recoverability. A test sealing only at the current version can
+    /// never catch this class, because every hardcoded "0.6" coincides
+    /// with current until the bump happens.
+    func testSealUnderNonCurrentDeclaredVersionRoundTripsDecrypt() throws {
+        try CapsuleVersions.simulatingBump(known: ["0.6", "0.7"], current: "0.7") {
+            let origin = Ed25519KeyPair.generate()
+            let recipient = X25519KeyPair.generate()
+            let builder = CapsuleBuilder(
+                originator: .init(keyPair: origin, label: "bump-sim"),
+                createdAt: "2026-05-12T20:00:00Z"
+            )
+            try builder
+                .setProgram("# Bump simulation\n")
+                .appendEvent(
+                    actor: "human:test", kind: "decision",
+                    action: "approved", target: "program.md",
+                    payload: .object([("decision", .string("go"))])
+                )
+            let sealed = try builder.seal(
+                signedAt: "2026-05-12T20:00:00Z",
+                recipients: [.init(publicKey: recipient.publicKeyBytes)]
+            )
+
+            // The sealed capsule declares the bumped version everywhere.
+            let outer = try CapsuleReader.parse(sealed.bytes)
+            guard case .object(let mfPairs) = outer.manifest,
+                  case .object(let fmt)? = mfPairs.first(where: { $0.0 == "format" })?.1,
+                  case .string(let mfVersion)? = fmt.first(where: { $0.0 == "version" })?.1
+            else { return XCTFail("outer manifest has no format.version") }
+            XCTAssertEqual(mfVersion, "0.7",
+                           "manifest.format.version must track CapsuleVersions.current")
+            guard case .object(let envPairs) = outer.envelope,
+                  case .string(let envVersion)? = envPairs.first(where: { $0.0 == "version" })?.1
+            else { return XCTFail("outer envelope has no version") }
+            XCTAssertEqual(envVersion, "0.7",
+                           "envelope.version must track CapsuleVersions.current")
+
+            // It verifies (AAD/wrap-info are NOT covered by verification —
+            // which is exactly why verification alone cannot catch the
+            // divergence)…
+            let l2 = CapsuleVerifier.verify(sealed.bytes, allowlist: [origin.publicKeyHex])
+            XCTAssertTrue(l2.ok, "L2 failed: \(l2.checks.filter { !$0.ok })")
+
+            // …and a conforming reader of the bumped era MUST be able to
+            // decrypt it: wrap-info and AAD on the seal side must have
+            // been keyed by the same declared version the reader keys on.
+            let inner = try CapsuleReader.openInner(
+                outer,
+                recipientPrivateKey: recipient.privateKeyBytes,
+                recipientPublicKey: recipient.publicKeyBytes
+            )
+            XCTAssertEqual(inner.programMd, "# Bump simulation\n")
+            XCTAssertEqual(inner.events.count, 1)
+        }
+    }
 }

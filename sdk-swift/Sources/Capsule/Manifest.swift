@@ -28,12 +28,9 @@ public enum Manifest {
         encrypted ? CONTENT_INDEX_EXCLUDED : STRUCTURAL_EXCLUDED
     }
 
-    /// The v0.6 capsule_id hash domain. Kept for byte-level reference;
-    /// derivation now selects the domain BY the capsule's declared
+    /// SHA-256("capsule-id-v<version>\0" || originator_pub ||
+    /// first_event_hash_raw) — the domain selected BY the declared
     /// version via `CapsuleVersions.idDomain` (spec/versioning.md).
-    public static let ID_DOMAIN = CapsuleVersions.idDomain("0.6")
-
-    /// SHA-256("capsule-id-v0.6\0" || originator_pub || first_event_hash_raw).
     public static func computeCapsuleId(originatorPub: Data, firstEventHashHex: String,
                                         version: String = CapsuleVersions.current) -> String
     {
@@ -172,7 +169,10 @@ public enum Manifest {
     ) -> [(String, JCSValue)] {
         [
             ("format", .object([
-                ("version", .string("0.6")),
+                // The ONE sealing version (spec/versioning.md): every
+                // other version-keyed value in the seal path must agree
+                // with this declaration.
+                ("version", .string(CapsuleVersions.current)),
                 ("container", .string("zip")),
                 ("canonicalization", .string("JCS-RFC8785")),
                 ("hash_algorithm", .string("SHA-256")),

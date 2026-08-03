@@ -278,8 +278,9 @@ export interface VerifyResult {
   formatVersion: FormatVersionReport;
   /**
    * DERIVED skill-trust classification (spec/trust.md "Skill trust").
-   * capsuleSigned is the single capsule-level fact — contentIndex.ok &&
-   * envelope.ok && trustedSignerCount > 0 — because ONE envelope
+   * capsuleSigned is the single capsule-level fact — ok (the overall
+   * verdict) && contentIndex.ok && envelope.ok && trustedSignerCount > 0
+   * — because ONE envelope
    * signature covers the whole content index; the format cannot make
    * skill A "signed" while skill B is "unsigned" under the same seal.
    * skills[id] is "signed" iff capsuleSigned and skills/<id>/skill.json

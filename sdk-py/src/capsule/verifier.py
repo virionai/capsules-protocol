@@ -61,8 +61,9 @@ class _FormatVersionResult(TypedDict):
 class _SkillTrustResult(TypedDict):
     """Derived skill classification (spec/trust.md "Skill trust").
 
-    ``capsule_signed`` is the single capsule-level fact — content_index.ok
-    and envelope.ok and trusted_signer_count > 0 — because ONE envelope
+    ``capsule_signed`` is the single capsule-level fact — ok (the overall
+    verdict) and content_index.ok and envelope.ok and
+    trusted_signer_count > 0 — because ONE envelope
     signature covers the whole content index. ``skills[id]`` is "signed"
     iff ``capsule_signed`` and ``skills/<id>/skill.json`` is listed in the
     content index. Hosts MUST take the tier from here: the format has no
@@ -234,6 +235,15 @@ def _verify_capsule_impl(
     # signed payload, so an attacker cannot empty it without breaking the
     # signature). An empty set is a visibly weaker claim made honestly:
     # verification proceeds and the reduced assurance is reported.
+    # Shape defense for hand-constructed readers (the bytes path already
+    # rejects this at open): a PRESENT non-array participants is malformed,
+    # never a silent no-op of the actor rules (spec/manifest.md).
+    if (
+        isinstance(manifest, dict)
+        and "participants" in manifest
+        and not isinstance(manifest["participants"], list)
+    ):
+        errors.append("manifest.participants must be an array of participant objects")
     result["actor_set"]["bound"] = bool(participant_actor_ids(manifest.get("participants")))
     if not result["actor_set"]["bound"]:
         notes.append(
@@ -574,35 +584,6 @@ def _verify_capsule_impl(
         {(s["public_key"] or "").lower() for s in signers if s["trusted"]}
     )
 
-    # Skill trust: DERIVED from this verification, never read from the
-    # capsule. A ``skill_trust`` manifest member does not exist in v0.6 —
-    # when present (earlier drafts, hostile authors) it is an inert
-    # unknown member (spec/trust.md "Skill trust"). The classification is
-    # capsule-level in reality: one envelope signature covers the whole
-    # content index, so every skill under one seal shares capsule_signed;
-    # per-id variation only reflects whether that skill ships an indexed
-    # skill.json at all.
-    capsule_signed = bool(
-        result["content_index"]["ok"]
-        and result["envelope"]["ok"]
-        and result["trusted_signer_count"] > 0
-    )
-    indexed_paths = {f.get("path") for f in stored_files}
-    skill_map: dict[str, str] = {}
-    for path in files:
-        m = _SKILL_PATH_RE.match(path)
-        if m is None:
-            continue
-        sid = m.group(1)
-        if sid == "decryption":  # encryption metadata, not a skill
-            continue
-        skill_map[sid] = (
-            "signed"
-            if capsule_signed and f"skills/{sid}/skill.json" in indexed_paths
-            else "unsigned"
-        )
-    result["skill_trust"] = {"capsule_signed": capsule_signed, "skills": skill_map}
-
     # Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS.
     # A present manifest.signer_commitment must equal the normalized
     # envelope signer set exactly (integrity invariant, fail-closed). An
@@ -708,4 +689,40 @@ def _verify_capsule_impl(
         and result["chain"]["ok"]
         and result["envelope"]["ok"]
     )
+
+    # Skill trust: DERIVED from this verification, never read from the
+    # capsule. A ``skill_trust`` manifest member does not exist in v0.6 —
+    # when present (earlier drafts, hostile authors) it is an inert
+    # unknown member (spec/trust.md "Skill trust"). Derived AFTER the
+    # overall verdict so it is an input: a capsule that FAILS verification
+    # never classifies anything signed, whatever the allowlist says —
+    # without it, a capsule broken in a way that spares content_index and
+    # the envelope signatures (e.g. a signer_commitment naming a key that
+    # never signed) still tells the host its skills are trustworthy.
+    # content_index.ok / envelope.ok stay in the conjunction for
+    # fail-closed redundancy. Capsule-level in reality: one envelope
+    # signature covers the whole content index, so every skill under one
+    # seal shares capsule_signed; per-id variation only reflects whether
+    # that skill ships an indexed skill.json at all.
+    capsule_signed = bool(
+        result["ok"]
+        and result["content_index"]["ok"]
+        and result["envelope"]["ok"]
+        and result["trusted_signer_count"] > 0
+    )
+    indexed_paths = {f.get("path") for f in stored_files}
+    skill_map: dict[str, str] = {}
+    for path in files:
+        m = _SKILL_PATH_RE.match(path)
+        if m is None:
+            continue
+        sid = m.group(1)
+        if sid == "decryption":  # encryption metadata, not a skill
+            continue
+        skill_map[sid] = (
+            "signed"
+            if capsule_signed and f"skills/{sid}/skill.json" in indexed_paths
+            else "unsigned"
+        )
+    result["skill_trust"] = {"capsule_signed": capsule_signed, "skills": skill_map}
     return result

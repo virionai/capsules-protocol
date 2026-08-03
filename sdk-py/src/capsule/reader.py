@@ -51,6 +51,14 @@ def _validate_manifest_shape(manifest) -> None:
         raise MalformedCapsuleError(
             "manifest.originator.public_key must be a 64-char lowercase hex string"
         )
+    # participants is an ARRAY when present (spec/manifest.md). An absent
+    # member (and an empty array) is the legal unbound-actor-set shape; a
+    # PRESENT non-array declaration is malformed — silently skipping it
+    # would no-op the actor-membership rule and the actor_id grammar check.
+    if "participants" in manifest and not isinstance(manifest["participants"], list):
+        raise MalformedCapsuleError(
+            "manifest.participants must be an array of participant objects"
+        )
     # null is legal: an empty chain is the weakest honest shape, and then
     # there is no first event for this to commit to. The verifier enforces
     # the null-anchor / event-count consistency; the reader only rejects

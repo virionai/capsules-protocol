@@ -139,6 +139,14 @@ pub struct Manifest {
     pub format: FormatBlock,
     pub id: String,
     pub originator: Originator,
+    /// An ARRAY when present (spec/manifest.md). `#[serde(default)]`
+    /// keeps a capsule with NO `participants` member parseable: absence
+    /// is the same honest weaker claim as the empty array (unbound actor
+    /// set, reported), never a rejection. A PRESENT non-array value still
+    /// fails deserialization — the malformed-shape rule (conformance:
+    /// malformed-shape `participants-not-array` / `participants-string`,
+    /// chain-rules `absent-participants`).
+    #[serde(default)]
     pub participants: Vec<Participant>,
     /// `None` is the legal zero-event shape (spec/chain.md "Empty
     /// chains"): a capsule with no events has no first event to hash, so

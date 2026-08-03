@@ -19,7 +19,9 @@
       "capsule_file": "output/actor-not-participant.capsule",
       "expected": {
         "ok": false,
-        "failing": ["chain"],
+        "failing": [
+          "chain"
+        ],
         "actor_set_bound": true,
         "error_includes": "not in manifest.participants and not system:host"
       },
@@ -30,7 +32,9 @@
       "capsule_file": "output/unknown-kind.capsule",
       "expected": {
         "ok": false,
-        "failing": ["chain"],
+        "failing": [
+          "chain"
+        ],
         "error_includes": "is not one of decision, observation, mutation, session, checkpoint"
       },
       "note": "The single event declares kind \"gossip\". Closed enum in every tier: a custom kind is not a weaker claim, it is unreadable to the foreign LLM reader."
@@ -50,7 +54,9 @@
       "capsule_file": "output/non-contiguous-seq.capsule",
       "expected": {
         "ok": false,
-        "failing": ["chain"],
+        "failing": [
+          "chain"
+        ],
         "error_includes": "seq 2 expected 1"
       },
       "note": "chain.md verification step 5: seq is strictly monotonic from 1. The single event carries seq=2, correctly hashed and signed, so only the seq rule can fail it. A verifier that trusts the stored seq or merely counts events reports ok=true."
@@ -69,7 +75,9 @@
       "capsule_file": "output/invalid-untrusted-path.capsule",
       "expected": {
         "ok": false,
-        "failing": ["chain"],
+        "failing": [
+          "chain"
+        ],
         "error_includes": "untrusted_payload_fields[0] is not a valid payload path"
       },
       "note": "chain.md 'Untrusted content' path grammar: every entry must match payload(.segment)+ with segment = [A-Za-z0-9_-]+. The single event carries the entry \"not-payload.note\", correctly hashed and signed, so only the grammar rule decides it. A marking a host cannot resolve silently unmarks LLM-authored content — verifiers reject it fail-closed (addendum A15)."
@@ -83,6 +91,16 @@
         "error_includes": "does not match an allowed namespace"
       },
       "note": "manifest.md field rules (finding A06): the declared participant's actor_id is robot:origin — outside the closed namespace set human:/ai:/system:/capsule:. The single event names the SAME actor, so the step-6 membership rule passes and only the namespace grammar decides the outcome. Correctly hashed and signed: a verifier without the grammar check reports ok=true and fails this registry."
+    },
+    {
+      "name": "absent-participants",
+      "capsule_file": "output/absent-participants.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": false,
+        "notes_includes": "chain actors are not bound to a declared participant set"
+      },
+      "note": "Positive control for the participants shape rule: the manifest carries NO participants member at all. Absence is not a violation — the capsule MUST verify with the actor set reported unbound, exactly like the empty array (unbound-actors). Only a PRESENT non-array declaration is malformed (malformed-shape: participants-not-array / participants-string). A lane whose typed manifest view REQUIRES the member refuses a spec-valid capsule."
     }
   ]
 }

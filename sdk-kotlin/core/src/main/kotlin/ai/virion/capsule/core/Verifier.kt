@@ -503,8 +503,14 @@ object CapsuleVerifier {
 
         // Skill trust: DERIVED from this verification, never read from the
         // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
-        // member is an inert unknown member, never authority.
-        val capsuleSigned = contentIndexOk && env.ok && trustedCount > 0
+        // member is an inert unknown member, never authority. The OVERALL
+        // verdict is consulted: a capsule that FAILS verification never
+        // classifies anything signed — without `ok`, a capsule broken in
+        // a way that spares content_index and the envelope signatures
+        // (e.g. a signer_commitment naming a key that never signed) still
+        // tells the host its skills are trustworthy. contentIndexOk /
+        // env.ok stay in the conjunction for fail-closed redundancy.
+        val capsuleSigned = ok && contentIndexOk && env.ok && trustedCount > 0
         val indexedPaths = contentIndexPaths(parsed.manifest)
         val skillTiers = mutableMapOf<String, String>()
         for (path in parsed.files.keys) {

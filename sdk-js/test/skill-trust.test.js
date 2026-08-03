@@ -229,8 +229,13 @@ test("spec/vectors/skill-trust registry outcomes reproduce in this lane", async 
     const result = await verifyCapsule(bytes, { allowlist });
     assert.equal(result.ok, v.expected.ok, `${v.name}: ok (${JSON.stringify(result.errors)})`);
     for (const area of v.expected.failing ?? []) {
-      assert.equal(area, "content_index", `${v.name}: unknown failing area ${area}`);
-      assert.equal(result.contentIndex.ok, false, `${v.name}: content_index must fail`);
+      if (area === "content_index") {
+        assert.equal(result.contentIndex.ok, false, `${v.name}: content_index must fail`);
+      } else if (area === "signer_set") {
+        assert.equal(result.signerSet.ok, false, `${v.name}: signer_set must fail`);
+      } else {
+        assert.fail(`${v.name}: unknown failing area ${area}`);
+      }
     }
     const want = v.expected.skill_trust;
     assert.equal(

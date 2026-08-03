@@ -52,6 +52,73 @@ incompatible wire changes ship as `0.7`).
 
 ### Security
 
+- **The Swift builder's encrypted seal path is now version-keyed — a
+  future version bump can no longer silently destroy archival
+  recoverability.** The E3 version-compatibility work keyed every
+  READ-side domain string to the capsule's declared version, but
+  `sdk-swift/Sources/Capsule/Builder.swift` still hardcoded the
+  ChaCha20-Poly1305 AAD's `version` member and the key-wrap HKDF info
+  to `"0.6"`. Performing the 0.6 → 0.7 bump the natural way (extend the
+  known table, move `current`) then produced a capsule that declares
+  0.7, VERIFIES ok=true (AAD and wrap info are not covered by
+  verification), and cannot be decrypted by a conforming 0.7 reader —
+  the same silent fail-open shape this project has shipped before. Both
+  values now derive from `CapsuleVersions.current`, and the remaining
+  seal-path version literals are centralized on that one source of
+  truth in Swift AND Kotlin (`Manifest` format.version, `Envelope`
+  VERSION now computed; the dead `ID_DOMAIN` constants removed). A
+  bump-simulation regression test in both lanes
+  (`CapsuleVersions.simulatingBump`, test-only) seals under a simulated
+  future version table and round-trip decrypts (Swift) / re-verifies
+  (Kotlin), so a stale literal can never again coincide with `current`
+  until the bump. Audit of the other lanes: the JS and Python builders
+  already derive the AAD version, wrap info, manifest.format.version
+  and envelope.version from their versions module's `CURRENT_VERSION`;
+  the Rust lane is a verifier with no seal path and its decrypt path is
+  keyed by the declared version.
+
+- **The derived skill-trust classification now consults the OVERALL
+  verify verdict — a FAILING capsule never classifies its skills as
+  `signed`.** The derivation was exactly `content_index.ok AND
+  envelope.ok AND trusted_signer_count > 0`, so a capsule broken in a
+  way that spares those two channels — demonstrated with a
+  `manifest.signer_commitment` naming a key that never signed
+  (envelope signature valid, content index valid, signer-set binding
+  broken, ok=false) — still reported `skill_trust: {capsule_signed:
+  true, skills: {…: "signed"}}` in every lane when the actual signer
+  was allowlisted. That is precisely the prompt-injection path the
+  derived tier exists to close: a failing capsule still telling the
+  host its skills may be handed to an LLM as trusted instructions.
+  spec/trust.md's normative derivation now reads `capsule_signed =
+  result.ok AND content_index.ok AND envelope.ok AND
+  trusted_signer_count > 0`, implemented in all five lanes (the Swift
+  L3 composite also fail-closes the inner classification when any
+  outer or cross-check fails) and surfaced by the CLI. Conformance
+  vector: `spec/vectors/skill-trust/`
+  (`failing-verdict-never-classifies-signed`, fixture
+  `commitment-phantom-signer.capsule`), consumed by all five lanes and
+  the CLI smoke suite.
+
+- **A non-array `manifest.participants` is now rejected as a malformed
+  shape instead of silently no-opping the actor rules.** A manifest
+  declaring `participants: {actor_id: "robot:origin"}` (bare object)
+  or `participants: "robot:origin"` (bare string) was silently
+  skipped: the actor-membership rule and the actor_id namespace
+  grammar check both no-opped, fail-safe only by accident, and the
+  capsule presented exactly like an honestly unbound one.
+  spec/manifest.md now fixes `participants` as an ARRAY when present;
+  absence and the empty array remain the same honest weaker claim
+  (verify with `actorSet.bound=false` plus a note), and only a PRESENT
+  non-array declaration is malformed, rejected at open in every lane
+  (JS/Python also re-check at verify time for hand-constructed
+  readers). The Rust typed manifest view gains `#[serde(default)]` on
+  `participants`: it silently REQUIRED the member, so a spec-valid
+  capsule with no `participants` at all was refused — absence is not a
+  violation. Conformance vectors: `spec/vectors/malformed-shape/`
+  (`participants-not-array`, `participants-string`, negative) and
+  `spec/vectors/chain-rules/` (`absent-participants`, positive),
+  consumed by all five lanes.
+
 - **Skill trust is now a DERIVED classification — the author-declared
   `manifest.skill_trust` member is removed from the format (finding
   A01).** spec/trust.md defines the `signed` tier in terms of the
