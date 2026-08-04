@@ -1,6 +1,6 @@
 // `capsule manifest <file>` — print manifest.json (the parsed JSON, pretty).
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { out, readBytes } from "../format.mjs";
 

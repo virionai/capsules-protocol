@@ -296,7 +296,14 @@ def test_encrypted_round_trip_decryption():
     outer = unzip(zip_bytes)
     meta = json.loads(outer["skills/decryption/decryption.json"])
     outer_manifest = json.loads(outer["manifest.json"])
+    outer_envelope = json.loads(outer["provenance/envelope.json"])
     capsule_id = outer_manifest["id"]
+    # The wrap info and the AAD are keyed by the capsule's DECLARED
+    # version (spec/versioning.md) — read it from the artifact, never
+    # assume an era. A hardcoded era here is exactly the stale-literal
+    # shape that once made a version bump produce verifiable-but-
+    # undecryptable capsules.
+    declared_version = outer_envelope["version"]
 
     # find bundle for our recipient
     bundle = next(b for b in meta["key_bundles"] if b["recipient_public_key"] == r.public_key_hex)
@@ -309,7 +316,7 @@ def test_encrypted_round_trip_decryption():
     wrap_key = hkdf_sha256(
         shared,
         r.public_key,  # salt = recipient pub
-        b"capsule-key-wrap-v0.6",
+        f"capsule-key-wrap-v{declared_version}".encode(),
         32,
     )
     content_key = chacha20_poly1305_decrypt(wrap_key, wrap_nonce, b"", wrapped_key)
@@ -324,7 +331,7 @@ def test_encrypted_round_trip_decryption():
         "cipher": "ChaCha20-Poly1305",
         "first_event_hash": first_event_hash,
         "originator_public_key": originator_pub,
-        "version": "0.6",
+        "version": declared_version,
     }
     from capsule.canonical import jcs
 

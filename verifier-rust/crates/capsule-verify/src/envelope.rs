@@ -144,7 +144,9 @@ mod tests {
         let (_, env_value) = parse_clean_envelope();
         let role = "originator";
         let input = signing_input(&env_value, role);
-        let prefix = format!("capsule-provenance-v0.6:{role}\0");
+        // The domain embeds the envelope's DECLARED version.
+        let declared = env_value["version"].as_str().expect("clean envelope declares a version");
+        let prefix = format!("capsule-provenance-v{declared}:{role}\0");
         assert!(input.starts_with(prefix.as_bytes()));
         // After the NUL the rest must equal the canonical payload bytes.
         let canon = canonical_payload(&env_value);

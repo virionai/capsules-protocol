@@ -11,7 +11,7 @@ import {
   CapsuleReader,
   verifyCapsule,
   generateEd25519,
-} from "@capsule/sdk-v0.6-prototype";
+} from "@capsule/sdk-v0.7-prototype";
 
 // 1. One keypair for your app (persist keys.privateKeyHex somewhere safe;
 //    in a real app you generate this once, not per capsule).

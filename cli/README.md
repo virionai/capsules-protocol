@@ -1,7 +1,7 @@
-# capsule — CLI for Capsule v0.6 files
+# capsule — CLI for Capsule v0.7 files
 
 A command-line tool for inspecting, verifying, extracting, and parity-
-testing Capsule v0.6 artifacts. Wraps the JS reference SDK.
+testing Capsule v0.7 artifacts. Wraps the JS reference SDK.
 
 The Rust verifier at `../verifier-rust/` is the trust-critical, minimal
 implementation (memory-safe, vetted crypto crates, single-purpose). This
@@ -76,7 +76,7 @@ allowlist no signer matches, it prints
 matches the supplied allowlist)` and exits 1.
 
 `Sealed at` is labelled **(attested)** deliberately: `signed_at` is
-self-attested by the signer and v0.6 has no external time anchor, so
+self-attested by the signer and the format has no external time anchor, so
 the CLI never presents it as a verified fact.
 
 `--json` emits a structured result instead of the human-readable
@@ -150,7 +150,7 @@ Drift in any field surfaces as a labeled diff.
 ```text
 $ capsule vectors verify spec/vectors/plain-basic.json
 Vectors:           parity-vectors.json
-Format version:    0.6
+Format version:    0.7
 Generator:         spec/vectors/plain-basic
 Signed at (fixed): 2026-04-29T12:00:00Z
 

@@ -41,7 +41,7 @@ A new language SDK is admitted to the conformance matrix once it:
 
 1. **Implements the primitives in `spec/`.** Every section of every
    spec file is a behavior contract — manifest schema, JCS canonical
-   serialization, ed25519 signing input, the v0.6 capsule-id derivation,
+   serialization, ed25519 signing input, the version-keyed capsule-id derivation,
    ChaCha20-Poly1305 encryption (and explicit rejection of `none` and
    unknown ciphers), the event chain, the envelope.
 2. **Passes the test vectors in `spec/vectors/` once they exist.**
@@ -71,9 +71,9 @@ Changes are not free.
    example capsule. "Spec change with no implementation" is not
    enough.
 3. **Bump the version, not the meaning, of pinned constants.** The
-   format is at `0.6` on purpose. Changes that break sealed-byte
-   compatibility ship as `0.7` (and onward) — never silently inside
-   `0.6`.
+   format is at `0.7` on purpose. Changes that break sealed-byte
+   compatibility ship as `0.8` (and onward) — never silently inside
+   `0.7`.
 
 ## Pull requests
 

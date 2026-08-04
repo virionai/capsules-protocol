@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "version-compat",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the version-compatibility policy (spec/versioning.md). A capsule declaring a KNOWN format version verifies under that era's rules, and the verifier REPORTS the observed version machine-readably (expected.observed_version). A well-formed but UNKNOWN version fails closed with a diagnosis distinct from tamper detection: 'newer than this verifier supports' (unsupported_version_newer — this verifier is too old; the capsule is not thereby corrupt) or 'older than any version this verifier supports' (unsupported_version_older). A version violating the <major>.<minor> grammar is a malformed document (invalid_manifest_shape), not a support gap. The unknown-version fixtures are internally coherent under their DECLARED version's domain strings (capsule-id-v<V>, capsule-provenance-v<V>:<role>), so nothing but the version gate refuses them — pinning that the refusal is about support, never integrity. Even when open is refused, a verifier that reports facts must still surface the observed version.",
     "generator": "sdk-js/tools/generate-version-compat-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
@@ -11,8 +11,14 @@
     {
       "name": "known-current-version",
       "capsule_file": "output/known-current-version.capsule",
+      "expected": { "ok": true, "observed_version": "0.7" },
+      "note": "Positive control: sealed at the current version. Verifies, and the observed version is a REPORTED fact on the result — the era's rules were applied and the report says which. Whether 0.7 is acceptable to a deployment is host policy, declared by the host and reported (never decided) by the SDK."
+    },
+    {
+      "name": "known-previous-version",
+      "capsule_file": "output/known-previous-version-0.6.capsule",
       "expected": { "ok": true, "observed_version": "0.6" },
-      "note": "Positive control: sealed at the current version. Verifies, and the observed version is a REPORTED fact on the result — the era's rules were applied and the report says which. Whether 0.6 is acceptable to a deployment is host policy, declared by the host and reported (never decided) by the SDK."
+      "note": "THE backward-compatibility evidence for the 0.6 → 0.7 bump: a GENUINE v0.6 capsule, sealed by the pre-bump v0.6 SDK and byte-FROZEN — the generator pins its SHA-256 and never rewrites it (restore from git history if lost; do NOT reseal). A current-era verifier MUST open it under the v0.6 rules and report the observed version as 0.6. If this fixture were ever regenerated at the current version, the collection would stop testing the compatibility guarantee entirely."
     },
     {
       "name": "unknown-newer-version",

@@ -24,9 +24,10 @@ import { createPublicKey } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { signIdentityAttestation } from "../src/federation/attestation.js";
-import { ed25519PrivateFromRaw, ed25519PublicToRaw } from "../src/crypto.js";
-import { bytesToHex, hexToBytes } from "../src/canonical.js";
+import { signIdentityAttestation, attestationDomain } from "../src/federation/attestation.js";
+import { ed25519PrivateFromRaw, ed25519PublicToRaw, ed25519Sign } from "../src/crypto.js";
+import { bytesToHex, hexToBytes, jcs } from "../src/canonical.js";
+import { CURRENT_VERSION } from "../src/versions.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -47,6 +48,60 @@ const NOW = "2026-05-07T12:00:00Z";
 function publicKeyHexFromSeed(seedHex) {
   const priv = ed25519PrivateFromRaw(hexToBytes(seedHex));
   return bytesToHex(ed25519PublicToRaw(createPublicKey(priv)));
+}
+
+// FROZEN backward-compatibility evidence: a GENUINE v0.6 attestation,
+// signed by the pre-bump v0.6 SDK (spec_version "0.6", signed under the
+// capsule-identity-attestation-v0.6 domain) and byte-preserved verbatim
+// from the pre-bump vectors file. Its value is that no current-era code
+// produced it: a current verifier accepting it proves the signing domain
+// really is keyed by the attestation's DECLARED spec_version
+// (spec/versioning.md applied to the attestation overlay), so
+// previously issued attestations stay verifiable forever. Ed25519 is
+// deterministic, so these bytes are reproducible from the fixed issuer
+// seed under the v0.6 rules — but do NOT rewrite them with current
+// helpers; that is exactly the sweep this constant exists to prevent.
+const FROZEN_V06_ATTESTATION = {
+  typ: "capsule-identity-attestation",
+  spec_version: "0.6",
+  alg: "ed25519-jcs",
+  issuer: ISSUER,
+  kid: KID,
+  claims: {
+    signer_public_key: SIGNER_PUBLIC_KEY,
+    signer_role: "originator",
+    subject: { clerk_user_id: "user_1", org_role: "admin" },
+    issued_at: NOW,
+    expires_at: "2027-05-07T12:00:00Z",
+    capsule_id: CAPSULE_ID,
+  },
+  signature:
+    "7a54edefdc3d9141b19e21b86031c7f8baab534e133d0240c2d53cb7a80e5362e282b992a63174c51fad9bbbbebea937b91c589a571de990ea1140f5f00c0c03",
+};
+
+// An attestation declaring a well-formed but UNKNOWN (newer) spec
+// version, internally coherent under that era's domain — hand-rolled on
+// purpose so only the version gate refuses it, mirroring
+// spec/vectors/version-compat/.
+function attestDeclaringVersion(specVersion) {
+  const attestation = {
+    typ: "capsule-identity-attestation",
+    spec_version: specVersion,
+    alg: "ed25519-jcs",
+    issuer: ISSUER,
+    kid: KID,
+    claims: {
+      signer_public_key: SIGNER_PUBLIC_KEY,
+      signer_role: "originator",
+      subject: { clerk_user_id: "user_1", org_role: "admin" },
+      issued_at: NOW,
+      expires_at: "2027-05-07T12:00:00Z",
+      capsule_id: CAPSULE_ID,
+    },
+  };
+  const input = Buffer.concat([attestationDomain(specVersion), Buffer.from(jcs(attestation))]);
+  attestation.signature = bytesToHex(ed25519Sign(hexToBytes(ISSUER_SEED_HEX), input));
+  return attestation;
 }
 
 function attest(claims, { seedHex = ISSUER_SEED_HEX, issuer = ISSUER, kid = KID } = {}) {
@@ -76,7 +131,7 @@ async function main() {
     meta: {
       kind: "identity-attestation",
       name: "identity-attestation",
-      spec_version: "0.6",
+      spec_version: CURRENT_VERSION,
       description:
         "Language-neutral attestation-layer outcomes for the native ed25519-jcs profile. " +
         "Implementations SHOULD reproduce ok and status; status is the vocabulary of " +
@@ -98,6 +153,32 @@ async function main() {
         name: "valid",
         attestation: attest({ capsule_id: CAPSULE_ID }),
         expected: { ok: true, status: "attestation_verified" },
+      },
+      {
+        name: "valid-previous-spec-version",
+        note:
+          "FROZEN backward-compatibility evidence: a genuine v0.6 attestation issued by the " +
+          "pre-bump SDK, byte-preserved. The ed25519-jcs signing domain embeds the DECLARED " +
+          "spec_version (which is itself under the signature), so a current verifier must " +
+          "reconstruct capsule-identity-attestation-v0.6 for it and accept — previously " +
+          "issued attestations stay verifiable forever.",
+        attestation: FROZEN_V06_ATTESTATION,
+        expected: { ok: true, status: "attestation_verified" },
+      },
+      {
+        name: "spec-version-unknown-newer",
+        note:
+          "Declares spec_version 9.9, internally coherent under the 9.9 domain. This " +
+          "verifier cannot reconstruct that era's signing domain; checking the signature " +
+          "under the wrong domain would read as tampering, so the outcome is UNVERIFIED " +
+          "(unknown, not negative) with a verifier-too-old diagnosis, mirroring " +
+          "spec/versioning.md.",
+        attestation: attestDeclaringVersion("9.9"),
+        expected: {
+          ok: false,
+          status: "attestation_unverified",
+          error_includes: "newer than this verifier supports",
+        },
       },
       {
         name: "valid-okp-jwk-trust-root",

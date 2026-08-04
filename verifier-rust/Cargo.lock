@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "capsule-verifier-rust-parity-tests"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "capsule-verify",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "capsule-verify"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "capsule-verify-cli"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "capsule-verify",

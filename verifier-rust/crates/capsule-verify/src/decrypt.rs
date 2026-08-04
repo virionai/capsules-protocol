@@ -1,4 +1,4 @@
-//! L3 decryption of an encrypted Capsule v0.6.
+//! L3 decryption of an encrypted Capsule (any known version).
 //!
 //! Given an outer envelope, outer manifest, the file map already extracted
 //! from the outer ZIP, and a recipient's X25519 32-byte private key, this
@@ -9,7 +9,7 @@
 //! 2. Performs an X25519 ECDH between the recipient's secret and the
 //!    bundle's ephemeral public key.
 //! 3. HKDF-SHA256-derives a 32-byte wrap key (salt = recipient's *own*
-//!    public key, info = `b"capsule-key-wrap-v0.6"`).
+//!    public key, info = `capsule-key-wrap-v<declared version>`).
 //! 4. AEAD-decrypts the bundle's `wrapped_key` to recover the 32-byte
 //!    content key.
 //! 5. AEAD-decrypts `content.enc` with the content key, the
@@ -22,7 +22,7 @@
 //! (`sdk-js/src/builder.js`), not the spec text.** The 5 fields are:
 //!
 //! ```text
-//! { "version": "0.6",
+//! { "version": envelope.version,
 //!   "capsule_id":            envelope.capsule_id,
 //!   "first_event_hash":      envelope.first_event_hash,
 //!   "originator_public_key": manifest.originator.public_key,
@@ -129,7 +129,7 @@ pub struct KeyBundle {
     pub wrapped_key: String,
 }
 
-/// Decrypt an encrypted Capsule v0.6 inner ZIP.
+/// Decrypt an encrypted Capsule inner ZIP.
 ///
 /// `envelope` and `manifest` are the *outer* envelope and manifest (already
 /// parsed by the caller). `files` is the file map produced by
@@ -451,10 +451,11 @@ mod tests {
         // the key-derived VALUES are sourced from the fixture's own signed
         // documents so the pin survives fixture keypair re-baselines.
         let expected = format!(
-            r#"{{"capsule_id":"{}","cipher":"ChaCha20-Poly1305","first_event_hash":"{}","originator_public_key":"{}","version":"0.6"}}"#,
+            r#"{{"capsule_id":"{}","cipher":"ChaCha20-Poly1305","first_event_hash":"{}","originator_public_key":"{}","version":"{}"}}"#,
             envelope.capsule_id,
             envelope.first_event_hash.as_deref().expect("encrypted fixture has a chain"),
-            manifest.originator.public_key
+            manifest.originator.public_key,
+            envelope.version
         );
         assert_eq!(
             got,

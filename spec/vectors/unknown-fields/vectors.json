@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "unknown-fields",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the unknown-member fixtures. Unknown members in manifest.json, provenance/envelope.json, and chain events MUST be preserved verbatim and included in canonicalization/hashing (spec/manifest.md, spec/envelope.md, spec/chain.md). A verifier that projects these documents onto a fixed schema and re-serializes the projection for hashing drops the members, diverges from the signed bytes, and fails the positive vector here.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },

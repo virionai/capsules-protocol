@@ -1,6 +1,6 @@
 // `capsule agents <file>` — print agents.md (or "(absent)" if not in capsule).
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, readBytes } from "../format.mjs";
 

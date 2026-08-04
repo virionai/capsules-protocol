@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "unicode-boundary",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "A capsule whose event summary is 200 astral code points, long enough that the Pith normalizer must truncate it. Before the surrogate-pair-safe cut in the reference builder this capsule verified in JS and failed everywhere else with an opaque chain-hash error. Independent implementations MUST verify it ok:true; a failure here means the lane's canonicalization disagrees on well-formed astral text, not that the capsule was tampered with. See spec/canonicalization.md and spec/pith.md.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },

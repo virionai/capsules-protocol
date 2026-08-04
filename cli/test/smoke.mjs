@@ -14,7 +14,8 @@ import {
   generateEd25519,
   generateX25519,
   packZip,
-} from "@capsule/sdk-v0.6-prototype";
+  SPEC_VERSION,
+} from "@capsule/sdk-v0.7-prototype";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -208,10 +209,10 @@ section("verify - clean and tampered");
     // on the verify result, and the human report names the era applied.
     const parsed = JSON.parse(j.stdout);
     check("verify --json reports format_version.observed",
-      parsed.format_version?.observed === "0.6" && parsed.format_version?.supported === true);
+      parsed.format_version?.observed === SPEC_VERSION && parsed.format_version?.supported === true);
     const human = run(["verify", CLEAN]);
     check("verify human report names the format version",
-      /Format version:\s+0\.6/.test(human.stdout));
+      new RegExp(`Format version:\\s+${SPEC_VERSION.replace(".", "\\.")}`).test(human.stdout));
   }
   check("--json clean exits 0", j.code === 0);
   let parsedClean;
@@ -268,12 +269,12 @@ section("inspect / chain / manifest / envelope / program / agents");
   const m = run(["manifest", CLEAN]);
   let parsedM;
   try { parsedM = JSON.parse(m.stdout); } catch { /* noop */ }
-  check("manifest output parses", parsedM && parsedM.format && parsedM.format.version === "0.6");
+  check("manifest output parses", parsedM && parsedM.format && parsedM.format.version === SPEC_VERSION);
 
   const e = run(["envelope", CLEAN]);
   let parsedE;
   try { parsedE = JSON.parse(e.stdout); } catch { /* noop */ }
-  check("envelope output parses", parsedE && parsedE.version === "0.6");
+  check("envelope output parses", parsedE && parsedE.version === SPEC_VERSION);
   check("envelope has signers[]", parsedE && Array.isArray(parsedE.signers) && parsedE.signers.length > 0);
 
   const p = run(["program", CLEAN]);

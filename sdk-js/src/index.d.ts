@@ -1,4 +1,4 @@
-// Type declarations for @capsule/sdk-v0.6-prototype.
+// Type declarations for @capsule/sdk-v0.7-prototype.
 //
 // The main integration surface (CapsuleBuilder, CapsuleReader,
 // verifyCapsule, key generation) is typed precisely; lower-level

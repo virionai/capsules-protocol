@@ -1,7 +1,7 @@
 {
   "meta": {
     "kind": "vector-registry",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Machine-readable manifest of every conformance vector collection under spec/vectors/ and the SET OF LANES REQUIRED TO CONSUME each one. This file exists to close a meta-pattern: registry consumption used to be opt-in per lane, by hardcoded filename, so a new collection was invisible to four of the five lanes by default — which is exactly how the malformed-layout vectors shipped unconsumed by Swift and Kotlin. tools/check-vector-registry.mjs (a required conformance target) fails when a vector file exists on disk but is not listed here, when a listed file is missing, when a collection is empty, when a collection's reason/failing vocabulary drifts from the declaration here, or when a required lane's declared consumer file does not reference the collection. Lanes that legitimately do not consume a collection carry an explicit exempt reason — silent omission is not expressible.",
     "checker": "tools/check-vector-registry.mjs",
     "no_warranty": "Conformance metadata only; not production templates or advice."

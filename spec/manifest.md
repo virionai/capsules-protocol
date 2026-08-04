@@ -9,7 +9,7 @@ here.
 ```json
 {
   "format": {
-    "version": "0.6",
+    "version": "0.7",
     "container": "zip",
     "canonicalization": "JCS-RFC8785",
     "hash_algorithm": "SHA-256"
@@ -53,7 +53,7 @@ here.
 
 ## Field rules
 
-- `format.*`: fixed for v0.6 capsules. `format.version` declares the
+- `format.*`: fixed for v0.7 capsules. `format.version` declares the
   capsule's format era and MUST equal `envelope.version`. Readers accept
   any KNOWN version under that era's rules, and fail closed on an
   unknown one with a diagnosis distinct from tamper detection — see
@@ -147,7 +147,7 @@ here.
     still succeed, and the verifier MUST report, machine-readably, that
     the signer set is unbound (a weaker claim made honestly — this is
     what lets unsigned templates and legacy capsules share the format
-    with a notarised loan file). A writer that seals with the v0.6
+    with a notarised loan file). A writer that seals with the v0.7
     cryptographic profile SHOULD always emit it; the SDK builders do.
   - Each member carries exactly `role` (non-empty string) and
     `public_key` (lowercase 64-hex Ed25519 raw key). Members are sorted
@@ -209,7 +209,7 @@ Conformance vectors: `spec/vectors/unknown-fields/`.
 
 ```
 capsule_id = SHA-256(
-    "capsule-id-v0.6\x00" ||
+    "capsule-id-v<version>\x00" ||       # <version> = format.version
     originator_public_key_raw_bytes ||
     first_event_hash_raw_bytes
 )
@@ -218,8 +218,9 @@ capsule_id = SHA-256(
 Notes:
 
 - All concatenations are raw bytes. No hex strings as inputs.
-- Domain-separation prefix `"capsule-id-v0.6\x00"` is 16 ASCII bytes
-  including the trailing NUL, so the prefix has a fixed boundary. The
+- Domain-separation prefix `"capsule-id-v0.7\x00"` (for a capsule
+  declaring version 0.7) is 16 ASCII bytes including the trailing NUL,
+  so the prefix has a fixed boundary. The
   prefix embeds the capsule's declared format version and is selected
   BY that declared version, forever — a verifier recomputing the id of
   a v0.6 capsule uses the v0.6 domain whatever version it seals at

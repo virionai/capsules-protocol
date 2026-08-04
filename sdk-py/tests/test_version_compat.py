@@ -31,7 +31,7 @@ from capsule.chain import build_chain_events, events_to_jsonl, first_and_entry_h
 from capsule.crypto import ed25519_sign, generate_ed25519
 from capsule.envelope import build_envelope
 from capsule.manifest import build_content_index, build_manifest, manifest_bytes, manifest_hash
-from capsule.versions import id_domain, key_wrap_info, provenance_domain
+from capsule.versions import SUITES, id_domain, key_wrap_info, provenance_domain
 from capsule.zip_io import pack_zip
 
 TS = "2026-05-07T12:00:00Z"
@@ -146,10 +146,11 @@ def test_sealed_current_capsule_reports_observed_version():
     data, keys = _sealed_current_capsule()
     result = verify_capsule(data, allowlist=[keys.public_key_hex])
     assert result["ok"] is True, result["errors"]
-    assert result["format_version"]["observed"] == "0.6"
+    assert result["format_version"]["observed"] == CURRENT_VERSION
     assert result["format_version"]["supported"] is True
     assert result["format_version"]["status"] == "known"
-    assert result["format_version"]["suite"] == "v0.6"
+    # 0.7 adopts the v0.6 algorithm suite unchanged (spec/versioning.md).
+    assert result["format_version"]["suite"] == SUITES[CURRENT_VERSION]
     assert result["format_version"]["accepted_by_policy"] is None
 
 
@@ -201,11 +202,13 @@ def test_unknown_envelope_version_is_gated_identically():
 
 def test_host_policy_is_reported_never_decided():
     data, keys = _sealed_current_capsule()
-    accepted = verify_capsule(data, allowlist=[keys.public_key_hex], accept_versions=["0.6"])
+    accepted = verify_capsule(
+        data, allowlist=[keys.public_key_hex], accept_versions=[CURRENT_VERSION]
+    )
     assert accepted["ok"] is True
     assert accepted["format_version"]["accepted_by_policy"] is True
 
-    rejected = verify_capsule(data, allowlist=[keys.public_key_hex], accept_versions=["0.7"])
+    rejected = verify_capsule(data, allowlist=[keys.public_key_hex], accept_versions=["0.6"])
     # Integrity intact: ok stays True. The verdict is REPORTED; the host
     # decides — exactly the signer-allowlist shape.
     assert rejected["ok"] is True
@@ -222,7 +225,8 @@ def test_domain_strings_are_keyed_by_declared_version():
     pub = bytes([7]) * 32
     feh = "ab" * 32
     assert compute_capsule_id(pub, feh, "0.6") != compute_capsule_id(pub, feh, "0.7")
-    assert compute_capsule_id(pub, feh) == compute_capsule_id(pub, feh, "0.6")
+    # The default is the CURRENT sealing version.
+    assert compute_capsule_id(pub, feh) == compute_capsule_id(pub, feh, CURRENT_VERSION)
 
 
 def test_classify_version_vocabulary():

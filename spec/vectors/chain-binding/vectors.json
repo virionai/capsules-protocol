@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "chain-binding",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the envelope-to-chain binding rules (spec/chain.md 'Empty chains', spec/envelope.md field rules, spec/chain.md 'Unknown members'). A chain with ZERO events is legal — the weakest honest shape (template/draft) — and then manifest.first_event_hash, envelope.first_event_hash and envelope.entry_hash MUST all be null; capsule_id derives with 32 zero bytes standing in for first_event_hash_raw. A capsule claiming any chain anchor while carrying no events is lying about its own bytes and MUST fail closed: in a plain capsule those anchors are the only envelope-to-chain binding. Verifiers MUST report machine-readably that a zero-event chain was not walked (expected.notes_includes). Separately, the per-event hash preimage is rebuilt from the STORED line: an event omitting the optional untrusted_payload_fields member MUST verify — re-serializing a typed projection injects the default and spuriously fails an intact chain.",
     "generator": "sdk-js/tools/generate-chain-binding-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."

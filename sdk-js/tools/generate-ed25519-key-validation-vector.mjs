@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { verify as nodeVerify } from "node:crypto";
 
 import { ed25519PublicFromRaw } from "../src/crypto.js";
+import { CURRENT_VERSION } from "../src/versions.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -164,7 +165,7 @@ async function main() {
     meta: {
       kind: "ed25519-verify",
       name: "ed25519-key-validation",
-      spec_version: "0.6",
+      spec_version: CURRENT_VERSION,
       description:
         "Ed25519 key and signature validation registry. Implementations MUST report valid=false for every small-order public key, every non-canonically encoded public key, and every signature whose S component is not reduced mod L, and valid=true for the positive control.",
       generator: "sdk-js/tools/generate-ed25519-key-validation-vector.mjs",

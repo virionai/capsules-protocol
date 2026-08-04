@@ -50,9 +50,9 @@ use crate::zip_reader::unpack_zip;
 /// Ciphers this verifier accepts in `envelope.cipher`.
 ///
 /// `"none"` is the plain capsule case; `"ChaCha20-Poly1305"` is the only AEAD
-/// scheme defined for v0.6 encrypted capsules. Any other value (including
+/// scheme defined for v0.6/v0.7 encrypted capsules. Any other value (including
 /// reserved-but-not-implemented names like `"AES-256-GCM"`) is a hard
-/// rejection — adding a cipher is a v0.7 schema change. Matches the
+/// rejection — adding a cipher is a future schema change. Matches the
 /// `envelope.md` cipher enum.
 const SUPPORTED_CIPHERS: &[&str] = &["none", "ChaCha20-Poly1305"];
 
@@ -63,7 +63,8 @@ const SUPPORTED_CIPHERS: &[&str] = &["none", "ChaCha20-Poly1305"];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum TopErrorCategory {
-    /// `manifest.format.version` or `envelope.version` not "0.6"
+    /// `manifest.format.version` or `envelope.version` unknown, invalid,
+    /// or mismatched (spec/versioning.md)
     FormatVersion,
     /// `manifest.id` / `envelope.capsule_id` mismatch with derived value
     CapsuleId,

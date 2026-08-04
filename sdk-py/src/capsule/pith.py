@@ -9,7 +9,11 @@ import copy
 import re
 from typing import Any
 
-PITH_VERSION = "0.6"
+from .versions import CURRENT_VERSION
+
+# Pith is versioned with the spec (never a separate literal — a second
+# copy is exactly how a bump leaves a stale era behind).
+PITH_VERSION = CURRENT_VERSION
 _DEFAULT_MAX_CHARS = 280
 _DEFAULT_MAX_SENTENCES = 3
 _ELLIPSIS = "…"

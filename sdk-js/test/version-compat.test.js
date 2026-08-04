@@ -43,6 +43,7 @@ import { packZip } from "../src/zip.js";
 import {
   KNOWN_VERSIONS,
   CURRENT_VERSION,
+  SUITES,
   classifyVersion,
   idDomain,
   provenanceDomain,
@@ -153,12 +154,13 @@ test("a sealed current-version capsule verifies and reports the observed version
   const { bytes, keys } = await sealedCurrentCapsule();
   const result = await verifyCapsule(bytes, { allowlist: [keys.publicKeyHex] });
   assert.equal(result.ok, true, result.errors.join("; "));
-  assert.equal(result.formatVersion.observed, "0.6");
+  assert.equal(result.formatVersion.observed, CURRENT_VERSION);
   assert.equal(result.formatVersion.supported, true);
   assert.equal(result.formatVersion.status, "known");
   // The era's algorithm suite is reported (spec/versioning.md: absence of
-  // algorithm identifiers in the capsule means the v0.6 suite).
-  assert.equal(result.formatVersion.suite, "v0.6");
+  // algorithm identifiers in the capsule means the v0.6 suite — 0.7
+  // adopts it unchanged).
+  assert.equal(result.formatVersion.suite, SUITES[CURRENT_VERSION]);
   // No policy declared: the SDK takes no acceptance position.
   assert.equal(result.formatVersion.acceptedByPolicy, null);
 });
@@ -232,14 +234,14 @@ test("host policy: the SDK reports acceptance against a declared range, never de
   const { bytes, keys } = await sealedCurrentCapsule();
   const accepted = await verifyCapsule(bytes, {
     allowlist: [keys.publicKeyHex],
-    acceptVersions: ["0.6"],
+    acceptVersions: [CURRENT_VERSION],
   });
   assert.equal(accepted.ok, true);
   assert.equal(accepted.formatVersion.acceptedByPolicy, true);
 
   const rejected = await verifyCapsule(bytes, {
     allowlist: [keys.publicKeyHex],
-    acceptVersions: ["0.7"],
+    acceptVersions: ["0.6"],
   });
   // Integrity is intact — ok stays true. The policy verdict is REPORTED;
   // the host decides what to do with it, exactly as with allowlists.
@@ -275,7 +277,8 @@ test("domain-separation strings are keyed by the declared version, deliberately"
   const pub = new Uint8Array(32).fill(7);
   const feh = "ab".repeat(32);
   assert.notEqual(computeCapsuleId(pub, feh, "0.6"), computeCapsuleId(pub, feh, "0.7"));
-  assert.equal(computeCapsuleId(pub, feh), computeCapsuleId(pub, feh, "0.6"));
+  // The default is the CURRENT sealing version.
+  assert.equal(computeCapsuleId(pub, feh), computeCapsuleId(pub, feh, CURRENT_VERSION));
 });
 
 test("classifyVersion: grammar, ordering, and the closed status vocabulary", () => {

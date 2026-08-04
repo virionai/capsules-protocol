@@ -24,19 +24,22 @@
  * version is never removed from this list (spec/versioning.md: dropping a
  * version a verifier once knew is a conformance violation).
  */
-export const KNOWN_VERSIONS = ["0.6"];
+export const KNOWN_VERSIONS = ["0.6", "0.7"];
 
 /** The version this implementation SEALS at. */
-export const CURRENT_VERSION = "0.6";
+export const CURRENT_VERSION = "0.7";
 
 /**
  * Per-era algorithm suite identifiers (spec/versioning.md "Algorithm
  * suites"). A v0.6 capsule names no algorithm anywhere in its bytes;
  * the spec pins the absence of algorithm identifiers to this suite,
  * permanently: Ed25519 / SHA-256 / JCS (RFC 8785) / X25519 +
- * HKDF-SHA-256 + ChaCha20-Poly1305.
+ * HKDF-SHA-256 + ChaCha20-Poly1305. v0.7 introduces no algorithm
+ * changes and no agility: the absence of an algorithm identifier in a
+ * 0.7 capsule means the SAME v0.6 suite — the identifier names the
+ * algorithm set by the era that introduced it, not the sealing era.
  */
-export const SUITES = { "0.6": "v0.6" };
+export const SUITES = { "0.6": "v0.6", "0.7": "v0.6" };
 
 // <major>.<minor>, decimal, no leading zeros. This is the version grammar;
 // anything else is a malformed document, not an unknown era.

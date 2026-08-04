@@ -21,6 +21,7 @@ import { jcs, bytesToHex, hexToBytes } from "../canonical.js";
 import { ed25519Sign, ed25519Verify } from "../crypto.js";
 import { createPublicKey, verify as nodeVerify } from "node:crypto";
 import { normalizeIssuer } from "./issuer.js";
+import { CURRENT_VERSION, classifyVersion } from "../versions.js";
 
 export const ATTESTATION_TYP = "capsule-identity-attestation";
 
@@ -30,10 +31,23 @@ export const ATTESTATION_TYP = "capsule-identity-attestation";
 export const ATTESTATION_VERIFIED = "attestation_verified";
 export const ATTESTATION_UNVERIFIED = "attestation_unverified";
 export const ATTESTATION_REJECTED = "attestation_rejected";
-export const ATTESTATION_DOMAIN = Buffer.from(
-  "capsule-identity-attestation-v0.6\x00",
-  "utf8",
-);
+
+/**
+ * `capsule-identity-attestation-v<spec_version>\0` — the ed25519-jcs
+ * signing domain, keyed by the attestation's DECLARED `spec_version`
+ * exactly like the capsule domain strings (spec/versioning.md): an
+ * issuer signs at the current version, and a verifier reconstructs the
+ * domain from the version the attestation itself declares — which is
+ * inside the signed payload, so it cannot be replayed across eras —
+ * keeping every previously issued attestation verifiable forever.
+ */
+export function attestationDomain(specVersion) {
+  return Buffer.from(`capsule-identity-attestation-v${specVersion}\x00`, "utf8");
+}
+
+// The current-era domain, kept for API compatibility with callers that
+// imported the old constant. New code should key on attestationDomain().
+export const ATTESTATION_DOMAIN = attestationDomain(CURRENT_VERSION);
 
 // ---------------------------------------------------------------------------
 // base64url (JWT wire format) — no padding.
@@ -50,11 +64,14 @@ function bufToB64u(b) {
 }
 
 // ---------------------------------------------------------------------------
-// Signing input for the native ed25519-jcs profile.
+// Signing input for the native ed25519-jcs profile. The domain embeds the
+// attestation's DECLARED spec_version (which is itself under the
+// signature); the caller gates that version against the known table
+// BEFORE trusting a signature check with it.
 // ---------------------------------------------------------------------------
 function attestationSigningInput(attestation) {
   const { signature: _ignored, ...rest } = attestation;
-  return Buffer.concat([ATTESTATION_DOMAIN, Buffer.from(jcs(rest))]);
+  return Buffer.concat([attestationDomain(attestation.spec_version), Buffer.from(jcs(rest))]);
 }
 
 /**
@@ -76,7 +93,7 @@ export function signIdentityAttestation({
   }
   const attestation = {
     typ: ATTESTATION_TYP,
-    spec_version: "0.6",
+    spec_version: CURRENT_VERSION,
     alg: "ed25519-jcs",
     issuer,
     kid,
@@ -295,21 +312,48 @@ export function verifyIdentityAttestation(attestation, options = {}) {
   }
 
   let claims;
+  let versionUnknown = false;
   if (attestation.alg === "ed25519-jcs") {
-    const roots = normalizeTrustRoots(options.trustRoots);
-    const key = selectKey(roots, attestation.kid, "ed25519-jcs");
-    if (!key || !key.public_key_hex) {
-      errors.push(`no trust-root key for kid=${attestation.kid}`);
-      trustRootMissing = true;
-    } else if (typeof attestation.signature !== "string") {
-      errors.push("attestation missing signature");
-    } else {
-      const ok = ed25519Verify(
-        hexToBytes(key.public_key_hex),
-        attestationSigningInput(attestation),
-        hexToBytes(attestation.signature),
+    // The signing domain embeds the DECLARED spec_version
+    // (spec/versioning.md keying, applied to the attestation overlay):
+    // gate it against the known table BEFORE reconstructing the domain.
+    // Checking a signature under the wrong era's domain would emit
+    // "signature invalid" — tamper-flavored noise for what is actually
+    // a version-support gap — so an unknown version skips the check and
+    // reports as UNVERIFIED (unknown, not negative), while a version
+    // violating the <major>.<minor> grammar is a malformed document.
+    const versionClass = classifyVersion(attestation.spec_version);
+    if (versionClass.status === "invalid") {
+      errors.push(
+        `attestation spec_version is not a '<major>.<minor>' version string: ${JSON.stringify(
+          attestation.spec_version,
+        )}`,
       );
-      if (!ok) errors.push("attestation signature invalid");
+    } else if (versionClass.status !== "known") {
+      errors.push(
+        `attestation spec_version '${attestation.spec_version}' is ${
+          versionClass.status === "unknown_newer"
+            ? "newer than this verifier supports"
+            : "older than any version this verifier supports"
+        }; this is a limitation of the verifier, not evidence of tampering`,
+      );
+      versionUnknown = true;
+    } else {
+      const roots = normalizeTrustRoots(options.trustRoots);
+      const key = selectKey(roots, attestation.kid, "ed25519-jcs");
+      if (!key || !key.public_key_hex) {
+        errors.push(`no trust-root key for kid=${attestation.kid}`);
+        trustRootMissing = true;
+      } else if (typeof attestation.signature !== "string") {
+        errors.push("attestation missing signature");
+      } else {
+        const ok = ed25519Verify(
+          hexToBytes(key.public_key_hex),
+          attestationSigningInput(attestation),
+          hexToBytes(attestation.signature),
+        );
+        if (!ok) errors.push("attestation signature invalid");
+      }
     }
     claims = attestation.claims ?? {};
   } else if (attestation.jwt) {
@@ -407,7 +451,7 @@ export function verifyIdentityAttestation(attestation, options = {}) {
   const ok = errors.length === 0;
   const status = ok
     ? ATTESTATION_VERIFIED
-    : trustRootMissing && errors.length === 1
+    : (trustRootMissing || versionUnknown) && errors.length === 1
       ? ATTESTATION_UNVERIFIED
       : ATTESTATION_REJECTED;
   return {

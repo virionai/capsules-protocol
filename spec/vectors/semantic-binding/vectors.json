@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "semantic-binding",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected outcomes for capsules whose container, hashes, and signatures are all well-formed, but whose manifest CLAIMS disagree with the signed envelope, the chain, or the files on disk. Every fixture here opens cleanly and (where the mutation touched signed bytes) carries a valid originator signature over its own manifest — the defect is semantic, not structural. Unless a vector says otherwise the stage is 'verify': the capsule opens and verification must report ok=false.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },

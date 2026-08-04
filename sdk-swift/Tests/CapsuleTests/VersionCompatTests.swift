@@ -54,10 +54,27 @@ final class VersionCompatTests: XCTestCase {
             Manifest.computeCapsuleId(originatorPub: pub, firstEventHashHex: feh, version: "0.6"),
             Manifest.computeCapsuleId(originatorPub: pub, firstEventHashHex: feh, version: "0.7")
         )
+        // The default is the CURRENT sealing version.
         XCTAssertEqual(
             Manifest.computeCapsuleId(originatorPub: pub, firstEventHashHex: feh),
-            Manifest.computeCapsuleId(originatorPub: pub, firstEventHashHex: feh, version: "0.6")
+            Manifest.computeCapsuleId(
+                originatorPub: pub, firstEventHashHex: feh, version: CapsuleVersions.current)
         )
+    }
+
+    /// ACCEPTANCE for the 0.6 → 0.7 bump: the FROZEN, genuine v0.6
+    /// capsule — sealed by the pre-bump v0.6 SDK and byte-pinned, never
+    /// regenerated — still verifies under the v0.6 rules, with the
+    /// observed version reported as a fact.
+    func testFrozenGenuineV06CapsuleStillVerifies() throws {
+        let bytes = try Data(contentsOf: Self.vectorsDir
+            .appendingPathComponent("version-compat/output/known-previous-version-0.6.capsule"))
+        let result = CapsuleVerifier.verify(bytes)
+        XCTAssertTrue(result.ok,
+                      "frozen v0.6 fixture must verify: \(result.checks.filter { !$0.ok })")
+        XCTAssertEqual(result.formatVersion.observed, "0.6")
+        XCTAssertEqual(result.formatVersion.status, "known")
+        XCTAssertEqual(result.formatVersion.suite, "v0.6")
     }
 
     /// Host policy: the SDK reports acceptance against a declared set,
@@ -68,17 +85,18 @@ final class VersionCompatTests: XCTestCase {
 
         let noPolicy = CapsuleVerifier.verify(bytes)
         XCTAssertTrue(noPolicy.ok, "positive fixture must verify")
-        XCTAssertEqual(noPolicy.formatVersion.observed, "0.6")
+        XCTAssertEqual(noPolicy.formatVersion.observed, CapsuleVersions.current)
         XCTAssertTrue(noPolicy.formatVersion.supported)
         XCTAssertEqual(noPolicy.formatVersion.status, "known")
+        // 0.7 adopts the v0.6 algorithm suite unchanged (spec/versioning.md).
         XCTAssertEqual(noPolicy.formatVersion.suite, "v0.6")
         XCTAssertNil(noPolicy.formatVersion.acceptedByPolicy)
 
-        let accepted = CapsuleVerifier.verify(bytes, acceptVersions: ["0.6"])
+        let accepted = CapsuleVerifier.verify(bytes, acceptVersions: [CapsuleVersions.current])
         XCTAssertTrue(accepted.ok)
         XCTAssertEqual(accepted.formatVersion.acceptedByPolicy, true)
 
-        let rejected = CapsuleVerifier.verify(bytes, acceptVersions: ["0.7"])
+        let rejected = CapsuleVerifier.verify(bytes, acceptVersions: ["0.6"])
         // Integrity intact — ok stays true; the verdict is REPORTED and
         // a PASS outside the declared range is never silent.
         XCTAssertTrue(rejected.ok)
@@ -101,7 +119,10 @@ final class VersionCompatTests: XCTestCase {
     /// never catch this class, because every hardcoded "0.6" coincides
     /// with current until the bump happens.
     func testSealUnderNonCurrentDeclaredVersionRoundTripsDecrypt() throws {
-        try CapsuleVersions.simulatingBump(known: ["0.6", "0.7"], current: "0.7") {
+        // Simulate the NEXT era (one past CapsuleVersions.current): the
+        // regression only bites when current moves past a hardcoded
+        // literal, so the simulation must always stay ahead of current.
+        try CapsuleVersions.simulatingBump(known: ["0.6", "0.7", "0.8"], current: "0.8") {
             let origin = Ed25519KeyPair.generate()
             let recipient = X25519KeyPair.generate()
             let builder = CapsuleBuilder(
@@ -126,12 +147,12 @@ final class VersionCompatTests: XCTestCase {
                   case .object(let fmt)? = mfPairs.first(where: { $0.0 == "format" })?.1,
                   case .string(let mfVersion)? = fmt.first(where: { $0.0 == "version" })?.1
             else { return XCTFail("outer manifest has no format.version") }
-            XCTAssertEqual(mfVersion, "0.7",
+            XCTAssertEqual(mfVersion, "0.8",
                            "manifest.format.version must track CapsuleVersions.current")
             guard case .object(let envPairs) = outer.envelope,
                   case .string(let envVersion)? = envPairs.first(where: { $0.0 == "version" })?.1
             else { return XCTFail("outer envelope has no version") }
-            XCTAssertEqual(envVersion, "0.7",
+            XCTAssertEqual(envVersion, "0.8",
                            "envelope.version must track CapsuleVersions.current")
 
             // It verifies (AAD/wrap-info are NOT covered by verification —

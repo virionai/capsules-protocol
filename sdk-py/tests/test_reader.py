@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from capsule.versions import CURRENT_VERSION
 from capsule.builder import CapsuleBuilder
 from capsule.crypto import generate_ed25519, generate_x25519
 from capsule.envelope import EncryptedCapsulesNotSupportedError
@@ -38,10 +39,10 @@ def test_from_bytes_loads_manifest_envelope_chain_and_program():
     zip_bytes, kp = _build()
     reader = CapsuleReader.from_bytes(zip_bytes)
     m = reader.manifest()
-    assert m["format"]["version"] == "0.6"
+    assert m["format"]["version"] == CURRENT_VERSION
     assert m["originator"]["public_key"] == kp.public_key_hex
     env = reader.envelope()
-    assert env["version"] == "0.6"
+    assert env["version"] == CURRENT_VERSION
     assert env["cipher"] == "none"
     events = reader.events()
     assert len(events) == 1

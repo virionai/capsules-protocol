@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "malformed-layout",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected outcomes for malformed-container fixtures. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the container before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },

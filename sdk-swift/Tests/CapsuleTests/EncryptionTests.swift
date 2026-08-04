@@ -175,6 +175,10 @@ final class EncryptedRoundTripTests: XCTestCase {
         )
         XCTAssertTrue(l3.ok, "L3 failed: \(l3.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" })")
         XCTAssertEqual(l3.level, "L3")
+        // The whole round trip ran at the CURRENT sealing version — this
+        // is the seal → verify → DECRYPT drill that catches a stale
+        // version literal on either side of the encryption path.
+        XCTAssertEqual(l3.formatVersion.observed, CapsuleVersions.current)
         // Outer + inner each have one originator signer → 2 signers total.
         XCTAssertEqual(l3.signers.count, 2)
         XCTAssertEqual(l3.trustedSignerCount, 2)

@@ -4,10 +4,49 @@ All notable changes to the Capsule format, reference SDKs, and tooling
 in this repository will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 protocol uses semantic-version pinning at the format layer (the
-`0.6` in the file format will not silently mean different things —
-incompatible wire changes ship as `0.7`).
+version in the file format will not silently mean different things —
+incompatible wire changes ship as a new format version, as `0.7` did).
 
-## Unreleased
+## v0.7.0 — 2026-08-04
+
+### Changed
+
+- **BREAKING: the protocol version is now `0.7` — the bump the
+  version-compatibility policy below was built to make safe.** Every
+  lane's known-version table gains `"0.7"` and `current` moves to it:
+  new capsules declare `manifest.format.version` / `envelope.version`
+  `"0.7"` and are identified, signed, and key-wrapped under the v0.7
+  domain strings (`capsule-id-v0.7`, `capsule-provenance-v0.7:<role>`,
+  `capsule-key-wrap-v0.7`, and the encryption AAD's `version` member).
+  `"0.6"` stays in every known table forever: a v0.6 capsule still
+  opens, verifies, and decrypts under the v0.6 rules, with the observed
+  version reported as a fact (spec/versioning.md). v0.7 introduces no
+  algorithm changes and no agility — the absence of an algorithm
+  identifier in a 0.7 capsule means the same v0.6 suite (Ed25519 /
+  SHA-256 / JCS RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305),
+  and the suite identifier verifiers report for both eras is `v0.6`.
+  The backward-compatibility evidence is FROZEN, not regenerated:
+  `spec/vectors/version-compat/output/known-previous-version-0.6.capsule`
+  is a genuine capsule sealed by the pre-bump v0.6 SDK, byte-pinned by
+  SHA-256 in the generator (which refuses to ever rewrite it), and every
+  lane's registry suite proves a v0.7 verifier opens it and reports
+  `0.6`; a frozen pre-bump identity attestation
+  (`valid-previous-spec-version`) pins the same guarantee for the
+  federation overlay, whose `capsule-identity-attestation-v<V>` signing
+  domain is now keyed by the attestation's DECLARED (and signed)
+  `spec_version` instead of a fixed constant. Current-version
+  conformance fixtures were regenerated at 0.7; `plain-basic.json` and
+  the byte-level pins derived from it (`signing-input.json`) remain
+  frozen v0.6 artifacts, and the signing-input generator now derives
+  its domain strings from the pinned capsule's declared version rather
+  than a hardcoded era. Package metadata moves with the protocol:
+  sdk-js `@capsule/sdk-v0.7-prototype` 0.7.0-prototype.1, cli 0.7.0,
+  sdk-py 0.7.0, sdk-kotlin 0.7.0-prototype.1, and the verifier-rust
+  workspace 0.1.0 → 0.7.0 (release-hygiene finding: the workspace now
+  tracks the protocol version like every other lane). The Swift and
+  Kotlin bump-simulation regression tests now simulate the NEXT era
+  (0.8) so they keep guarding the stale-literal class instead of
+  simulating the version that just became current.
 
 ### Added
 
@@ -48,7 +87,8 @@ incompatible wire changes ship as `0.7`).
   violation refused as malformed; unknown envelope version gated
   identically), consumed by all five lanes and registered in
   `spec/vectors/registry.json`. The 0.6 → 0.7 bump itself is NOT
-  performed here; this policy is what makes it safe.
+  performed by this policy change; the release entry above executes it —
+  this policy is what makes it safe.
 
 ### Security
 

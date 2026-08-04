@@ -173,7 +173,7 @@ def build_manifest(
     created_at: str,
     signer_commitment: list[dict] | None = None,
 ) -> dict:
-    """Build a v0.6 manifest object (without ``id`` populated).
+    """Build a current-version manifest object (without ``id`` populated).
 
     Deliberately absent: any ``skill_trust`` member. Skill trust is
     host-relative and DERIVED at verify time (spec/trust.md); a capsule

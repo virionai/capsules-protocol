@@ -1,4 +1,4 @@
-# Capsule Spec Roadmap — v0.6 to v1.0
+# Capsule Spec Roadmap — v0.7 to v1.0
 
 This roadmap tracks protocol stabilization only: the portable file shape,
 verifier semantics, profile system, federation model, and conformance
@@ -6,7 +6,7 @@ suite required for a durable v1.0 spec.
 
 Status labels:
 
-- `Complete in v0.6`: specified and implemented in the current profile.
+- `Complete in v0.6`: specified and implemented in the current profile (the v0.6 redesign baseline, carried forward unchanged by v0.7).
 - `Partial`: specified or implemented in part, but not enough for v1.0.
 - `Open`: not yet specified.
 
@@ -18,7 +18,7 @@ Status labels:
 | Current cryptographic profile | Complete in v0.6 | `spec/envelope.md`; JS/Python/Swift/Rust cover JCS, SHA-256, Ed25519, X25519, HKDF-SHA256, and ChaCha20-Poly1305; Kotlin covers the plain JCS/SHA-256/Ed25519 path and rejects encrypted capsules | Independent review; signed vectors for every cryptographic input |
 | Capsule identity | Complete in v0.6 | `spec/manifest.md`; SDKs derive `capsule_id` from domain separator, originator public key, and first event hash; `spec/vectors/signing-input.json` pins the identity preimage byte-for-byte | Add collision/mis-binding negative cases |
 | Envelope signing and verification | Complete in v0.6 | `spec/envelope.md`; SDK/verifier tests cover canonical payload, domain separation, role mismatch, unknown versions, and unknown ciphers; `spec/vectors/signing-input.json` pins the canonical payload, signing domain, and full signing input, reproduced by JS/Python/Rust | External review of byte-level signing inputs |
-| Version compatibility / archival opening | Complete in v0.6 | `spec/versioning.md` (normative): known versions open forever under their era's rules with version-keyed domain strings; unknown versions fail closed with non-tamper diagnoses; the observed version and the v0.6 algorithm-suite identifier are reported facts on every lane's verify result; host accepted-version policy is reported, never decided; `spec/vectors/version-compat/` consumed by all five lanes | Perform the deliberate 0.6 → 0.7 bump (add the row to the known-version table) when v0.7 ships |
+| Version compatibility / archival opening | Complete in v0.6 | `spec/versioning.md` (normative): known versions open forever under their era's rules with version-keyed domain strings; unknown versions fail closed with non-tamper diagnoses; the observed version and the v0.6 algorithm-suite identifier are reported facts on every lane's verify result; host accepted-version policy is reported, never decided; `spec/vectors/version-compat/` consumed by all five lanes; the 0.6 → 0.7 bump is DONE — the known table carries both rows and a frozen genuine v0.6 capsule proves the archival guarantee | Keep the frozen v0.6 evidence byte-stable; repeat the drill at the next bump |
 | Event-chain integrity | Complete in v0.6 | `spec/chain.md`; SDK tests cover raw previous-hash linkage and tamper detection | Add canonical chain vectors, malformed sequence vectors, and cross-language expected errors |
 | Encrypted capsule L2/L3 model | Complete in v0.6 | `spec/envelope.md`; JS/Python/Swift/Rust cover encrypted outer verification and decrypted inner verification | Add recipient-bundle vectors and negative vectors for AAD/key-wrap mistakes |
 | Verifier result vocabulary | Partial | JS/Python/Kotlin/Swift/Rust expose `valid`, `trusted`, allowlists, and `trustedSignerCount`; `spec/trust.md` states math-vs-trust boundary | Normalize result field names, error categories, and required renderer language |
@@ -33,7 +33,7 @@ Status labels:
 | Key lifecycle semantics | Open | `spec/federation.md` drafts key `status` (`active`/`retired`/`revoked`) and validity windows in the signer document | Specify verifier treatment of lifecycle status against sealing-time evidence, and historical validation |
 | Temporal anchoring profile | Open | `signed_at` is self-attested; `spec/federation.md` drafts bundled `anchors` (Rekor / RFC 3161) with an offline-verification requirement | Define anchor proof formats and verifier treatment; add anchor vectors |
 | Alternate profile declaration | Open | `spec/README.md`, `spec/envelope.md`, and `spec/trust.md` describe extension points conceptually | Specify profile identifiers, negotiation, required fields, and fail-closed behavior |
-| Encrypted outer metadata minimization | Open | v0.6 intentionally exposes outer metadata needed for L2 verification | Define optional profiles for reducing recipient and issuer metadata exposure |
+| Encrypted outer metadata minimization | Open | v0.7 intentionally exposes outer metadata needed for L2 verification | Define optional profiles for reducing recipient and issuer metadata exposure |
 | Pith protocol boundary | Open | `spec/pith.md` describes Pith as a context-style discipline and helper normalizer, but it remains easy to confuse with canonical protocol semantics | Move Pith requirements into an explicit authoring/profile layer; keep cryptographic verification independent from lossy narrative normalization |
 | Ecosystem adapter contracts | Partial | `spec/profiles/clerk.md` + `sdk-js/src/federation/` demonstrate the first adapter contract: an external identity/auth provider (Clerk) rides alongside capsules for identity binding, encrypted-recipient discovery, and policy while core verification stays offline. Other targets (MCP, A2A, OpenLineage, C2PA, SLSA/in-toto, LangChain/LlamaIndex) remain conceptual | Add adapter mappings for the remaining targets following the same portability-firewall pattern; clarify translated vs referenced vs omitted data per adapter |
 

@@ -61,10 +61,10 @@ Optional but conventional:
 For encrypted capsules, the inner shape contains the required files; the
 outer shape replaces them with `content.enc` plus decryption metadata.
 
-## Files that are *not* part of v0.6
+## Files that are *not* part of v0.7
 
 The following files appeared in the prior format and are not part of
-v0.6:
+v0.7:
 
 - `surface.md` — replaced by `program.md`
 - `handoff.md` — folded into `program.md` as a "Continuation" section
@@ -74,7 +74,7 @@ v0.6:
 - `surface-citations.md` convention — ordinary markdown links
 
 A reader that encounters these files in an old capsule should ignore
-them (they are not authoritative under v0.6) but should not error.
+them (they are not authoritative under v0.7) but should not error.
 
 How readers treat capsules whose *declared format version* differs from
 their own — known-older versions open forever; unknown versions fail

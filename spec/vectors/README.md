@@ -1,4 +1,4 @@
-# Capsule v0.6 Vectors
+# Capsule v0.7 Vectors
 
 This directory contains checked-in protocol vectors.
 

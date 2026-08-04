@@ -24,7 +24,11 @@
 // Pass { pith: false } to appendEvent() to opt out, or call
 // compressEventPayload() / compressText() directly.
 
-export const PITH_VERSION = "0.6";
+import { CURRENT_VERSION } from "./versions.js";
+
+// Pith is versioned with the spec (never a separate literal — a second
+// copy is exactly how a bump leaves a stale era behind).
+export const PITH_VERSION = CURRENT_VERSION;
 const DEFAULT_MAX_CHARS = 280;
 const DEFAULT_MAX_SENTENCES = 3;
 const ELLIPSIS = "…";

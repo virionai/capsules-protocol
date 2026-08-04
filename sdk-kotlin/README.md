@@ -1,6 +1,6 @@
 # Capsule SDK (Kotlin)
 
-Native Kotlin library for Capsule v0.6: a portable, signed, verifiable
+Native Kotlin library for Capsule v0.7: a portable, signed, verifiable
 container for AI work product. Build, read, verify, and sign **plain
 (unencrypted) capsules** on Android (or any JVM); embed skills; expose
 them to your app's LLM through a small documented contract.
@@ -18,7 +18,7 @@ Kotlin encryption path lands.
 
 ## Status
 
-`0.6.0-prototype.1` — the `:core` module compiles and its tests
+`0.7.0-prototype.1` — the `:core` module compiles and its tests
 (round-trip, JS-fixture parity, JCS number vectors) run in CI on every
 push; see the `conformance-kotlin` lane in
 [.github/workflows/conformance.yml](../.github/workflows/conformance.yml).
@@ -51,10 +51,10 @@ In `app/build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("ai.virion.capsule:core:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:skills:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:llm:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:ui:0.6.0-prototype.1")
+    implementation("ai.virion.capsule:core:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:skills:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:llm:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:ui:0.7.0-prototype.1")
 }
 ```
 
@@ -177,9 +177,9 @@ JSON the skill emits — including the optional `webview` field that
 `WebviewSpec` models. The SDK does not bundle host-specific adapters;
 the shared interface keeps those adapters thin.
 
-## What ships in 0.6.0-prototype.1
+## What ships in 0.7.0-prototype.1
 
-- `:core`: full Capsule v0.6 builder, reader, verifier, envelope
+- `:core`: full Capsule v0.7 builder, reader, verifier, envelope
   sign/verify, JCS canonicalization, deterministic ZIP STORED.
 - `:skills`: `CapsuleSkill` model, `ParsedCapsule.skills()` extension,
   trust-tier semantics.

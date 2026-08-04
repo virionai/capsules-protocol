@@ -28,7 +28,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 const VECTORS = join(REPO_ROOT, "spec", "vectors");
 
-const ID_DOMAIN = "capsule-id-v0.6\x00";
+
 
 function sha256Hex(bytes) {
   return bytesToHex(sha256(bytes));
@@ -39,6 +39,13 @@ async function main() {
   const reader = await CapsuleReader.fromBytes(Buffer.from(basic.capsule_bytes_b64, "base64"));
   const manifest = reader.manifest();
   const envelope = reader.envelope();
+
+  // Domain strings are keyed by the pinned capsule's DECLARED version
+  // (spec/versioning.md) — never the SDK's current sealing version.
+  // plain-basic.json is a frozen v0.6 artifact, so these stay the v0.6
+  // strings even after the project seals at a later version.
+  const declaredVersion = manifest.format.version;
+  const ID_DOMAIN = `capsule-id-v${declaredVersion}\x00`;
 
   // capsule_id = SHA-256(domain || originator_pub_raw || first_event_hash_raw)
   const idDomainBytes = Buffer.from(ID_DOMAIN, "utf8");
@@ -73,7 +80,7 @@ async function main() {
   // input per role is domain_sep_bytes || canonical_payload_bytes.
   const envCanon = envelopeCanonicalPayload(envelope);
   const signers = envelope.signers.map((s) => {
-    const domain = `capsule-provenance-v0.6:${s.role}\x00`;
+    const domain = `capsule-provenance-v${declaredVersion}:${s.role}\x00`;
     const input = envelopeSigningInput(envelope, s.role);
     return {
       role: s.role,
@@ -89,7 +96,7 @@ async function main() {
     meta: {
       kind: "signing-input",
       name: "signing-input",
-      spec_version: "0.6",
+      spec_version: declaredVersion,
       description:
         "Byte-level signing/hashing input pins for the plain-basic embedded vector. Implementations MUST reproduce every canonical byte string and hash below from the capsule in capsule_ref, and verify the Ed25519 signature over the reconstructed signing input.",
       capsule_ref: "plain-basic.json",

@@ -164,12 +164,28 @@ test("CapsuleReader rejects envelope with wrong version", async () => {
   });
   const files = await unpackZip(bytes);
   const env = JSON.parse(Buffer.from(files.get("provenance/envelope.json")).toString("utf8"));
-  env.version = "0.7";
+
+  // An UNKNOWN envelope.version is refused at open (spec/versioning.md).
+  env.version = "9.9";
   files.set("provenance/envelope.json", Buffer.from(JSON.stringify(env, null, 2), "utf8"));
-  const tampered = await packZip(files);
+  const unknownVersion = await packZip(files);
   await assert.rejects(
-    () => CapsuleReader.fromBytes(tampered),
+    () => CapsuleReader.fromBytes(unknownVersion),
     /envelope\.version/,
+  );
+
+  // Two KNOWN versions that DISAGREE (manifest sealed at the current
+  // version, envelope claiming the previous era) leave the capsule
+  // ambiguous about which rules bind it: the verifier fails closed on
+  // the mismatch before applying either era's rules. Reachable only
+  // now that the known table has more than one row.
+  env.version = "0.6";
+  files.set("provenance/envelope.json", Buffer.from(JSON.stringify(env, null, 2), "utf8"));
+  const mismatched = await verifyCapsule(await packZip(files));
+  assert.equal(mismatched.ok, false);
+  assert.ok(
+    mismatched.errors.some((e) => e.includes("does not match manifest.format.version")),
+    `expected the version-mismatch diagnosis, got: ${mismatched.errors.join("; ")}`,
   );
 });
 

@@ -1,4 +1,4 @@
-// CapsuleBuilder: assembles a v0.6 capsule and seals it.
+// CapsuleBuilder: assembles a capsule at the current format version and seals it.
 
 import { assertIJson, jcs, sha256, sha256Hex } from "./canonical.js";
 import {

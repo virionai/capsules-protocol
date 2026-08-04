@@ -141,7 +141,7 @@ invented semantics:
   remaining segment names an object member, looked up in order starting
   at the event's `payload` object.
 - Only JSON **object** members are traversable. There is no array
-  indexing, wildcard, or escape syntax in v0.6.
+  indexing, wildcard, or escape syntax in v0.7.
 - A path that fails to resolve — a named member is absent, or an
   intermediate value is not an object — marks **nothing**. It is not an
   integrity violation (payload shapes evolve; the claim covers the
@@ -271,8 +271,8 @@ envelope anchor comparison like any other mismatch.
   envelope's `signed_at` at seal time).
 - Truth of payload contents.
 - Authority of the actor outside of `originator` (which is the only
-  participant cryptographically bound to a key in v0.6).
+  participant cryptographically bound to a key in v0.7).
 
 The chain proves: *these events, in this order, with these payloads,
 were the events at seal time.* Anything stronger requires an external
-anchor (Rekor, RFC 3161) which is parking-lot for v0.6.
+anchor (Rekor, RFC 3161) which is parking-lot for v0.7.

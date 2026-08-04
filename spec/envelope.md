@@ -2,7 +2,7 @@
 
 `provenance/envelope.json` carries the signatures that bind the capsule
 to one or more keys at one moment in time. The schema and signing
-procedure below are the v0.6 cryptographic profile: they define the
+procedure below are the v0.7 cryptographic profile: they define the
 interoperable working model for this spec version, not a permanent
 prescription for every Capsule deployment.
 
@@ -10,14 +10,14 @@ Deployments may integrate different verification, encryption,
 authorization, identity, or key-management technologies as alternate
 profiles. Such profiles must be explicitly declared, versioned, and
 fail-closed in readers that do not understand them. They are outside the
-v0.6 conformance target unless and until a later spec version or profile
+v0.7 conformance target unless and until a later spec version or profile
 registry defines them.
 
 ## Schema
 
 ```json
 {
-  "version": "0.6",
+  "version": "0.7",
   "capsule_id": "<64-hex>",
   "first_event_hash": "<64-hex> | null",
   "entry_hash": "<64-hex> | null",
@@ -38,7 +38,9 @@ registry defines them.
 
 ## Field rules
 
-- `version`: `"0.6"`; MUST equal `manifest.format.version`. Readers
+- `version`: the capsule's declared format version (`"0.7"` for
+  capsules sealed at this spec version); MUST equal
+  `manifest.format.version`. Readers
   accept any KNOWN version under that era's rules and fail closed on an
   unknown one — with a diagnosis distinct from tamper detection, and no
   silent upgrade path in either direction. See
@@ -102,7 +104,7 @@ intermediate hash construction.
 
 ```
 canonical_payload = JCS(envelope minus "signers")          // bytes
-domain_sep        = utf8("capsule-provenance-v0.6:" + role + "\x00")
+domain_sep        = utf8("capsule-provenance-v<version>:" + role + "\x00")   // <version> = envelope.version
 signing_input     = domain_sep || canonical_payload         // bytes
 signature         = Ed25519.sign(signing_input)             // 64 bytes
 signature_hex     = hex(signature)
@@ -172,7 +174,7 @@ Post-seal countersigning is *not* expressed by appending to
 a finalized structure is not countersigning (RFC 9338 requires a
 finalized target). A post-seal approval is a separate signed artifact
 whose subject names the finalized capsule; a countersignature-capsule
-profile is future (v0.7+) work.
+profile is future (v0.8+) work.
 
 Conformance vectors: `spec/vectors/signer-set/`.
 
@@ -254,7 +256,7 @@ content_key   = random(32)
 content_nonce = random(12)
 
 aad = JCS({
-  "version":               "0.6",
+  "version":               "0.7",
   "capsule_id":            <hex>,
   "first_event_hash":      <hex>,
   "originator_public_key": <hex>,
@@ -278,8 +280,8 @@ of `content.enc`; the combination of `capsule_id` (derived from
 already binds the ciphertext to a specific origin and chain genesis.
 Implementations MUST NOT include `manifest_hash` in the AAD.
 
-The KDF info string `capsule-key-wrap-v0.6` and the AAD's `version`
-member both carry the capsule's declared version, keyed as in
+The KDF info string `capsule-key-wrap-v<version>` and the AAD's
+`version` member both carry the capsule's declared version, keyed as in
 [versioning.md](versioning.md). No algorithm identifiers appear in the
 sealed bytes beyond `cipher`; the agreement and KDF are fixed by the
 v0.6 suite ([versioning.md](versioning.md) "Algorithm suites").
@@ -292,7 +294,7 @@ shared      = X25519(ephemeral_priv, recipient_pub)
 wrap_key    = HKDF-SHA256(
                 ikm    = shared,
                 salt   = recipient_pub,
-                info   = utf8("capsule-key-wrap-v0.6"),
+                info   = utf8("capsule-key-wrap-v" + version),   // version = envelope.version
                 length = 32
               )
 wrap_nonce  = random(12)
@@ -333,7 +335,7 @@ vector aimed at a recipient with their private key in scope.
   inner ZIP as a normal capsule. Recompute first/entry event hashes,
   manifest hash, content index hash. Compare to the outer envelope.
 
-There is no L1 in v0.6. L1 (ledger-anchored existence) is parking-lot.
+There is no L1 in v0.7. L1 (ledger-anchored existence) is parking-lot.
 
 ## What the envelope does *not* prove
 
@@ -351,6 +353,6 @@ There is no L1 in v0.6. L1 (ledger-anchored existence) is parking-lot.
   sound.
 - That `signed_at` is the real time of sealing. Self-attested time is
   trivially backdatable. External anchoring (Rekor / RFC 3161) is
-  parking-lot for v0.7+.
+  parking-lot for v0.8+.
 - That the contents are correct, true, or non-malicious. Integrity is
   not authority.

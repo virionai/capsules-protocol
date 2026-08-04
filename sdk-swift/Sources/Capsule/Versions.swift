@@ -20,8 +20,8 @@ public enum CapsuleVersions {
     // Backing storage for the version table. Mutated ONLY by
     // `simulatingBump` (test-only): production code reads the computed
     // `known` / `current` and must never write these.
-    private static var knownStorage: [String] = ["0.6"]
-    private static var currentStorage: String = "0.6"
+    private static var knownStorage: [String] = ["0.6", "0.7"]
+    private static var currentStorage: String = "0.7"
 
     /// Every format version this implementation knows, oldest → newest.
     /// A version is never removed (spec/versioning.md: dropping a
@@ -60,9 +60,15 @@ public enum CapsuleVersions {
     /// Per-era algorithm-suite identifier (spec/versioning.md "Algorithm
     /// suites"): a v0.6 capsule names no algorithm anywhere in its
     /// bytes; absence means the v0.6 suite (Ed25519 / SHA-256 / JCS
-    /// RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305).
+    /// RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305). v0.7
+    /// introduces no algorithm changes and no agility: absence in a
+    /// 0.7 capsule means the SAME v0.6 suite — the identifier names
+    /// the algorithm set by the era that introduced it.
     public static func suite(for version: String) -> String? {
-        version == "0.6" ? "v0.6" : nil
+        switch version {
+        case "0.6", "0.7": return "v0.6"
+        default: return nil
+        }
     }
 
     /// Closed classification vocabulary for a declared version.

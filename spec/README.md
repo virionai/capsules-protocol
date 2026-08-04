@@ -1,4 +1,4 @@
-# Capsule Spec — v0.6
+# Capsule Spec — v0.7
 
 A portable unit of intelligence: a work product, the context to continue
 it, and a verifiable audit trail.
@@ -24,7 +24,7 @@ These five things are the durable core. They survive untouched.
 
 ## Cryptographic profile vs extension points
 
-v0.6 specifies one working cryptographic profile so independent
+v0.7 specifies one working cryptographic profile so independent
 implementations can interoperate today: JCS canonicalization, SHA-256
 hashes, Ed25519 envelope signatures, X25519 recipient wrapping, and
 ChaCha20-Poly1305 content encryption.
@@ -37,7 +37,7 @@ points that deployments can replace with their own systems, provided the
 capsule declares the profile unambiguously and readers fail closed when
 they do not understand it.
 
-In v0.6, alternate profiles are experimental and outside the conformance
+In v0.7, alternate profiles are experimental and outside the conformance
 target. A future version or profile registry can standardize additional
 bindings for enterprise KMS, hardware keys, transparency logs,
 organization identity providers, or jurisdiction-specific audit systems
@@ -101,12 +101,19 @@ procedure.
 - [trust.md](trust.md) — trust model, allowlists, derived skill trust
 - [pith.md](pith.md) — context-style discipline for narrative fields
 - [federation.md](federation.md) — key discovery, issuer metadata, and
-  temporal anchoring (informative draft, proposed for v0.7)
+  temporal anchoring (informative overlay; embedded locations remain a
+  post-0.7 item)
 
 ## Versioning
 
-This spec is `v0.6`. So is the SDK lane and the envelope schema. They
-move together until a second independent implementation lands.
+This spec is `v0.7`. So is the SDK lane and the envelope schema. They
+move together until a second independent implementation lands. The
+"What v0.6 keeps / strips / replaces" sections above describe the v0.6
+redesign baseline, which v0.7 inherits unchanged — the 0.6 → 0.7 bump
+changed the declared version, the version-keyed domain strings, and the
+removal of `manifest.skill_trust`, not the cryptographic profile; a
+v0.7 verifier still opens v0.6 capsules under the v0.6 rules
+([versioning.md](versioning.md)).
 
-`v1.0` is the schema that will be verified for ten years. v0.6 is the
+`v1.0` is the schema that will be verified for ten years. v0.7 is the
 schema that earns its way there.

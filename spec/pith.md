@@ -40,7 +40,7 @@ When writing narrative fields a foreign LLM will read:
 
 ## Where Pith applies
 
-In a v0.6 capsule, the narrative fields the SDK auto-normalizes:
+In a v0.7 capsule, the narrative fields the SDK auto-normalizes:
 
 - `chain/events.jsonl` per-event:
   - `payload.summary`
@@ -65,7 +65,7 @@ product. Authors apply the discipline themselves.
 These defaults are a starting point, not protocol. Implementations may
 tune. Two implementations producing the same JSON event after
 normalization are considered conformant; byte-for-byte identical
-normalized output across implementations is *not* a v0.6 promise.
+normalized output across implementations is *not* a v0.7 promise.
 
 ## Truncation and the canonicalization boundary
 
@@ -81,7 +81,7 @@ resulting unpaired surrogate is outside the acceptance boundary in
 implementation that produced it and fails to verify everywhere else, with
 an error that reads like tampering.
 
-This is a MUST even though byte-identical normalizer output is not a v0.6
+This is a MUST even though byte-identical normalizer output is not a v0.7
 promise: what varies across implementations is *where* the cut lands, not
 *whether* the result is well-formed Unicode.
 

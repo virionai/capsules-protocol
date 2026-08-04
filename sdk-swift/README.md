@@ -1,17 +1,17 @@
 # Capsule SDK (Swift)
 
-Native Swift Package for Capsule v0.6: a portable, signed, verifiable
+Native Swift Package for Capsule v0.7: a portable, signed, verifiable
 container for AI work product. Build, read, verify, and sign capsules
 on iOS or macOS; embed skills; expose them to your app's LLM through a
 small documented contract.
 
-This is one of three implementations of Capsule v0.6 — the JS SDK (Node)
+This is one of three implementations of Capsule v0.7 — the JS SDK (Node)
 is the reference; this Swift SDK and the sibling [Kotlin SDK](../sdk-kotlin)
 make the format real on phones.
 
 ## Status
 
-`v0.6.0-prototype.1` — `swift build` succeeds on macOS and iOS with
+`v0.7.0-prototype.1` — `swift build` succeeds on macOS and iOS with
 zero warnings, and the package's 25 tests pass (round-trip, encryption
 primitives + end-to-end, and cross-implementation parity against
 fixtures produced by the JS SDK). Encryption (X25519 + HKDF-SHA256 +
@@ -197,7 +197,7 @@ JSON the skill emits, including the optional `webview` field modeled by
 `WebviewSpec`. The SDK does not bundle host-specific adapters; the
 shared protocol keeps those adapters thin.
 
-## What ships in v0.6.0-prototype.1
+## What ships in v0.7.0-prototype.1
 
 - `Capsule`: JCS, Crypto (CryptoKit) — SHA-256, Ed25519, `X25519KeyPair`,
   `HKDF`, `ChaCha20Poly1305`, `Random` — Zip (deterministic STORED),

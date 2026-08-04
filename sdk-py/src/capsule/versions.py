@@ -22,16 +22,19 @@ import re
 #: Every format version this implementation knows, oldest -> newest. A
 #: version is never removed (spec/versioning.md: dropping a version a
 #: verifier once knew is a conformance violation).
-KNOWN_VERSIONS: tuple[str, ...] = ("0.6",)
+KNOWN_VERSIONS: tuple[str, ...] = ("0.6", "0.7")
 
 #: The version this implementation SEALS at.
-CURRENT_VERSION = "0.6"
+CURRENT_VERSION = "0.7"
 
 #: Per-era algorithm suite identifiers (spec/versioning.md "Algorithm
 #: suites"): a v0.6 capsule names no algorithm anywhere in its bytes;
 #: absence means the v0.6 suite (Ed25519 / SHA-256 / JCS RFC 8785 /
-#: X25519 + HKDF-SHA-256 + ChaCha20-Poly1305), permanently.
-SUITES: dict[str, str] = {"0.6": "v0.6"}
+#: X25519 + HKDF-SHA-256 + ChaCha20-Poly1305), permanently. v0.7
+#: introduces no algorithm changes and no agility: absence in a 0.7
+#: capsule means the SAME v0.6 suite — the identifier names the
+#: algorithm set by the era that introduced it, not the sealing era.
+SUITES: dict[str, str] = {"0.6": "v0.6", "0.7": "v0.6"}
 
 # <major>.<minor>, decimal, no leading zeros.
 _VERSION_GRAMMAR = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")

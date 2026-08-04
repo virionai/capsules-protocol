@@ -1,6 +1,6 @@
-# Capsule v0.6 — Python SDK
+# Capsule v0.7 — Python SDK
 
-Independent Python implementation of the Capsule v0.6 portable,
+Independent Python implementation of the Capsule v0.7 portable,
 signed, verifiable work-artifact format. Sibling to the
 [JS reference SDK](../sdk-js/) and the [Rust verifier](../verifier-rust/);
 same wire format, same verification semantics, same ergonomics.

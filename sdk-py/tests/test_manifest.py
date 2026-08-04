@@ -1,6 +1,7 @@
 import pytest
 
 from capsule.canonical import jcs, sha256_hex
+from capsule.versions import CURRENT_VERSION
 from capsule.manifest import (
     CONTENT_INDEX_EXCLUDED,
     STRUCTURAL_EXCLUDED,
@@ -93,7 +94,7 @@ def test_build_manifest_shape():
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
-    assert m["format"]["version"] == "0.6"
+    assert m["format"]["version"] == CURRENT_VERSION
     assert m["format"]["container"] == "zip"
     assert m["format"]["canonicalization"] == "JCS-RFC8785"
     assert m["format"]["hash_algorithm"] == "SHA-256"

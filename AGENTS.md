@@ -17,7 +17,7 @@ specific parent folder, workstation path, or sibling archive checkout exists.
 
 ## Working Rules
 
-- Treat this repository as the active source of truth for v0.6 protocol,
+- Treat this repository as the active source of truth for v0.7 protocol,
   SDK, CLI, verifier, and conformance work.
 - Do not copy legacy architecture from external or archived repositories
   into the SDKs without an explicit design decision recorded in the issue,

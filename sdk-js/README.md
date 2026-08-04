@@ -1,6 +1,6 @@
-# @capsule/sdk-v0.6-prototype
+# @capsule/sdk-v0.7-prototype
 
-Reference JavaScript SDK for Capsule v0.6 — a portable, signed,
+Reference JavaScript SDK for Capsule v0.7 — a portable, signed,
 verifiable file format for units of AI-assisted work. A `.capsule` is a
 deterministic ZIP carrying a document (`program.md`), its participants,
 and a hash-chained, Ed25519-signed audit trail that anyone can verify
@@ -16,7 +16,7 @@ Not yet published to npm. Install from a checkout of this repository:
 ```sh
 npm install /path/to/capsules-protocol/sdk-js
 # or, in package.json:
-#   "@capsule/sdk-v0.6-prototype": "file:../capsules-protocol/sdk-js"
+#   "@capsule/sdk-v0.7-prototype": "file:../capsules-protocol/sdk-js"
 ```
 
 Requirements: Node.js >= 20, ESM (`import`). Crypto is Node's built-in
@@ -42,7 +42,7 @@ import {
   CapsuleReader,
   verifyCapsule,
   generateEd25519,
-} from "@capsule/sdk-v0.6-prototype";
+} from "@capsule/sdk-v0.7-prototype";
 
 // 1. One keypair for your app (persist keys.privateKeyHex somewhere safe;
 //    in a real app you generate this once, not per capsule).
@@ -156,7 +156,7 @@ verify the outer signatures (L2); only recipients can decrypt and fully
 verify the content (L3):
 
 ```js
-import { generateX25519 } from "@capsule/sdk-v0.6-prototype";
+import { generateX25519 } from "@capsule/sdk-v0.7-prototype";
 
 const recipient = generateX25519(); // recipient generates; shares publicKeyHex
 

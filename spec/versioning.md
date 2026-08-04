@@ -132,6 +132,13 @@ observed version. Future versions that introduce algorithm agility MUST
 declare identifiers explicitly and MUST NOT reinterpret the absence of
 one in a v0.6 capsule.
 
+**Version 0.7 introduces no algorithm changes and no agility.** In a
+capsule whose declared format version is `0.7`, the absence of an
+algorithm identifier likewise means the v0.6 suite, permanently — the
+suite identifier names the algorithm set by the era that introduced it,
+not the sealing era, so verifiers report suite `v0.6` for both 0.6 and
+0.7 capsules.
+
 ## Host policy: the SDK reports, the host decides
 
 Whether an observed version is *acceptable* is deployment policy, not
@@ -147,9 +154,10 @@ a capsule the verifier could not check.
 
 ## What this section does *not* do
 
-- It does not perform a version bump. Introducing `0.7` is a deliberate
-  spec change that adds a row to the known-version table; this section
-  is what makes that bump safe for every capsule already sealed.
+- It does not perform a version bump. Introducing a new version — as
+  the 0.6 → 0.7 bump did — is a deliberate spec change that adds a row
+  to the known-version table; this section is what makes such bumps
+  safe for every capsule already sealed.
 - It does not promise forward compatibility of *content*: a v0.6
   verifier refuses a v0.7 capsule (fail closed, `unknown_newer`); it
   does not guess.
@@ -158,7 +166,10 @@ a capsule the verifier could not check.
   within every version.
 
 Conformance vectors: `spec/vectors/version-compat/` — a known-version
-capsule that must verify with the observed version reported, an
-unknown-newer and an unknown-older capsule that must fail closed with
-the distinguishable reasons above, and a grammar-violating version that
-must be reported as malformed, not unsupported.
+capsule that must verify with the observed version reported, a FROZEN
+genuine v0.6 capsule (sealed by the pre-bump v0.6 SDK, byte-pinned,
+never regenerated) that a current verifier must open under the v0.6
+rules reporting `0.6`, an unknown-newer and an unknown-older capsule
+that must fail closed with the distinguishable reasons above, and a
+grammar-violating version that must be reported as malformed, not
+unsupported.

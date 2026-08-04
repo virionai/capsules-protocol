@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// The `format` block at the top of every manifest. All four fields are
-/// fixed-vocabulary strings in v0.6 (`"0.6"`, `"zip"`, `"JCS-RFC8785"`,
+/// fixed-vocabulary strings (`"0.6"`/`"0.7"`, `"zip"`, `"JCS-RFC8785"`,
 /// `"SHA-256"`); we keep them as `String` rather than enums so an unknown
 /// future value fails at the *verifier* level (with a clear "unsupported
 /// format" message) rather than at deserialization with a serde-internal
@@ -330,7 +330,9 @@ mod tests {
         let manifest: Manifest =
             serde_json::from_slice(manifest_bytes).expect("manifest deserializes");
 
-        assert_eq!(manifest.format.version, "0.6");
+        // The clean fixture is sealed by the current-era JS SDK; this pin
+        // moves with each protocol bump (crate::versions::CURRENT_VERSION).
+        assert_eq!(manifest.format.version, crate::versions::CURRENT_VERSION);
         assert_eq!(manifest.format.canonicalization, "JCS-RFC8785");
         assert_eq!(manifest.format.container, "zip");
         assert_eq!(manifest.format.hash_algorithm, "SHA-256");
@@ -386,7 +388,7 @@ mod tests {
         let envelope: Envelope =
             serde_json::from_slice(envelope_bytes).expect("envelope deserializes");
 
-        assert_eq!(envelope.version, "0.6");
+        assert_eq!(envelope.version, crate::versions::CURRENT_VERSION);
         assert_eq!(envelope.cipher, "none");
         assert!(
             envelope.encrypted_blob_hash.is_none(),

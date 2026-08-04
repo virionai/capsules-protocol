@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "skill-trust",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the skill-trust derivation fixtures (spec/trust.md 'Skill trust'). The tier is DERIVED from the verify result — capsule_signed = result.ok AND content_index.ok AND envelope.ok AND trusted_signer_count > 0 (the OVERALL verdict is consulted: a capsule that fails verification never classifies anything signed); a skill is 'signed' iff capsule_signed AND skills/<id>/skill.json is listed in manifest.content_index.files — and NEVER read from the capsule: a `skill_trust` manifest member is not part of v0.6, and when present (earlier drafts, hostile authors) it is an inert unknown member. The adversary is the capsule's own AUTHOR, so the member being tamper-evident proves nothing: author-claims-signed carries skill_trust:{exfil:'signed'} inside its correctly signed manifest, and a lane that surfaces that claim as trust hands a prompt-injection payload to a host LLM as trusted instructions. Each vector's `allowlist` names keypairs in keys_file ([] = verify with no allowlist). Independent implementations SHOULD reproduce ok, the failing areas, and expected.skill_trust below.",
     "generator": "sdk-js/tools/generate-skill-trust-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."

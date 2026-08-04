@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "tamper-detection",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the tamper-detection fixtures. Independent implementations SHOULD reproduce ok and the failing areas below.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },

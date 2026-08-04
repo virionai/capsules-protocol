@@ -1,4 +1,4 @@
-// Public surface of @capsule/sdk-v0.6-prototype.
+// Public surface of @capsule/sdk-v0.7-prototype.
 
 export { CapsuleBuilder } from "./builder.js";
 export { CapsuleReader } from "./reader.js";
@@ -68,7 +68,10 @@ export {
 // (e.g. Clerk). Never touches core verification; see spec/federation.md.
 export * as federation from "./federation/index.js";
 
-export const SPEC_VERSION = "0.6";
+// The spec version this SDK seals at — always the versions module's
+// CURRENT_VERSION, never a separate literal (a second copy is exactly
+// how a bump leaves a stale era behind).
+export { CURRENT_VERSION as SPEC_VERSION } from "./versions.js";
 
 // Version-compatibility policy (spec/versioning.md): the known-version
 // table, the classifier behind the verify result's formatVersion channel,

@@ -1,6 +1,6 @@
-# verifier-rust — second independent Capsule v0.6 verifier
+# verifier-rust — second independent Capsule v0.7 verifier
 
-A Rust verifier for Capsule v0.6 capsules (plain and encrypted-outer).
+A Rust verifier for Capsule v0.7 capsules (plain and encrypted-outer; v0.6 capsules stay supported forever per spec/versioning.md).
 Written from the spec, not ported from the JS reference. Byte-compatible
 with the JS SDK (`sdk-js/`) on the canonical shared vector corpus
 (`spec/vectors/tamper-detection/`).
@@ -111,7 +111,7 @@ the recipient's X25519 private key is supplied:
 
 - ZIP container parse and safety checks (STORED-only at our layer; size
   / entry caps; rejects path traversal, absolute paths, symlinks).
-- `capsule_id` derivation: `SHA-256("capsule-id-v0.6\x00" || originator_pubkey || first_event_hash)`.
+- `capsule_id` derivation: `SHA-256("capsule-id-v<version>\x00" || originator_pubkey || first_event_hash)`, keyed by the capsule's declared version.
 - `manifest_hash` over the JCS-canonical manifest minus the
   self-referential field.
 - `content_index` re-hashing: every committed file's bytes, the

@@ -1,4 +1,4 @@
-# Clerk Federation Profile (v0.6, informative)
+# Clerk Federation Profile (v0.7, informative)
 
 This profile maps [Clerk](https://clerk.com) onto the generic
 [federation](../federation.md) vocabulary. It lets a Clerk-authenticated

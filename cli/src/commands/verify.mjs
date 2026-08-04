@@ -27,7 +27,7 @@
 // always matches the exit code, while `integrity_ok` preserves the
 // SDK/Rust math-only verdict.
 
-import { CapsuleReader, verifyCapsule } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader, verifyCapsule } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, check, out, readBytes, truncHex } from "../format.mjs";
 
@@ -135,8 +135,8 @@ export async function verifyCmd(argv) {
   out(`File:                   ${file} (${bytes.length} bytes)`);
   out(`Capsule ID:             ${truncHex(m.id)}`);
   out(`Originator (Ed25519):   ${truncHex(m.originator.public_key)}`);
-  // signed_at is asserted by the signer; v0.6 has no external time
-  // anchor, so it is labelled as attested, never presented as verified.
+  // signed_at is asserted by the signer; the format has no external
+  // time anchor, so it is labelled as attested, never verified.
   out(`Sealed at (attested):   ${e.signed_at}  — signer-supplied; no external time anchor`);
   out(`Level:                  ${result.level}`);
   // spec/versioning.md: report which era's rules were applied. Suite

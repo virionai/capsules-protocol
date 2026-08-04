@@ -18,19 +18,22 @@
 /// Every format version this implementation knows, oldest → newest. A
 /// version is never removed (spec/versioning.md: dropping a version a
 /// verifier once knew is a conformance violation).
-pub const KNOWN_VERSIONS: &[&str] = &["0.6"];
+pub const KNOWN_VERSIONS: &[&str] = &["0.6", "0.7"];
 
 /// The version this implementation targets when writing (none today —
 /// this crate is a verifier — but the constant anchors the table).
-pub const CURRENT_VERSION: &str = "0.6";
+pub const CURRENT_VERSION: &str = "0.7";
 
 /// Per-era algorithm-suite identifier (spec/versioning.md "Algorithm
 /// suites"): a v0.6 capsule names no algorithm anywhere in its bytes;
 /// absence means the v0.6 suite (Ed25519 / SHA-256 / JCS RFC 8785 /
-/// X25519 + HKDF-SHA-256 + ChaCha20-Poly1305), permanently.
+/// X25519 + HKDF-SHA-256 + ChaCha20-Poly1305), permanently. v0.7
+/// introduces no algorithm changes and no agility: absence in a 0.7
+/// capsule means the SAME v0.6 suite — the identifier names the
+/// algorithm set by the era that introduced it, not the sealing era.
 pub fn suite_for(version: &str) -> Option<&'static str> {
     match version {
-        "0.6" => Some("v0.6"),
+        "0.6" | "0.7" => Some("v0.6"),
         _ => None,
     }
 }

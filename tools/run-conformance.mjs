@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Capsule v0.6 conformance harness — JavaScript lane.
+// Capsule v0.7 conformance harness — JavaScript lane.
 //
 // Runs the repo-local JavaScript targets (JS SDK, CLI, examples, and
 // repo hygiene checks) serially, captures structured results, and
@@ -54,7 +54,7 @@ const TARGETS = [
   },
   {
     id: "sdk-js",
-    name: "@capsule/sdk-v0.6-prototype",
+    name: "@capsule/sdk-v0.7-prototype",
     language: "javascript",
     kind: "sdk",
     cwd: "sdk-js",
@@ -580,7 +580,7 @@ function buildMarkdown(report) {
   const lines = [];
   const s = report.summary;
   const overall = s.overall_status === "pass" ? "PASS" : "FAIL";
-  lines.push(`# Capsule v0.6 conformance report — JavaScript lane`);
+  lines.push(`# Capsule v0.7 conformance report — JavaScript lane`);
   lines.push("");
   lines.push(
     "This report covers the JavaScript targets only (JS SDK, CLI, " +
@@ -641,7 +641,7 @@ async function main() {
   const overallStart = process.hrtime.bigint();
   const entries = [];
 
-  console.log(`Capsule v0.6 conformance harness (JavaScript lane) v${HARNESS_VERSION}`);
+  console.log(`Capsule v0.7 conformance harness (JavaScript lane) v${HARNESS_VERSION}`);
   console.log(`Node ${process.version} on ${process.platform}`);
   console.log(`Targets: ${TARGETS.length}`);
   console.log("");

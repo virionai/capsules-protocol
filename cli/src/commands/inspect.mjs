@@ -4,7 +4,7 @@
 // chain length, action histogram, payload tree size, signer summary. No
 // verification — use `capsule verify` for that.
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { bytesText, out, readBytes, truncHex } from "../format.mjs";
 

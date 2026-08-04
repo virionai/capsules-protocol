@@ -6,7 +6,7 @@ because the prior format blurred it.
 
 ## Extension points and host policy
 
-The v0.6 verifier, envelope, and encryption rules are a current working
+The v0.7 verifier, envelope, and encryption rules are a current working
 model for interoperable capsules. They are not a prescription that every
 Capsule deployment must use the same verification service, encryption
 system, identity provider, authorization stack, or key-custody model.
@@ -18,10 +18,10 @@ resolution, trusted-key registries, enterprise KMS, hardware-backed keys,
 external transparency logs, private authorization systems, and future
 encryption profiles.
 
-For v0.6 conformance, readers implement the profile described in
+For v0.7 conformance, readers implement the profile described in
 [envelope.md](envelope.md). If a capsule declares an alternate profile,
 a reader that does not understand that profile must reject it rather than
-silently downgrade to the v0.6 defaults.
+silently downgrade to the v0.7 defaults.
 
 ## What L2 proves vs what hosts must add
 
@@ -50,14 +50,14 @@ Hosts close that gap with an **allowlist**:
   on the allowlist; otherwise `trusted = false` even with valid signature
 
 A reader that returns "verified" without reference to an allowlist is
-incomplete. The convention v0.6 enforces is: the SDK returns L2 results
+incomplete. The convention v0.7 enforces is: the SDK returns L2 results
 *per signer*, and the host computes `trusted` from that plus its
 allowlist. The SDK never claims trust on its own.
 
 ## Skill trust
 
 Skills are instructions a foreign LLM may read. They are also therefore
-a designed-in prompt-injection surface. v0.6 splits them into two tiers.
+a designed-in prompt-injection surface. v0.7 splits them into two tiers.
 **The tier is DERIVED by the verifier from the verify result. It is
 never declared by the capsule.** Both tiers are defined relative to the
 HOST'S allowlist, which exists only at verify time — a build-time
@@ -104,7 +104,7 @@ results report both the capsule-level fact and the per-id map
 (`skill_trust: {capsule_signed, skills}` in this repo's verifiers)
 rather than faking a granularity the cryptography does not provide.
 
-**There is no `manifest.skill_trust` member in v0.6.** Earlier drafts
+**There is no `manifest.skill_trust` member in v0.6 or v0.7.** Earlier drafts
 let the author write one; that was a category error twice over — a
 build-time field claiming a verify-time, host-relative property, with
 per-skill granularity a single envelope signature cannot back — and,
@@ -137,7 +137,7 @@ their private key. Even if today's SDK ignores the markdown, future
 hosts that "follow the decryption instructions" have a critical
 compromise vector. Removing the markdown forecloses the surface.
 
-The decryption metadata in v0.6 lives at
+The decryption metadata in v0.7 lives at
 `skills/decryption/decryption.json` and is treated as typed data by the
 SDK only.
 
@@ -182,22 +182,22 @@ fetch independently. Conventional options:
 - a DNS TXT record at a known zone
 - a regulator-distributed key list, where applicable
 
-v0.6 does not pick one. v0.6 documents the requirement: a capsule is
+v0.7 does not pick one. v0.7 documents the requirement: a capsule is
 trustworthy in proportion to the verifier's ability to obtain the
 issuer's public key out-of-band. The format does not provide that
 binding; the format only provides the integrity over the bound result.
 
-[federation.md](federation.md) is the informative draft that picks the
-mechanisms for v0.7: a `.well-known/capsule-signers` signer document,
+[federation.md](federation.md) is the informative overlay that picks
+those mechanisms: a `.well-known/capsule-signers` signer document,
 Sigstore identities, key lifecycle status, and bundled temporal
-anchors. It changes nothing about v0.6 conformance.
+anchors. It changes nothing about v0.7 conformance.
 
 ## Threat model summary
 
 `Anticipated Roadmap fix` uses three labels:
 
 - `Planned`: the direction is already listed as v1.0 spec work.
-- `Open`: the gap is acknowledged, but v0.6 has no committed design.
+- `Open`: the gap is acknowledged, but v0.7 has no committed design.
 - `Won't fix in protocol`: the behavior is intentionally left to host
   policy, deployment policy, or user consent.
 
@@ -211,10 +211,10 @@ A signer who later wants to deny or backdate | Argue the timestamp is wrong beca
 A malicious capsule author distributing instructions to a trusting LLM | Put prompt-injection text in `program.md`, `agents.md`, `skills/`, `payload/`, or chain payload fields; omit `untrusted_payload_fields` unless the writer/verifier catches it; write any claim they like — including a draft-era `skill_trust` member — INSIDE the correctly signed manifest | Make a skill classify `signed` at a host that has not allowlisted the author's key: the tier is DERIVED from the host's allowlist at verify time and never read from the capsule, so the author's own declarations carry no trust weight ("Skill trust" above; vectors `spec/vectors/skill-trust/`). Cannot bypass host allowlists or untrusted-content framing where the host enforces them. (An earlier draft let the author declare the tier in `manifest.skill_trust`; a host enforcing that field as documented was enforcing the attacker's own claim — the field is removed, and verifiers MUST ignore it.) | Solved in v0.6 for the skill tier (derived classification + negative vectors). Won't fix as a cryptographic property for free-text surfaces. Planned/Open: reader projection rules, untrusted-content markers, and conformance cases for model contexts.
 A malicious payload author | Include code, HTML, PDFs, media, archives, or data designed to exploit a renderer or tempt execution | Execute payloads through the capsule format alone or bypass a host sandbox that treats payloads as inert evidence | Won't fix in protocol: verification is not malware analysis. Open: payload handling rules, untrusted-content projection rules, and resource-limit conformance requirements.
 A recipient with a private decryption key | Decrypt inner content; keep, copy, screenshot, or re-export plaintext locally | Re-seal under a signer key they do not control | Won't fix in protocol: no DRM after disclosure. Planned: key lifecycle semantics can limit future access.
-A compromised or retired signer / recipient key | Continue signing or decrypting until verifiers stop trusting that key; decrypt any historical capsule addressed to that key | Forge uncompromised keys or alter already sealed content without detection | Planned/Open: federation vocabulary plus key lifecycle semantics. Open: no v0.6 revocation or retirement record.
-A renderer or verifier report that labels math-only verification as trust | Mislead users by saying "verified" without checking signer allowlists or policy | Make an independent verifier report the same trust conclusion unless it uses the same bad policy | Open: verifier result vocabulary and renderer language. v0.6 already requires per-signer `valid` vs host-computed `trusted`.
+A compromised or retired signer / recipient key | Continue signing or decrypting until verifiers stop trusting that key; decrypt any historical capsule addressed to that key | Forge uncompromised keys or alter already sealed content without detection | Planned/Open: federation vocabulary plus key lifecycle semantics. Open: no v0.7 revocation or retirement record.
+A renderer or verifier report that labels math-only verification as trust | Mislead users by saying "verified" without checking signer allowlists or policy | Make an independent verifier report the same trust conclusion unless it uses the same bad policy | Open: verifier result vocabulary and renderer language. v0.7 already requires per-signer `valid` vs host-computed `trusted`.
 A resource-exhaustion attacker | Send very large capsules, many entries, deeply nested payloads, or expensive files within configured limits | Bypass mandatory ZIP-slip rejection or reader limits when implementations enforce them | Partially solved in v0.6 by path rejection plus file-count and size caps. Open: conformance tests for limit behavior and reader defaults.
 A cross-implementation canonicalization mismatch | Create capsules that verify in one implementation but fail in another if SDKs drift on JCS, hash inputs, ZIP handling, or envelope payloads | Break implementations that are tested against signed vectors and independent verifier parity | Planned: signed test vectors and second independent implementation gate before v1.
-An observer of an encrypted outer capsule | Learn outer metadata such as originator label/public key, recipient public keys, approximate size, signed time, and delivery context | Read `content.enc` without recipient key material | Open: encrypted outer metadata minimization is not designed. v0.6 does not try to hide outer metadata.
+An observer of an encrypted outer capsule | Learn outer metadata such as originator label/public key, recipient public keys, approximate size, signed time, and delivery context | Read `content.enc` without recipient key material | Open: encrypted outer metadata minimization is not designed. v0.7 does not try to hide outer metadata.
 A signer-list mutator (strip / add / duplicate) | Nothing against a committed capsule: removing a signer, appending a fresh signature in a chosen role, swapping roles, or duplicating an entry breaks the `manifest.signer_commitment` equality or the duplicate rule and fails closed. Against an *uncommitted* capsule: alter the reported signer set — which the verifier flags as unbound | Alter the signer set of a capsule whose manifest carries `signer_commitment` without breaking verification | Solved in v0.6 by `manifest.signer_commitment` (bound via `manifest_hash` inside every signature), duplicate-signer rejection, distinct-key counting, and originator binding. Absence of the commitment is reported machine-readably, never silently.
 A workflow that requires approval quorum or role policy | Accept a capsule with one valid signer when business policy required multiple roles, if the host only checks "any valid signature" | Forge a signature from a committed approver/notary/compliance key, or satisfy a distinct-key quorum by duplicating entries | Partially solved in v0.6: `signer_commitment` authenticates the set and counts are over distinct keys, so quorum evaluation has a sound input. Which roles/keys/thresholds are required remains host policy (see federation.md).

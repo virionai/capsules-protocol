@@ -6,7 +6,7 @@
 // this CLI" in cli/README.md), so the error points at the tools that
 // do — the SDK's reader.decrypt() and the Rust capsule-verify-cli.
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, out, readBytes, truncHex } from "../format.mjs";
 

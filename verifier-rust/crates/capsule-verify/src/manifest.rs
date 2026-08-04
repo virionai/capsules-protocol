@@ -181,7 +181,13 @@ mod tests {
     fn capsule_id_matches_stored() {
         let (manifest, _) = load_clean();
         let pk = hex_to_bytes(&manifest.originator.public_key).unwrap();
-        let id = compute_capsule_id(&pk, manifest.first_event_hash.as_deref(), "0.6").unwrap();
+        // Keyed by the fixture's DECLARED version (spec/versioning.md).
+        let id = compute_capsule_id(
+            &pk,
+            manifest.first_event_hash.as_deref(),
+            &manifest.format.version,
+        )
+        .unwrap();
         assert_eq!(id, manifest.id);
     }
 

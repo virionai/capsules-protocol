@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Status: v0.6 prototype" src="https://img.shields.io/badge/status-v0.6%20prototype-7BA7C9?style=flat-square">
+  <img alt="Status: v0.7 prototype" src="https://img.shields.io/badge/status-v0.7%20prototype-7BA7C9?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-C9A87B?style=flat-square">
   <img alt="Runtime: Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-888888?style=flat-square">
   <img alt="Verification: offline first" src="https://img.shields.io/badge/verify-offline%20first-F5F5F0?style=flat-square&labelColor=0A0D0F">
@@ -27,7 +27,7 @@
 
 > An open protocol for portable, signed, AI-readable records of multi-actor work.
 
-**The canonical protocol source for [Capsules.Run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.6 prototype.
+**The canonical protocol source for [Capsules.Run](https://capsules.run).** Built by [Virion.AI](https://virion.ai). MIT licensed. v0.7 prototype.
 
 [Live in-browser reader](https://capsules.run/load/) · [Roadmap](https://capsules.run/roadmap/) · [Conformance](https://capsules.run/conformance/)
 
@@ -68,7 +68,7 @@ To verify the protocol implementation locally:
 ## What's in this repo
 
 ```
-spec/                  v0.6 protocol specification (normative)
+spec/                  v0.7 protocol specification (normative)
   README.md            stripped/replaced/kept summary
   format.md            file layout
   manifest.md          manifest.json schema
@@ -98,9 +98,9 @@ they are illustrative only and carry no warranty.
   <img src=".github/assets/protocol-stack.svg" alt="Capsule protocol stack">
 </p>
 
-## What v0.6 is
+## What v0.7 is
 
-Capsule v0.6 defines the portable work artifact:
+Capsule v0.7 defines the portable work artifact:
 
 > A portable unit of intelligence. The work product (loan application, AML
 > review, scoping document, code, media) travels with the context needed to
@@ -172,13 +172,13 @@ markdown links. Skill inventory is computed at read.
 
 ## Status
 
-Prototype. Not v1.0. The envelope schema is `0.6` on purpose; locked once a second independent implementation round-trips the test vectors and an outside party reviews the crypto. See [ROADMAP.md](ROADMAP.md) for the five review checkpoints.
+Prototype. Not v1.0. The envelope schema is `0.7` on purpose; locked once a second independent implementation round-trips the test vectors and an outside party reviews the crypto. A v0.7 verifier still opens v0.6 capsules (spec/versioning.md: known versions open forever). See [ROADMAP.md](ROADMAP.md) for the five review checkpoints.
 
 ## Conformance
 
 The conformance harness (`tools/run-conformance.mjs`) is the JavaScript lane: it runs the JS SDK, CLI, and example checks and emits the conformance report. Cross-implementation coverage lives in the CI workflow, which gates five SDK lanes — JavaScript, Python, Rust, Kotlin, and Swift — against the same signed tamper-detection test vectors (`spec/vectors/tamper-detection/`) and the shared JCS number vectors (`spec/vectors/jcs-numbers.json`). See `.github/workflows/conformance.yml` for the gated lanes.
 
-Lane scope differs by SDK: JavaScript, Python, Rust, and Swift implement the full v0.6 profile including encrypted capsules (L2 + L3); the Kotlin lane covers the plain-capsule path only — the Kotlin core module has no X25519/ChaCha20-Poly1305 implementation yet and rejects encrypted capsules.
+Lane scope differs by SDK: JavaScript, Python, Rust, and Swift implement the full v0.7 profile including encrypted capsules (L2 + L3); the Kotlin lane covers the plain-capsule path only — the Kotlin core module has no X25519/ChaCha20-Poly1305 implementation yet and rejects encrypted capsules.
 
 ## Try the demo locally
 
@@ -202,7 +202,7 @@ is the sealed artifact that should move between work surfaces.
 
 The current Operators prototype uses Capsule-shaped local export,
 hydration, identity, and signing primitives. The next protocol gate is a
-verifier-compatible Capsule v0.6 archive: an export that passes both this
+verifier-compatible Capsule v0.7 archive: an export that passes both this
 repo's JS CLI verifier and the independent Rust verifier.
 
 ## License
@@ -221,7 +221,7 @@ opened, verified, continued, and handed off by another actor.
 
 The protocol starts with three pieces:
 
-| Layer | In v0.6 | Purpose |
+| Layer | In v0.7 | Purpose |
 | --- | --- | --- |
 | Content | `program.md`, `payload/`, embedded skills | The readable work product plus the materials needed to continue it |
 | State | computed from the manifest, participants, payloads, and event chain | The current operating context without a separate mutable `state.json` |
@@ -237,7 +237,7 @@ That shape gives capsules five properties:
 | Verification | Recipients can check who signed what, which files were committed, and whether content was changed |
 | Executable context | Skills and agent instructions travel with the artifact, but hosts decide what to run |
 
-In v0.6, `program.md` is the current human-readable surface, state is
+In v0.7, `program.md` is the current human-readable surface, state is
 computed from protocol data, and the signed chain is the source of temporal
 truth.
 
@@ -255,9 +255,9 @@ use tools:
 External services can improve distribution, but they are not required for
 the core verification story. The file remains the unit.
 
-### v0.6 snapshot
+### v0.7 snapshot
 
-Capsule v0.6 is a small, inspectable file format for moving useful work
+Capsule v0.7 is a small, inspectable file format for moving useful work
 between people, agents, tools, and organizations. The artifact carries the
 work product, the context required to continue it, the evidence or payload
 files it depends on, and the signed record of what happened.

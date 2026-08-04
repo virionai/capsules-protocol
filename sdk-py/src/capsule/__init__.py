@@ -1,4 +1,4 @@
-"""Capsule v0.6 reference Python SDK.
+"""Capsule v0.7 reference Python SDK.
 
 Mirrors the JS reference at sdk/src/. v0.1 supports plain capsules end
 to end; encrypted capsules raise EncryptedCapsulesNotSupportedError.
@@ -75,8 +75,11 @@ from .versions import (
 )
 from .zip_io import UnsafeZipPathError, pack_zip, unpack_zip
 
-__version__ = "0.6.0"
-SPEC_VERSION = "0.6"
+__version__ = "0.7.0"
+# The spec version this SDK seals at — always the versions module's
+# CURRENT_VERSION, never a separate literal (a second copy is exactly
+# how a bump leaves a stale era behind).
+SPEC_VERSION = CURRENT_VERSION
 
 __all__ = [
     "ACTOR_NAMESPACES",

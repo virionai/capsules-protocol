@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "chain-rules",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the per-event field rules in chain.md (verification steps 6 and 7) plus the manifest.md participants[].actor_id namespace grammar. The step-6 actor rule is CONDITIONAL on the manifest's own claim: a NON-EMPTY participants[] binds every event actor to the declared set (or the literal system:host), fail-closed; an EMPTY participants[] is the manifest making no claim about who acted — a weaker claim made honestly — so verification succeeds and the verifier MUST report the unbound actor set machine-readably (expected.actor_set_bound) and in notes. Conditioning on the list is safe because participants is covered by manifest_hash inside the signed payload. The kind enum is closed in EVERY tier, and so is the actor_id namespace set (human/ai/system/capsule, non-empty id) for every DECLARED participant. All capsules are cryptographically well-formed — real signatures, correct manifest hash, correct content index — so a verifier that skips the rule under test reports the wrong outcome and fails this registry.",
     "generator": "sdk-js/tools/generate-chain-rule-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."

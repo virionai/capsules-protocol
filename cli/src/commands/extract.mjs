@@ -8,7 +8,7 @@
 
 import { mkdir, writeFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, bytesText, out, readBytes } from "../format.mjs";
 

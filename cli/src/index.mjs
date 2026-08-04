@@ -25,10 +25,10 @@ const COMMANDS = {
   vectors: { fn: vectorsCmd, summary: "verify cross-implementation parity vectors" },
 };
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 function help() {
-  err("capsule — command-line tool for Capsule v0.6 files");
+  err("capsule — command-line tool for Capsule v0.7 files");
   err("");
   err("usage:  capsule <command> [args...]");
   err("");

@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "signer-set",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the signer-set binding fixtures (spec/manifest.md 'signer_commitment', spec/envelope.md 'Signer set binding'). PRESENCE BINDS: a present manifest.signer_commitment must equal the normalized envelope signer set exactly, fail-closed. ABSENCE REPORTS: a manifest without one verifies, and the verifier reports the set as unbound machine-readably (expected.signer_set_bound). Duplicate (role, public_key) signer entries are malformed, and manifest.originator.public_key must have a valid envelope signature with role 'originator'. Independent implementations SHOULD reproduce ok, the failing areas, and signer_set_bound below.",
     "generator": "sdk-js/tools/generate-signer-set-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."

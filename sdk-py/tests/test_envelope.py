@@ -2,6 +2,7 @@ import pytest
 
 from capsule.canonical import jcs
 from capsule.crypto import generate_ed25519
+from capsule.versions import CURRENT_VERSION
 from capsule.envelope import (
     build_envelope,
     envelope_canonical_payload,
@@ -26,7 +27,7 @@ def _make_plain_envelope():
 
 def test_build_envelope_default_cipher_none():
     env = _make_plain_envelope()
-    assert env["version"] == "0.6"
+    assert env["version"] == CURRENT_VERSION
     assert env["cipher"] == "none"
     assert env["encrypted_blob_hash"] is None
     assert env["signers"] == []
@@ -55,7 +56,10 @@ def test_canonical_payload_excludes_signers():
 def test_signing_input_is_domain_sep_then_canonical():
     env = _make_plain_envelope()
     out = envelope_signing_input(env, "originator")
-    expected = b"capsule-provenance-v0.6:originator\x00" + envelope_canonical_payload(env)
+    expected = (
+        f"capsule-provenance-v{CURRENT_VERSION}:originator\x00".encode()
+        + envelope_canonical_payload(env)
+    )
     assert out == expected
 
 
@@ -164,11 +168,11 @@ def test_verify_rejects_unknown_version():
             }
         ],
     )
-    env["version"] = "0.7"
+    env["version"] = "9.9"
     res = verify_envelope_signatures(env)
     assert res["ok"] is False
     # spec/versioning.md: an unknown WELL-FORMED version fails closed with
-    # the directional, non-tamper diagnosis (0.7 is not yet a known era).
+    # the directional, non-tamper diagnosis (9.9 is not a known era).
     assert "newer than this verifier supports" in res.get("note", "")
     # A grammar-violating version keeps the plain unsupported wording.
     env["version"] = "not-a-version"

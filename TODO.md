@@ -6,13 +6,13 @@ keeps the spec, SDKs, CLI, verifier, and conformance harness aligned.
 
 Priority legend:
 
-- **P0** blocks a credible v0.6 protocol lock.
+- **P0** blocks a credible v0.7 protocol lock.
 - **P1** should land before the next public release candidate.
 - **P2** is useful, but can wait for adoption signal or external review.
 
 ---
 
-## Capsule v0.6 Spec
+## Capsule v0.7 Spec
 
 - [x] **P0** - Create a checked-in normative vector registry under
       `spec/vectors/` with capsule bytes, expected hashes, verifier

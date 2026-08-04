@@ -2,7 +2,7 @@
   "meta": {
     "kind": "ed25519-verify",
     "name": "ed25519-key-validation",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Ed25519 key and signature validation registry. Implementations MUST report valid=false for every small-order public key, every non-canonically encoded public key, and every signature whose S component is not reduced mod L, and valid=true for the positive control.",
     "generator": "sdk-js/tools/generate-ed25519-key-validation-vector.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."

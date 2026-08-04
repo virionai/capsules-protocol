@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "malformed-shape",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected outcomes for capsules whose ZIP container is well-formed but whose manifest or chain documents violate the required field shapes. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the document before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false. No fixture here may make a verifier raise an unhandled exception.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
