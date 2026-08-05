@@ -15,6 +15,8 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+  - pith-authoring/vectors.json     (verbatim technical prose + the
+                                     pith_normalized_fields marker verify)
   - version-compat/vectors.json     (version gates: known opens, unknown fails
                                      closed with a non-tamper diagnosis)
 
@@ -57,6 +59,7 @@ KEY_VALIDATION = VECTORS / "ed25519-key-validation.json"
 KEY_ORDER = VECTORS / "jcs-key-order.json"
 IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
+PITH_AUTHORING = VECTORS / "pith-authoring" / "vectors.json"
 VERSION_COMPAT = VECTORS / "version-compat" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
@@ -331,6 +334,21 @@ def test_unicode_boundary_registry_outcomes(doc: dict, vector: dict, base: pathl
     A failure means this lane's canonicalization disagrees on well-formed
     astral text, not that the capsule was tampered with
     (spec/canonicalization.md, spec/pith.md).
+    """
+    _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(PITH_AUTHORING))
+def test_pith_authoring_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """Pith is opt-in authoring (spec/pith.md); its marker is an ordinary member.
+
+    technical-prose-verbatim: a default-built capsule whose summary holds
+    dots inside an identifier and decimals, stored byte-identical, no
+    marker. pith-normalized-marker: a pith-enabled capsule whose event
+    carries pith_normalized_fields (spec/chain.md), covered by the event
+    hash like any other member. Both MUST verify ok:true; a failure means
+    this lane rejects or re-projects an optional event member, not that a
+    capsule was tampered with.
     """
     _assert_registry_vector(doc, vector, base)
 

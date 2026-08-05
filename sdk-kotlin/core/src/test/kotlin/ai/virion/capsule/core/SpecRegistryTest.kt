@@ -17,6 +17,8 @@
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//   - pith-authoring/vectors.json     (verbatim technical prose + the
+//                                      pith_normalized_fields marker verify)
 //   - version-compat/vectors.json     (version gates: known opens and
 //                                      reports; unknown fails closed with
 //                                      a non-tamper diagnosis)
@@ -108,6 +110,32 @@ class SpecRegistryTest {
         val allowlist = registryAllowlist(doc, base)
         val vectors = doc.getAsJsonArray("vectors")
         assertTrue(vectors.size() > 0, "unicode-boundary registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            assertVerifyOutcome(name, v.getAsJsonObject("expected"), verify(bytes, allowlist))
+        }
+    }
+
+    /**
+     * Pith is opt-in authoring (spec/pith.md); its marker is an ordinary
+     * member. technical-prose-verbatim: a default-built capsule whose
+     * summary holds dots inside an identifier and decimals, stored
+     * byte-identical, no marker. pith-normalized-marker: a pith-enabled
+     * capsule whose event carries pith_normalized_fields (spec/chain.md),
+     * covered by the event hash like any other member. Both MUST verify
+     * ok:true; a failure means this lane rejects or re-projects an
+     * optional event member — not tampering.
+     */
+    @Test
+    fun pithAuthoringRegistryOutcomes() {
+        val file = File(vectorsDir(), "pith-authoring/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "pith-authoring registry is empty")
         for (entry in vectors) {
             val v = entry.asJsonObject
             val name = v.get("name").asString

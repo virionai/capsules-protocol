@@ -432,6 +432,27 @@
         }
       }
     },
+    "pith-authoring/vectors.json": {
+      "kind": "outcome-collection",
+      "lanes": {
+        "js": {
+          "consumer": "tools/check-spec-vectors.mjs",
+          "mode": "walker"
+        },
+        "python": {
+          "consumer": "sdk-py/tests/test_spec_registry.py"
+        },
+        "rust": {
+          "consumer": "verifier-rust/tests/spec_registry.rs"
+        },
+        "swift": {
+          "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift"
+        },
+        "kotlin": {
+          "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt"
+        }
+      }
+    },
     "unknown-fields/vectors.json": {
       "kind": "outcome-collection",
       "failing_areas": [

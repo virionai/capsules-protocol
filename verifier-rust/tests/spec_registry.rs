@@ -16,6 +16,8 @@
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //!   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//!   - pith-authoring/vectors.json     (verbatim technical prose + the
+//!                                      pith_normalized_fields marker verify)
 //!
 //! The registry's `reason` categories are normative; the substring tables
 //! below map each category onto this lane's error messages.
@@ -336,6 +338,29 @@ fn skill_trust_registry_outcomes() {
 #[test]
 fn unicode_boundary_registry_outcomes() {
     let path = vectors_dir().join("unicode-boundary/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// Pith is opt-in authoring (spec/pith.md); its marker is an ordinary member.
+///
+/// `technical-prose-verbatim`: a default-built capsule whose summary holds
+/// dots inside an identifier and decimals, stored byte-identical, no marker.
+/// `pith-normalized-marker`: a pith-enabled capsule whose event carries
+/// `pith_normalized_fields` (spec/chain.md), covered by the event hash like
+/// any other member. Both MUST verify ok:true; a failure means this lane
+/// rejects or re-projects an optional event member, not tampering.
+#[test]
+fn pith_authoring_registry_outcomes() {
+    let path = vectors_dir().join("pith-authoring/vectors.json");
     let doc = load_json(&path);
     let base = path.parent().unwrap().to_path_buf();
     let allowlist = registry_allowlist(&doc, &base);

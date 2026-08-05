@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "name": "pith-authoring",
+    "spec_version": "0.7",
+    "description": "Pith is an authoring-layer discipline, opt-in at the builder (spec/pith.md). technical-prose-verbatim was sealed by the DEFAULT builder: its event summary carries dots inside an identifier (ledger.entry_audit) and decimals (12.4k, 14.11, 16.4), stored byte-identical to what the author wrote, with no pith_normalized_fields member — the pre-fix default normalizer rewrote exactly this prose to 'ledger. entry_audit ... 12. 4k ...' and silently deleted trailing sentences inside the hash chain. pith-normalized-marker was sealed with pith enabled: its summary was genuinely rewritten, so the event carries pith_normalized_fields ['payload.summary'] (spec/chain.md), an optional advisory member covered by the event hash like any other. Independent implementations MUST verify both ok:true; a failure means the lane rejects or re-projects an optional event member and diverges from the signed bytes, not that a capsule was tampered with.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "technical-prose-verbatim",
+      "capsule_file": "output/technical-prose-verbatim.capsule",
+      "expected": { "ok": true }
+    },
+    {
+      "name": "pith-normalized-marker",
+      "capsule_file": "output/pith-normalized-marker.capsule",
+      "expected": { "ok": true }
+    }
+  ]
+}

@@ -19,6 +19,8 @@
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
+//   - pith-authoring/vectors.json     (verbatim technical prose + the
+//                                      pith_normalized_fields marker verify)
 //
 // signing-input.json is consumed by SigningInputVectorTests, and
 // jcs-numbers.json / ed25519-key-validation.json by their own test files.
@@ -227,6 +229,32 @@ final class SpecRegistryTests: XCTestCase {
         let keys = try allowlist(doc, base: base)
         let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
         XCTAssertFalse(vectors.isEmpty, "unicode-boundary registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - pith-authoring/vectors.json
+
+    /// Pith is opt-in authoring (spec/pith.md); its marker is an ordinary
+    /// member. technical-prose-verbatim: a default-built capsule whose
+    /// summary holds dots inside an identifier and decimals, stored
+    /// byte-identical, no marker. pith-normalized-marker: a pith-enabled
+    /// capsule whose event carries pith_normalized_fields (spec/chain.md),
+    /// covered by the event hash like any other member. Both MUST verify
+    /// ok:true; a failure means this lane rejects or re-projects an
+    /// optional event member — not tampering.
+    func testPithAuthoringRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("pith-authoring/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "pith-authoring registry is empty")
         for vector in vectors {
             let name = vector["name"] as? String ?? "<unnamed>"
             let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
