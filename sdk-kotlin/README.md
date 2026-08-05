@@ -106,6 +106,41 @@ println("Signers: ${v.signers.map { "${it.role} trusted=${it.trusted}" }}")
 println("Program:\n${parsed.programMd}")
 ```
 
+Every result also carries the normalized verdict surface of
+[spec/results.md](../spec/results.md): `v.verdict`
+(`valid | invalid | unsupported`, with `ok == (verdict == "valid")`),
+`v.verdictReason` (non-null only for `unsupported` — an unknown format
+version, a declared profile this verifier does not implement, or an
+encrypted capsule this lane cannot process: a limitation of the
+verifier, never a claim the capsule is corrupt), and `v.qualifiers` —
+the weaker claims a *valid* capsule made honestly (unbound signer set,
+unbound actor set, unwalked empty chain, no allowlist consulted, a
+declared lineage nobody supplied bytes for, and so on). **If you render
+a verdict, render the qualifiers beside it:** showing a bare "verified"
+for a capsule that carries qualifiers is the report lying by omission,
+and results.md names it non-conforming.
+
+```kotlin
+when (v.verdict) {
+    "valid" -> render("verified", qualifiers = v.qualifiers)
+    "unsupported" -> render("cannot verify here: ${v.verdictReason}")
+    else -> render("verification failed")
+}
+```
+
+`trust_not_evaluated` keys off the *effective* allowlist: an entry that
+is not 64-char hex is dropped with an `ignored invalid allowlist entry`
+note, so a typo cannot masquerade as a consulted policy.
+
+`v.profile` reports the declared verification profile
+([spec/profiles.md](../spec/profiles.md)) — `status` `default` for the
+capsules every mainstream reader verifies, `effective` naming the rule
+set actually applied. `CapsuleVerifier.verify` also accepts the
+report-only host policies `acceptVersions` and `acceptProfiles`. Gate
+order is version → profile → everything else; on a refusal at either
+gate the diagnosis is the only error the result carries, `v.lineage`
+holds its not-evaluated default, and `v.qualifiers` is empty.
+
 ## Quick start — check a lineage declaration
 
 A successor capsule declares the exact sealed artifact(s) it continues
@@ -136,7 +171,10 @@ originator has not countersigned it, and an unchecked entry is
 host UI must not drop them — that is how a citation gets read as an
 endorsement. `v.qualifiers` carries the same weaker-claim facts as bare
 strings (`lineage_declared_unverified`, `lineage_mismatch`,
-`lineage_predecessor_invalid`), non-empty only on a valid verdict.
+`lineage_predecessor_invalid` — entries 8–10 of the spec-defined order,
+after the seven base names), non-empty only on a valid verdict. The
+payload-carrying facts — `verifiedDepth`, the per-entry statuses and
+reasons — stay in `v.lineage`, never on the bare-string array.
 
 v0.7.1 declarations commit to plain, default-profile predecessors: an
 encrypted or alternate-profile supply is reported

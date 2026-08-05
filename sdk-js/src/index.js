@@ -104,3 +104,19 @@ export {
   provenanceDomain,
   keyWrapInfo,
 } from "./versions.js";
+
+// Profile declaration policy (spec/profiles.md): the supported-profile
+// table, the default-profile pin behind the absence rule, the dyad
+// classifier behind the verify result's profile channel, and the typed
+// open-stage refusals.
+export {
+  SUPPORTED_PROFILES,
+  DEFAULT_PROFILE,
+  isValidProfileId,
+  classifyProfile,
+  profileDeclarationProblems,
+  ProfileError,
+  UnsupportedProfileError,
+  ProfileMismatchError,
+  InvalidProfileError,
+} from "./profiles.js";

@@ -372,7 +372,12 @@ All three are "valid verdict, custody claim not clean" — exactly what a
 renderer must not hide. `lineage_declared`, `lineage_verified` (with
 `verified_depth`), and per-entry statuses/reasons are facts-channel-only
 (`result.lineage`); payload-carrying facts never ride the bare-string
-qualifiers array.
+qualifiers array. These three are entries 8–10 of the closed ten-name
+qualifier vocabulary: the full set, its emission order, and the
+renderer minimum substrings live in [results.md](results.md), and a
+result's `qualifiers` array carries whichever of the ten hold for that
+verification — the lineage names beside the base names, never instead
+of them.
 
 **Required human-output language** (pinned phrases):
 

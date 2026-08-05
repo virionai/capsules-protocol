@@ -253,7 +253,12 @@ final class LineageTests: XCTestCase {
         XCTAssertFalse(v.lineage.declared)
         XCTAssertTrue(v.lineage.ok)
         XCTAssertTrue(v.lineage.entries.isEmpty)
-        XCTAssertTrue(v.qualifiers.isEmpty, "absence is never a qualifier")
+        // The merged surface (spec/results.md) carries the base
+        // vocabulary too — this fixture is verified with no allowlist —
+        // but an ABSENT declaration contributes no lineage name.
+        XCTAssertEqual(v.qualifiers, ["trust_not_evaluated"])
+        XCTAssertFalse(v.qualifiers.contains { $0.hasPrefix("lineage_") },
+                       "absence is never a lineage qualifier")
         let check = v.checks.first(where: { $0.name == "lineage" })
         XCTAssertEqual(check?.ok, true)
         XCTAssertEqual(check?.detail, "absent (no lineage declared)")
@@ -275,7 +280,9 @@ final class LineageTests: XCTestCase {
         XCTAssertFalse(v06.lineage.declared)
         XCTAssertTrue(v06.lineage.ok)
         XCTAssertTrue(v06.lineage.entries.isEmpty)
-        XCTAssertTrue(v06.qualifiers.isEmpty)
+        XCTAssertFalse(v06.qualifiers.contains { $0.hasPrefix("lineage_") },
+                       "an uninterpreted member is never a lineage qualifier")
+        XCTAssertEqual(v06.qualifiers, ["trust_not_evaluated"])
         XCTAssertTrue(v06.notes.contains { $0.contains("unknown member under that era") },
                       "the uninterpreted member is reported: \(v06.notes)")
     }
@@ -308,8 +315,10 @@ final class LineageTests: XCTestCase {
         XCTAssertEqual(v.lineage.entries.first?.status, "mismatch")
         XCTAssertEqual(v.lineage.verifiedDepth, 0)
         // A valid verdict with an unclean custody claim: the qualifier is
-        // what keeps a renderer from hiding it.
-        XCTAssertEqual(v.qualifiers, ["lineage_mismatch"])
+        // what keeps a renderer from hiding it. The array is the merged
+        // spec-defined order — the base names (entries 1–7) first, the
+        // lineage names (8–10) after.
+        XCTAssertEqual(v.qualifiers, ["trust_not_evaluated", "lineage_mismatch"])
         // The wording names the honest cause and never reads as tampering.
         let errors = v.lineage.entries.flatMap { $0.errors }.joined(separator: " ")
         XCTAssertTrue(errors.contains("different sealed state of the declared predecessor"))

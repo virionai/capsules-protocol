@@ -176,8 +176,10 @@ const OPEN_REASON = {
   missing_required_file: /missing (manifest\.json|provenance\/envelope\.json)/,
   invalid_json: /JSON/,
   // Every manifest shape error from reader.js validateManifestShape is
-  // prefixed with the offending field path.
-  invalid_manifest_shape: /^manifest\./,
+  // prefixed with the offending field path — as is every profile
+  // declaration shape error, which can name either document
+  // (spec/profiles.md: the closed profile object).
+  invalid_manifest_shape: /^(manifest|envelope)\./,
   duplicate_entry: /duplicate entry/,
   unsafe_path: /(parent traversal|absolute|NUL)/,
   unsupported_compression: /only STORED supported/,
@@ -189,6 +191,12 @@ const OPEN_REASON = {
   // cross-lane normative wording.
   unsupported_version_newer: /newer than this verifier supports/,
   unsupported_version_older: /older than any version this verifier supports/,
+  // spec/profiles.md: a declared profile outside the verifier's table
+  // is a LIMITATION OF THE VERIFIER (never corruption); disagreeing
+  // manifest/envelope declarations are a capsule defect, diagnosed
+  // before any table lookup.
+  unsupported_profile: /is not supported by this verifier/,
+  profile_mismatch: /envelope\.profile does not match manifest\.format\.profile/,
 };
 
 // Map a verify-stage `reason` category (semantic-binding/vectors.json) to
@@ -206,6 +214,95 @@ const VERIFY_REASON = {
 // implements all of them and therefore skips nothing; the list exists so a
 // typo in a vector's `requires` cannot silently make other lanes skip it.
 const KNOWN_REQUIREMENTS = new Set(["encryption"]);
+
+// expected.profile sub-assertion keys (snake_case, the wire vocabulary)
+// mapped to this lane's profile-channel members (spec/profiles.md).
+const PROFILE_EXPECTED_KEYS = {
+  observed: "observed",
+  observed_version: "observedVersion",
+  declared: "declared",
+  effective: "effective",
+  effective_version: "effectiveVersion",
+  supported: "supported",
+  status: "status",
+};
+
+/**
+ * Normalized result-surface assertions shared by open-stage (asserted on
+ * the fail-closed verify result) and verify-stage vectors:
+ * expected.verdict / verdict_reason (spec/results.md), expected.qualifiers
+ * (EXACT array after stripping `x-` vendor entries from the result — the
+ * conformance comparison rule), expected.profile.* (spec/profiles.md), and
+ * expected.suite (formatVersion.suite, which nulls under any non-default
+ * effective profile), plus the observed_profile shorthand pair.
+ */
+function checkResultVocabulary(label, result, expected) {
+  if (expected.verdict !== undefined && result.verdict !== expected.verdict) {
+    fail(`${label}: expected verdict='${expected.verdict}', got ${JSON.stringify(result.verdict)}`);
+  }
+  if ("verdict_reason" in expected) {
+    const got = result.verdictReason ?? null;
+    if (got !== expected.verdict_reason) {
+      fail(
+        `${label}: expected verdict_reason=${JSON.stringify(expected.verdict_reason)}, got ${JSON.stringify(got)}`,
+      );
+    }
+  }
+  if (Array.isArray(expected.qualifiers)) {
+    const got = (result.qualifiers ?? []).filter((q) => !String(q).startsWith("x-"));
+    if (JSON.stringify(got) !== JSON.stringify(expected.qualifiers)) {
+      fail(
+        `${label}: expected qualifiers=${JSON.stringify(expected.qualifiers)}, got ${JSON.stringify(got)}`,
+      );
+    }
+  }
+  if (expected.observed_profile !== undefined &&
+      (result.profile?.observed ?? null) !== expected.observed_profile) {
+    fail(
+      `${label}: expected profile.observed='${expected.observed_profile}', ` +
+        `got ${JSON.stringify(result.profile?.observed)}`,
+    );
+  }
+  if (expected.observed_profile_version !== undefined &&
+      (result.profile?.observedVersion ?? null) !== expected.observed_profile_version) {
+    fail(
+      `${label}: expected profile.observedVersion='${expected.observed_profile_version}', ` +
+        `got ${JSON.stringify(result.profile?.observedVersion)}`,
+    );
+  }
+  if (expected.profile && typeof expected.profile === "object") {
+    for (const [key, member] of Object.entries(PROFILE_EXPECTED_KEYS)) {
+      if (!(key in expected.profile)) continue;
+      const got = result.profile?.[member] ?? null;
+      const want = expected.profile[key];
+      if (got !== want) {
+        fail(
+          `${label}: expected profile.${key}=${JSON.stringify(want)}, got ${JSON.stringify(got)}`,
+        );
+      }
+    }
+  }
+  if ("suite" in expected) {
+    const got = result.formatVersion?.suite ?? null;
+    if (got !== expected.suite) {
+      fail(`${label}: expected formatVersion.suite=${JSON.stringify(expected.suite)}, got ${JSON.stringify(got)}`);
+    }
+  }
+}
+
+/** True when an open-stage vector pins facts on the fail-closed verify result. */
+function wantsFailClosedResult(expected) {
+  return Boolean(
+    expected.observed_version ||
+      expected.observed_profile !== undefined ||
+      expected.observed_profile_version !== undefined ||
+      expected.profile ||
+      expected.verdict !== undefined ||
+      "verdict_reason" in expected ||
+      Array.isArray(expected.qualifiers) ||
+      "suite" in expected,
+  );
+}
 
 async function checkCollection(path, doc) {
   // F40: an empty collection is a hard failure, not a silent no-op. A
@@ -257,6 +354,21 @@ async function checkCollection(path, doc) {
         else vectorAllowlist.push(pk);
       }
     }
+    // `allowlist_literal` entries reach the verifier VERBATIM — never
+    // resolved against keys_file, because a MALFORMED entry is by
+    // construction one no keypair can produce. Allowlist hygiene
+    // (spec/results.md `trust_not_evaluated` is about the EFFECTIVE,
+    // well-formed set) is otherwise inexpressible here, and it is exactly
+    // the rule that drifted apart across lanes once. When present, the
+    // effective allowlist is the resolved names (empty if the vector
+    // declares none) plus the literals — the collection-level default
+    // never applies, so every lane computes the same set.
+    if (Array.isArray(v.allowlist_literal)) {
+      vectorAllowlist = [
+        ...(Array.isArray(v.allowlist) ? vectorAllowlist : []),
+        ...v.allowlist_literal,
+      ];
+    }
     let bytes;
     try {
       bytes = await readFile(join(base, v.capsule_file));
@@ -286,20 +398,25 @@ async function checkCollection(path, doc) {
           `${label}: open failed, but not for reason '${v.expected.reason}': ${openError.message}`,
         );
       }
-      // spec/versioning.md: the observed version is a REPORTED FACT even
-      // when open is refused — this is what lets an auditor tell "this
-      // verifier is too old" apart from "this capsule is corrupt".
-      if (v.expected.observed_version) {
+      // spec/versioning.md, spec/profiles.md: the observed version and
+      // profile declaration are REPORTED FACTS even when open is
+      // refused — this is what lets an auditor tell "this verifier is
+      // too old / lacks this profile" apart from "this capsule is
+      // corrupt". The normalized verdict surface (spec/results.md) is
+      // asserted on the same fail-closed result.
+      if (wantsFailClosedResult(v.expected)) {
         const refused = await verifyCapsule(bytes, { allowlist });
         if (refused.ok !== false) {
           fail(`${label}: open-stage fixture must fail closed at the verifier surface`);
         }
-        if (refused.formatVersion?.observed !== v.expected.observed_version) {
+        if (v.expected.observed_version &&
+            refused.formatVersion?.observed !== v.expected.observed_version) {
           fail(
             `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
               `got ${JSON.stringify(refused.formatVersion?.observed)}`,
           );
         }
+        checkResultVocabulary(label, refused, v.expected);
       }
       continue;
     }
@@ -311,11 +428,11 @@ async function checkCollection(path, doc) {
       fail(`${label}: capsule_file cannot be opened: ${err.message}`);
       continue;
     }
+    const verifyOptions = { allowlist: vectorAllowlist };
     // Lineage linkage pool (spec/lineage.md): per-vector `predecessors`
     // names checked-in artifacts (relative to the collection file)
     // supplied to the verify call. REPORT-ONLY by design — the vectors
     // pin that the pool never flips the capsule's own ok.
-    const verifyOptions = { allowlist: vectorAllowlist };
     if (Array.isArray(v.predecessors)) {
       verifyOptions.predecessors = [];
       for (const rel of v.predecessors) {
@@ -326,6 +443,10 @@ async function checkCollection(path, doc) {
         }
       }
     }
+    // A vector may pin host version policy: `accept_versions` is passed
+    // to the verifier's acceptVersions option (spec/versioning.md "Host
+    // policy" — reported, never decided).
+    if (Array.isArray(v.accept_versions)) verifyOptions.acceptVersions = v.accept_versions;
     const result = await verifyCapsule(reader, verifyOptions);
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
@@ -338,6 +459,10 @@ async function checkCollection(path, doc) {
         `${label}: expected capsule_id ${v.expected.capsule_id}, got ${reader.manifest().id}`,
       );
     }
+    // Normalized verdict surface + profile channel (spec/results.md,
+    // spec/profiles.md). This is the ONE qualifiers comparison: an exact
+    // array after stripping `x-` vendor entries from the result.
+    checkResultVocabulary(label, result, v.expected);
     // spec/versioning.md: the observed format version is a reported fact.
     if (v.expected.observed_version &&
         result.formatVersion?.observed !== v.expected.observed_version) {
@@ -452,17 +577,6 @@ async function checkCollection(path, doc) {
         }
       }
     }
-    // Verdict qualifiers: exact array after stripping x- vendor entries
-    // (spec results vocabulary; ignore-if-absent).
-    if (Array.isArray(v.expected.qualifiers)) {
-      const gotQualifiers = (result.qualifiers ?? []).filter((q) => !q.startsWith("x-"));
-      if (JSON.stringify(gotQualifiers) !== JSON.stringify(v.expected.qualifiers)) {
-        fail(
-          `${label}: expected qualifiers ${JSON.stringify(v.expected.qualifiers)}, ` +
-            `got ${JSON.stringify(gotQualifiers)}`,
-        );
-      }
-    }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];
       if (!pred) {
@@ -533,6 +647,12 @@ async function checkCollection(path, doc) {
               `${label}: expected an inner error containing ` +
                 `'${v.expected.inner_error_includes}', got ${innerResult.errors.join("; ")}`,
             );
+          }
+          // spec/results.md: encrypted_outer_only is per-result — the
+          // L3 result of the decrypted inner (a plain-capsule
+          // verification) never carries it.
+          if ((innerResult.qualifiers ?? []).includes("encrypted_outer_only")) {
+            fail(`${label}: inner L3 result must not carry the encrypted_outer_only qualifier`);
           }
         } catch (err) {
           fail(`${label}: decrypt with '${v.expected.decryptable_with}' failed: ${err.message}`);

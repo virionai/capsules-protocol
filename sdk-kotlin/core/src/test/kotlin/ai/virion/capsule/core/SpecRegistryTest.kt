@@ -25,6 +25,13 @@
 //   - lineage/vectors.json            (manifest.predecessors: standalone
 //                                      fail-closed checks + report-only
 //                                      supplied-bytes linkage)
+//   - profile-declaration/vectors.json (the profile gate: absence means
+//                                      the era default; unsupported /
+//                                      mismatched / malformed kept
+//                                      distinguishable)
+//   - result-vocabulary/vectors.json  (the normalized verdict surface:
+//                                      verdict, verdict_reason, and the
+//                                      exact qualifier array)
 //
 // signing-input.json is consumed by SigningInputVectorTest, and
 // jcs-numbers.json / ed25519-key-validation.json by their own test files.
@@ -384,27 +391,44 @@ class SpecRegistryTest {
             val result = verify(bytes, allowlist)
             val declaredOpen = expected.has("stage") && expected.get("stage").asString == "open"
             if (declaredOpen) {
-                assertFalse(result.ok, "$name: open-stage fixture must not verify")
-                val parse = result.checks.firstOrNull { it.name == "parse" }
-                assertEquals(false, parse?.ok, "$name: reader must refuse this capsule")
-                val reason = expected.get("reason").asString
-                val needles = openReasonNeedles(reason)
-                assertTrue(
-                    needles.any { parse!!.detail.contains(it) },
-                    "$name: expected reason $reason (any of $needles); got ${parse!!.detail}",
-                )
+                assertOpenRefusal(name, expected, result)
             } else {
                 assertVerifyOutcome(name, expected, result)
             }
-            if (expected.has("observed_version")) {
-                // The observed version is a REPORTED fact even when the
-                // capsule is refused — what lets an auditor tell "this
-                // verifier is too old" apart from "corrupt".
-                assertEquals(
-                    expected.get("observed_version").asString,
-                    result.formatVersion.observed,
-                    "$name: formatVersion.observed mismatch",
-                )
+        }
+    }
+
+    /**
+     * spec/profiles.md: a capsule may DECLARE the verification profile
+     * that governs it. Absence in a 0.6/0.7 capsule means the default
+     * profile v0.6-suite/1.0, permanently, and the explicit default is
+     * exactly equivalent to absence. A declared pair outside this
+     * verifier's table is refused at OPEN with `unsupported_profile` — a
+     * limitation of the verifier, never a defect of the capsule —
+     * disagreeing declarations with `profile_mismatch` (a defect), and a
+     * shape/grammar violation as a malformed document. Every negative
+     * fixture is internally coherent under default rules except for the
+     * declaration under test, so a lane that skips the gate verifies it
+     * ok=true and fails here.
+     */
+    @Test
+    fun profileDeclarationRegistryOutcomes() {
+        val file = File(vectorsDir(), "profile-declaration/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val allowlist = registryAllowlist(doc, base)
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "profile-declaration registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val expected = v.getAsJsonObject("expected")
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            val result = verify(bytes, allowlist)
+            if (expected.has("stage") && expected.get("stage").asString == "open") {
+                assertOpenRefusal(name, expected, result)
+            } else {
+                assertVerifyOutcome(name, expected, result)
             }
         }
     }
@@ -453,6 +477,69 @@ class SpecRegistryTest {
                 )
             }
         }
+    }
+
+    /**
+     * spec/results.md: the normalized verdict surface. `expected.qualifiers`
+     * is an EXACT array in the spec-defined order (x- vendor entries
+     * stripped first), so cross-lane emission cannot drift by omission or
+     * invention. Several vectors verify the SAME capsule bytes under
+     * different host configurations — the per-vector `allowlist` and
+     * `accept_versions` — because the host-relative qualifiers are facts
+     * about THIS verification, which is exactly why they can never be
+     * capsule members. The encrypted vector stays gated by
+     * requires:["encryption"]: the registry gates what this plain-only
+     * lane RUNS, while its runtime verdict for such a capsule
+     * (`unsupported` / `unsupported_capability`) is pinned by
+     * [assertEncryptedRefused].
+     */
+    @Test
+    fun resultVocabularyRegistryOutcomes() {
+        val file = File(vectorsDir(), "result-vocabulary/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val keys = JsonParser.parseString(
+            File(base, doc.get("keys_file").asString).readText()
+        ).asJsonObject
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "result-vocabulary registry is empty")
+        var evaluated = 0
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            if (requiresUnimplementedCapability(v)) continue
+            evaluated += 1
+            val allowlist = buildSet {
+                v.getAsJsonArray("allowlist")?.forEach { keyName ->
+                    add(
+                        keys.getAsJsonObject(keyName.asString)?.get("publicKey")?.asString
+                            ?: error("$name: allowlist entry ${keyName.asString} not in keys_file")
+                    )
+                }
+                // `allowlist_literal` entries reach the verifier VERBATIM
+                // — never resolved against keys_file, because a MALFORMED
+                // entry is by construction one no keypair can produce.
+                // Allowlist hygiene (spec/results.md: `trust_not_evaluated`
+                // is about the EFFECTIVE, well-formed set) is otherwise
+                // inexpressible at the registry surface, and it is exactly
+                // the rule that drifted apart across lanes once — this
+                // lane and Swift tested the RAW set while JS/Python/Rust
+                // filtered.
+                v.getAsJsonArray("allowlist_literal")?.forEach { add(it.asString) }
+            }
+            val acceptVersions = v.getAsJsonArray("accept_versions")
+                ?.map { it.asString }?.toSet()
+            val expected = v.getAsJsonObject("expected")
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            val result = CapsuleVerifier.verify(
+                bytes = bytes, allowlist = allowlist, acceptVersions = acceptVersions)
+            if (expected.has("stage") && expected.get("stage").asString == "open") {
+                assertOpenRefusal(name, expected, result)
+            } else {
+                assertVerifyOutcome(name, expected, result)
+            }
+        }
+        assertTrue(evaluated > 0, "every result-vocabulary vector was skipped")
     }
 
     @Test
@@ -583,7 +670,126 @@ class SpecRegistryTest {
             parse!!.detail.contains("encrypted capsule"),
             "$name: expected the plain-only refusal; got ${parse.detail}",
         )
+        // spec/results.md: this lane can parse the container but not
+        // process the class, and another conforming lane verifies the same
+        // bytes — so the refusal is a limitation of THIS verifier
+        // ("unsupported"), never a claim that the capsule is corrupt.
+        assertEquals("unsupported", result.verdict, "$name: verdict mismatch")
+        assertEquals(
+            "unsupported_capability", result.verdictReason,
+            "$name: verdictReason mismatch",
+        )
     }
+
+    /**
+     * An open-stage vector: the reader must refuse the capsule for the
+     * pinned reason, and the fail-closed verify result must still REPORT
+     * the observed facts (spec/versioning.md, spec/profiles.md) plus the
+     * normalized verdict surface (spec/results.md) — what keeps "this
+     * verifier is too old / lacks that profile" apart from "this capsule
+     * is corrupt".
+     */
+    private fun assertOpenRefusal(
+        name: String,
+        expected: JsonObject,
+        result: CapsuleVerification,
+    ) {
+        assertFalse(result.ok, "$name: open-stage fixture must not verify")
+        val parse = result.checks.firstOrNull { it.name == "parse" }
+        assertEquals(false, parse?.ok, "$name: reader must refuse this capsule; got ${result.checks}")
+        val reason = expected.get("reason").asString
+        val needles = openReasonNeedles(reason)
+        assertTrue(
+            needles.any { parse!!.detail.contains(it) },
+            "$name: expected reason $reason (any of $needles); got ${parse!!.detail}",
+        )
+        assertResultVocabulary(name, expected, result)
+    }
+
+    /**
+     * The normalized verdict surface (spec/results.md) and the profile
+     * channel (spec/profiles.md). `qualifiers` is an EXACT array in the
+     * spec-defined order, compared after stripping x- vendor entries:
+     * omitting one is as much a failure as inventing one, which is what
+     * makes the vocabulary portable rather than per-lane folklore.
+     */
+    private fun assertResultVocabulary(
+        name: String,
+        expected: JsonObject,
+        result: CapsuleVerification,
+    ) {
+        if (expected.has("verdict")) {
+            assertEquals(
+                expected.get("verdict").asString, result.verdict, "$name: verdict mismatch")
+        }
+        if (expected.has("verdict_reason")) {
+            assertEquals(
+                nullableString(expected.get("verdict_reason")), result.verdictReason,
+                "$name: verdictReason mismatch",
+            )
+        }
+        if (expected.has("qualifiers")) {
+            assertEquals(
+                expected.getAsJsonArray("qualifiers").map { it.asString },
+                result.qualifiers.filter { !it.startsWith("x-") },
+                "$name: qualifiers mismatch",
+            )
+        }
+        // spec/versioning.md: the observed version is a REPORTED fact even
+        // when open is refused — what lets an auditor tell "this verifier
+        // is too old" apart from "this capsule is corrupt".
+        if (expected.has("observed_version")) {
+            assertEquals(
+                expected.get("observed_version").asString, result.formatVersion.observed,
+                "$name: formatVersion.observed mismatch",
+            )
+        }
+        if (expected.has("observed_profile")) {
+            assertEquals(
+                nullableString(expected.get("observed_profile")), result.profile.observed,
+                "$name: profile.observed mismatch",
+            )
+        }
+        if (expected.has("observed_profile_version")) {
+            assertEquals(
+                nullableString(expected.get("observed_profile_version")),
+                result.profile.observedVersion,
+                "$name: profile.observedVersion mismatch",
+            )
+        }
+        // Suite honesty: the suite fact is nulled whenever the effective
+        // profile is not the era default — including on a profile-gate
+        // refusal, where reporting "v0.6" would assert something false
+        // about rules this verifier never applied.
+        if (expected.has("suite")) {
+            assertEquals(
+                nullableString(expected.get("suite")), result.formatVersion.suite,
+                "$name: formatVersion.suite mismatch",
+            )
+        }
+        if (!expected.has("profile")) return
+        val members = mapOf<String, Any?>(
+            "observed" to result.profile.observed,
+            "observed_version" to result.profile.observedVersion,
+            "declared" to result.profile.declared,
+            "effective" to result.profile.effective,
+            "effective_version" to result.profile.effectiveVersion,
+            "supported" to result.profile.supported,
+            "status" to result.profile.status,
+        )
+        for ((key, want) in expected.getAsJsonObject("profile").entrySet()) {
+            if (key !in members) error("$name: unknown profile channel member $key")
+            val expectedValue: Any? = when {
+                want.isJsonNull -> null
+                want.asJsonPrimitive.isBoolean -> want.asBoolean
+                else -> want.asString
+            }
+            assertEquals(expectedValue, members[key], "$name: profile.$key mismatch")
+        }
+    }
+
+    private fun nullableString(v: com.google.gson.JsonElement): String? =
+        if (v.isJsonNull) null else v.asString
 
     private fun assertVerifyOutcome(
         name: String,
@@ -632,15 +838,10 @@ class SpecRegistryTest {
         if (expected.has("lineage")) {
             assertLineageOutcome(name, expected.getAsJsonObject("lineage"), result.lineage)
         }
-        // Verdict qualifiers: the exact array after stripping x- vendor
-        // entries (ignore-if-absent).
-        if (expected.has("qualifiers")) {
-            val want = expected.getAsJsonArray("qualifiers").map { it.asString }
-            assertEquals(
-                want, result.qualifiers.filter { !it.startsWith("x-") },
-                "$name: qualifiers mismatch",
-            )
-        }
+        // `expected.qualifiers` — including the lineage names — is
+        // compared ONCE, by assertResultVocabulary below: one exact-array
+        // comparison with one x--stripping rule, so the two tracks'
+        // qualifier assertions cannot drift apart.
         if (expected.has("signer_set_bound")) {
             assertEquals(
                 expected.get("signer_set_bound").asBoolean, result.signerSetBound,
@@ -691,6 +892,7 @@ class SpecRegistryTest {
                 "$name: skillTrust.skills mismatch",
             )
         }
+        assertResultVocabulary(name, expected, result)
     }
 
     /**
@@ -790,7 +992,10 @@ class SpecRegistryTest {
         // Every manifest shape error from CapsuleReader's validation is
         // prefixed with the offending field path (or names manifest.json
         // itself), mirroring the JS reference's validateManifestShape.
-        "invalid_manifest_shape" -> listOf("manifest.")
+        // Profile declaration shape errors follow the same idiom and may
+        // name either document (spec/profiles.md: the closed profile
+        // object lives in both).
+        "invalid_manifest_shape" -> listOf("manifest.", "envelope.")
         "duplicate_entry" -> listOf("duplicate entry")
         "unsafe_path" -> listOf("zip path traversal", "zip path: absolute")
         "unsupported_compression" -> listOf("only STORED supported")
@@ -804,6 +1009,12 @@ class SpecRegistryTest {
         // diagnosis DISTINCT from malformation or tampering.
         "unsupported_version_newer" -> listOf("newer than this verifier supports")
         "unsupported_version_older" -> listOf("older than any version this verifier supports")
+        // spec/profiles.md: a declared profile outside this verifier's
+        // table is a LIMITATION OF THE VERIFIER (never corruption);
+        // disagreeing manifest/envelope declarations are a capsule defect,
+        // diagnosed before any table lookup.
+        "unsupported_profile" -> listOf("is not supported by this verifier")
+        "profile_mismatch" -> listOf("envelope.profile does not match manifest.format.profile")
         else -> error("unknown open-stage reason $reason")
     }
 

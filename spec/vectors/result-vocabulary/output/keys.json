@@ -1,0 +1,18 @@
+{
+  "originator": {
+    "publicKey": "8d86d70dca68700e1c97bc07ca8e89439640a95d073e77e17e8c88ab13e65aa0",
+    "privateKey": "8e41c7a9052db6f3714c8e2a9d05b7f6023a1c8d4e5f6b70819a2c3d4e5f6a81"
+  },
+  "stranger": {
+    "publicKey": "76788e731d7db6a31b47f8b281a38a3c7e0d19e558d9d756f51991d2efd4a6e8",
+    "privateKey": "17d2e4a6c8b0f3951e7d9b2a4c6e8f0113d5a7c9e1b3d5f70292b4d6e8fa1c35"
+  },
+  "encrypted_originator": {
+    "publicKey": "9a0ad2b05c9276891dcd3e183946660bcfe895adb3e63f6911a9514d666b7249",
+    "privateKey": "c19e46b1af6299594186974ee82658a46e8f406d70a6b6e461f5bc3c3901e8e3"
+  },
+  "recipient": {
+    "publicKey": "df6f12709a195ad4c53e36789ef5e5e19ad24666a6e73b3a9cd2b88e8c472465",
+    "privateKey": "987dbb0a82edeb8dc5d51337a66ad4f2621a7e233c53fa88ceb5afaea800846d"
+  }
+}

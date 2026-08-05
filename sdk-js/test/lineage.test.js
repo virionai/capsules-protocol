@@ -178,7 +178,10 @@ test("no predecessors member: declared=false, lineage.ok=true, no qualifiers", a
   const result = await verifyCapsule(await sealedPred(alice));
   assert.equal(result.ok, true);
   assert.deepEqual(result.lineage, { declared: false, ok: true, verifiedDepth: 0, entries: [] });
-  assert.deepEqual(result.qualifiers, []);
+  // No lineage qualifier; the base names this fixture genuinely produces
+  // still appear (spec/results.md order — the array is the whole ten-name
+  // vocabulary, not the lineage slice of it).
+  assert.deepEqual(result.qualifiers, ["trust_not_evaluated"]);
 });
 
 test("declared, no pool: unverified entry, pinned phrases, lineage_declared_unverified", async () => {
@@ -204,7 +207,9 @@ test("declared, no pool: unverified entry, pinned phrases, lineage_declared_unve
   // disappear, and no report may imply a consent bit exists.
   assert.match(notes, /declared, not verified/);
   assert.match(notes, /not countersigned/);
-  assert.deepEqual(result.qualifiers, ["lineage_declared_unverified"]);
+  assert.deepEqual(result.qualifiers, [
+    "actor_set_unbound", "trust_not_evaluated", "lineage_declared_unverified",
+  ]);
 });
 
 test("linkage verified to depth 1; verified note names two identities", async () => {
@@ -227,7 +232,8 @@ test("linkage verified to depth 1; verified note names two identities", async ()
   // predecessor.
   assert.notEqual(capsuleId, predecessorEntry.capsule_id);
   assert.match(result.notes.join(" | "), /successor of capsule .*verified to depth 1/);
-  assert.deepEqual(result.qualifiers, []);
+  // A cleanly established linkage adds NO lineage qualifier.
+  assert.deepEqual(result.qualifiers, ["actor_set_unbound", "trust_not_evaluated"]);
 });
 
 test("era-keyed recursive walk: depth 2, hop numbers, re-rewrap declares one entry", async () => {
@@ -273,7 +279,9 @@ test("merge: two declared parents, one supplied — verified + unverified, depth
     "unverified", "verified",
   ]);
   assert.equal(result.lineage.verifiedDepth, 0);
-  assert.deepEqual(result.qualifiers, ["lineage_declared_unverified"]);
+  assert.deepEqual(result.qualifiers, [
+    "actor_set_unbound", "trust_not_evaluated", "lineage_declared_unverified",
+  ]);
 });
 
 test("mismatch: a different seal of the same line is report-only and ok stays true", async () => {
@@ -303,7 +311,9 @@ test("mismatch: a different seal of the same line is report-only and ok stays tr
   // tamper vocabulary appears only negated.
   assert.match(errs, /not evidence of tampering/);
   assert.doesNotMatch(errs, /corrupt/i);
-  assert.deepEqual(result.qualifiers, ["lineage_mismatch"]);
+  assert.deepEqual(result.qualifiers, [
+    "actor_set_unbound", "trust_not_evaluated", "lineage_mismatch",
+  ]);
 });
 
 test("predecessor_invalid: tampered supplied artifact, two facts never collapsed", async () => {
@@ -329,7 +339,9 @@ test("predecessor_invalid: tampered supplied artifact, two facts never collapsed
     result.lineage.entries[0].errors.join(" "),
     /property of the supplied artifact/,
   );
-  assert.deepEqual(result.qualifiers, ["lineage_predecessor_invalid"]);
+  assert.deepEqual(result.qualifiers, [
+    "actor_set_unbound", "trust_not_evaluated", "lineage_predecessor_invalid",
+  ]);
 });
 
 test("unmatched supplied artifact is named in notes, never silently ignored", async () => {
@@ -364,7 +376,9 @@ test("encrypted supplied predecessor: predecessor_unverifiable/encrypted_predece
   assert.equal(result.lineage.entries[0].status, "predecessor_unverifiable");
   assert.equal(result.lineage.entries[0].reason, "encrypted_predecessor");
   assert.match(result.notes.join(" | "), /declared, not verified/);
-  assert.deepEqual(result.qualifiers, ["lineage_declared_unverified"]);
+  assert.deepEqual(result.qualifiers, [
+    "actor_set_unbound", "trust_not_evaluated", "lineage_declared_unverified",
+  ]);
 });
 
 test("alternate-profile supplied predecessor: predecessor_unverifiable/unsupported_profile", async () => {
@@ -606,7 +620,7 @@ test("pre-lineage era: a predecessors member is inert, not shape-checked", async
   assert.equal(v06.ok, true, v06.errors.join("; "));
   assert.equal(v06.formatVersion.observed, "0.6");
   assert.deepEqual(v06.lineage, { declared: false, ok: true, verifiedDepth: 0, entries: [] });
-  assert.deepEqual(v06.qualifiers, []);
+  assert.deepEqual(v06.qualifiers, ["trust_not_evaluated"]);
   assert.ok(v06.notes.some((n) => n.includes("unknown member under that era")));
 });
 

@@ -21,6 +21,20 @@ data class ParsedCapsule(
 
 data class VerifyCheck(val name: String, val ok: Boolean, val detail: String = "")
 
+/**
+ * A capsule class this lane cannot process, though it parses the
+ * container fine — today only encrypted capsules, which the core module
+ * refuses because it carries no X25519/ChaCha20 path (spec/results.md
+ * `unsupported_capability`). A distinct type because the verdict it
+ * derives is `unsupported`, not `invalid`: another conforming lane
+ * verifies these bytes, so the refusal is a limitation of THIS verifier
+ * and never evidence about the capsule.
+ */
+class UnsupportedCapabilityException(
+    val capability: String,
+    message: String,
+) : CapsuleException(message)
+
 object CapsuleReader {
 
     fun parse(bytes: ByteArray): ParsedCapsule {
@@ -41,6 +55,17 @@ object CapsuleReader {
         validateManifestShape(manifest)
         validateEnvelopeShape(envelope)
 
+        // Profile gate (spec/profiles.md): version gate first (the two
+        // CapsuleVersions.requireKnown calls inside the shape checks
+        // above), profile gate second, nothing else until both pass —
+        // including the cipher refusal below, so an alternate-profile
+        // capsule is refused for its profile rather than reported as
+        // unknown-cipher tamper noise. A reader that cannot establish
+        // its governing rules cannot meaningfully construct at all, and
+        // silently downgrading to the defaults would manufacture
+        // mismatch errors indistinguishable from tampering.
+        CapsuleProfiles.requireSupported(manifest, envelope)
+
         // Refuse encrypted capsules BEFORE demanding the plain-capsule
         // layout: the chain and program live inside the ciphertext, so
         // requiring them first would misattribute the refusal as
@@ -52,7 +77,12 @@ object CapsuleReader {
         // to check".
         val cipher = lookupString(envelope, listOf("cipher"))
         if (cipher != null && cipher != "none" && files.containsKey("content.enc")) {
-            throw CapsuleException("encrypted capsule; v0 reader supports plain only")
+            throw UnsupportedCapabilityException(
+                "encryption",
+                "encrypted capsule; v0 reader supports plain only — this is a limitation " +
+                    "of the verifier, not corruption of the capsule: verify it with an " +
+                    "implementation that supports encryption",
+            )
         }
 
         val eventsBytes = files["chain/events.jsonl"]

@@ -77,6 +77,10 @@ its own era's rules to the capsule: recomputing hashes with the wrong
 era's domain strings manufactures mismatch errors indistinguishable
 from tampering, which is exactly the confusion this section exists to
 kill. The version diagnosis is the only error such a result carries.
+In particular the profile gate of [profiles.md](profiles.md) is never
+reached: gate ordering is version first, profile second, nothing else
+until both pass — a version refusal reports the observed profile
+declaration with status `unevaluated`.
 
 There is no silent upgrade path in either direction.
 
@@ -132,6 +136,15 @@ observed version. Future versions that introduce algorithm agility MUST
 declare identifiers explicitly and MUST NOT reinterpret the absence of
 one in a v0.6 capsule.
 
+The reported suite fact is a statement about the rules governing THIS
+capsule, so it is reported **only when the effective profile is the era
+default** ([profiles.md](profiles.md)): whenever the effective profile
+is not the default — including on every profile-gate refusal where a
+non-default declaration was observed — the suite member MUST be `null`.
+Reporting `v0.6` about a capsule governed by (or refused under) other
+rules would be a false fact; the profile channel is the suite authority
+for non-default capsules.
+
 **Version 0.7 introduces no algorithm changes and no agility.** In a
 capsule whose declared format version is `0.7`, the absence of an
 algorithm identifier likewise means the v0.6 suite, permanently — the
@@ -141,36 +154,52 @@ not the sealing era, so verifiers report suite `v0.6` for both 0.6 and
 
 ## In-era tightening and cross-era force
 
-A spec revision MAY add an OPTIONAL member — and a fail-closed rule for
-a PRESENT-but-malformed value of it — **within** an existing era,
-without a version bump, exactly when all of the following hold (the
-bright-line rule; precedents: the `participants` shape tightening, the
-v0.7.1 `predecessors` member of [lineage.md](lineage.md), and profile
-declarations):
+**In-era rule changes: the bright-line rule.** Era rules are frozen at
+the era's freeze — with one narrow, testable exception this section
+makes explicit, because v0.7.1 invokes it twice (the `participants`
+shape tightening was its precedent; the profile gate of
+[profiles.md](profiles.md) and the `predecessors` member of
+[lineage.md](lineage.md) are its current invocations):
 
-1. the member is optional: absence remains the era's legal
-   weaker-claim shape, and no capsule sealed without the member changes
-   verdict;
-2. the member's key sits in the spec-reserved (non-`x-`) namespace, so
-   no conforming writer of that era could have emitted it — any sealed
-   capsule the new rule rejects was already non-conformant when
-   written: **zero honestly sealed capsules change verdict**;
-3. the new rule fires only on a PRESENT value that no reader could
-   interpret — a capsule asserting something meaningless about itself —
-   never on a weaker claim made honestly; and
-4. the diagnosis is a shared cross-lane vocabulary, never a
-   lane-specific parse failure.
+> **A spec revision MAY add an OPTIONAL member — and a fail-closed rule
+> for a PRESENT-but-malformed value of it — within an existing era,
+> without a version bump, exactly when all of the following hold:**
+>
+> 1. the member is optional: absence remains the era's legal
+>    weaker-claim shape, and no capsule sealed without the member
+>    changes verdict;
+> 2. the member's key sits in the spec-reserved (non-`x-`) namespace, so
+>    no conforming writer of that era could have emitted it — the
+>    population of conforming sealed capsules the new rule affects is
+>    empty by construction, and any sealed capsule it rejects was
+>    already non-conformant when written: **zero honestly sealed
+>    capsules change verdict**;
+> 3. the new rule fires only on a PRESENT value that no reader could
+>    interpret — a capsule asserting something meaningless or
+>    self-contradictory about itself — never on a weaker claim made
+>    honestly, and it can only convert an acceptance into a refusal: no
+>    document moves from refusal to acceptance;
+> 4. the diagnosis is a shared cross-lane vocabulary, never a
+>    lane-specific parse failure; and
+> 5. leaving the member unenforced would let a future era create
+>    cross-reader semantic divergence over in-era capsules.
 
-How far such a member's interpretation reaches across eras follows a
-second distinction:
+An in-era addition that fails any clause waits for the next era. An
+addition that is advisory (no verifier obligation, like
+`pith_normalized_fields`) needs no license from this rule at all.
 
-- **Rule-selector members** (members that select which rules bind
-  verification, e.g. a profile declaration) get **cross-era fail-closed
-  force**, era-keyed: leaving one uninterpreted in ANY known era means
-  possibly verifying under the wrong rules — the wrong-rules hazard
-  this document exists to kill, which is era-independent.
-- **Claim members** (claims interpreted within an era's rule set, e.g.
-  `predecessors`) follow **per-era rule sets** and stay inert in eras
+**Rule selectors vs claims — the retroactivity split.** How far such a
+member's interpretation reaches across eras follows a second
+distinction:
+
+- **Rule-selector members** (`format.profile` / `envelope.profile` —
+  members that select which rules bind verification) get **cross-era
+  fail-closed force**, era-keyed: leaving one uninterpreted in ANY known
+  era means possibly verifying under the wrong rules — the wrong-rules
+  hazard this document exists to kill, which is era-independent. A
+  declared-alternate v0.6 capsule refuses exactly like a v0.7 one.
+- **Claim members** (`predecessors` — claims interpreted within an era's
+  rule set) follow **per-era rule sets** and stay inert in eras
   whose rules do not define them: leaving one uninterpreted loses only
   a report. A `predecessors` member inside a v0.6 capsule is an unknown
   member even to a v0.7.1 reader — preserved, hashed, never

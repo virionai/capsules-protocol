@@ -14,6 +14,7 @@ pub mod jcs;
 mod l3;
 pub mod lineage;
 pub mod manifest;
+pub mod profiles;
 pub mod schemas;
 pub mod verifier;
 pub mod versions;
@@ -32,13 +33,18 @@ pub use lineage::{
     predecessors_problems, verification_error_count, LineageCheck, LineageEntry,
     PredecessorArtifact, LINEAGE_HOP_CAP,
 };
+pub use profiles::{
+    classify_profile, is_valid_profile_id, is_valid_profile_version, ProfileClassification,
+    ProfileStatus, DEFAULT_PROFILE, SUPPORTED_PROFILES,
+};
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
     Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,
     SignerCommitmentEntry,
 };
 pub use verifier::{
-    verify_capsule, ActorSetCheck, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome,
-    SignerSetCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
+    verify_capsule, ActorSetCheck, ChainCheck, ContentIndexCheck, EnvelopeCheck, FormatVersionCheck,
+    ProfileCheck, SignerOutcome, SignerSetCheck, SkillTrustCheck, TopError, TopErrorCategory,
+    TopErrorScope, Verdict, VerifyOptions, VerifyResult, QUALIFIERS,
 };
 pub use zip_reader::{unpack_zip, PathReason, ZipError, MAX_ENTRIES, MAX_TOTAL_BYTES};

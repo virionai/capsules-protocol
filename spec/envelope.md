@@ -9,9 +9,11 @@ prescription for every Capsule deployment.
 Deployments may integrate different verification, encryption,
 authorization, identity, or key-management technologies as alternate
 profiles. Such profiles must be explicitly declared, versioned, and
-fail-closed in readers that do not understand them. They are outside the
-v0.7 conformance target unless and until a later spec version or profile
-registry defines them.
+fail-closed in readers that do not understand them. Since spec revision
+v0.7.1 the declaration and refusal machinery is wire-defined and
+conformance-tested — the OPTIONAL `profile` member below and
+`manifest.format.profile`, per [profiles.md](profiles.md). Alternate
+profile *rule sets* themselves remain outside the conformance target.
 
 ## Schema
 
@@ -46,6 +48,15 @@ registry defines them.
   silent upgrade path in either direction. See
   [versioning.md](versioning.md); conformance vectors:
   `spec/vectors/version-compat/`.
+- `profile` (OPTIONAL, not shown above): the envelope's copy of the
+  profile declaration, exactly `{ id, version }` (no `params` — params
+  are single-sourced in `manifest.format.profile`). The two documents'
+  normalized declarations MUST agree, absence meaning the default
+  profile `v0.6-suite`/`1.0`; see [profiles.md](profiles.md) for the
+  grammar, the equality rule, and the fail-closed refusal semantics.
+  The member sits inside the signed payload, so a declaration cannot be
+  stripped or injected without breaking every signature. Conformance
+  vectors: `spec/vectors/profile-declaration/`.
 - `capsule_id`: matches `manifest.id`.
 - `first_event_hash`: 32-byte SHA-256 hex; equals chain event 1's hash.
 - `entry_hash`: 32-byte SHA-256 hex; equals the final event's hash at

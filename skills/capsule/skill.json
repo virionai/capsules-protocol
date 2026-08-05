@@ -94,7 +94,7 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "dd8eb4b9dad430d6b2f4254e03265217b4c0bedea1fb718e28b114cfcc656f4e"
+        "sha256": "66cd500dd133dd61206f0c99cb4f1a4c42e55084a4b982c40d21cf533dfdd053"
       },
       {
         "path": "spec/format.md",
@@ -104,7 +104,7 @@
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "71ca2b74d9a2d75b4eb84d4250dccbb048a772e36e789ab226e0c50cd7bc110b"
+        "sha256": "7a5dac7b48e31c4793a0c1e0a7b37542391c4d23af3022d4a0f26b62c047a498"
       },
       {
         "path": "spec/chain.md",
@@ -114,12 +114,12 @@
       {
         "path": "spec/envelope.md",
         "title": "Provenance envelope",
-        "sha256": "2cb42758cce93b1d8ad30559b59235331d507867adaf5627fd80af35aa108ed6"
+        "sha256": "18d103d80ac1dd2ddfb77561768575e3a93106232292884b7f713613170fbaf9"
       },
       {
         "path": "spec/trust.md",
         "title": "Trust model",
-        "sha256": "49cfaa7bbb2c817f7efd2c41019e3766dc24461b8cb2bd6afa710c17959d2e9d"
+        "sha256": "e074d978feabd5f6c68ef803a4ac0358ced1eebd4ba26df5819f26cfc9e6c045"
       },
       {
         "path": "spec/pith.md",

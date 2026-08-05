@@ -4,6 +4,11 @@
 // plus per-signer trust attribution against an optional allowlist of
 // public keys. trusted=true only when both the signature is valid AND
 // the signer's pubkey is on the allowlist.
+//
+// Every result also carries the normalized verdict surface of
+// spec/results.md (verdict / verdictReason / qualifiers) and the profile
+// channel of spec/profiles.md — both DERIVED from the facts below, never
+// read from the capsule.
 
 package ai.virion.capsule.core
 
@@ -47,6 +52,15 @@ data class CapsuleVerification(
      */
     val formatVersion: FormatVersionReport = FormatVersionReport(),
     /**
+     * Profile declaration facts (spec/profiles.md): the declaration as
+     * OBSERVED (reported even on refusal — an unauthenticated
+     * observation is what lets an auditor route the capsule to a capable
+     * verifier instead of declaring it corrupt), the profile actually
+     * applied, and the closed status vocabulary. Reported, never
+     * decided.
+     */
+    val profile: ProfileReport = ProfileReport(),
+    /**
      * Derived skill-trust classification (spec/trust.md "Skill trust").
      * The tier is host-relative — it depends on the allowlist THIS
      * verification ran with — so it derives from the verify result and is
@@ -69,15 +83,28 @@ data class CapsuleVerification(
      * it can falsify [LineageReport.ok] but never [ok].
      */
     val lineage: LineageReport = LineageReport(),
+    val notes: List<String>,
     /**
-     * Verdict qualifiers (spec/lineage.md "Verdict qualifiers"): bare
-     * strings naming a weaker claim on an otherwise valid verdict, so a
-     * renderer cannot hide it. Non-empty only when [ok] is true. This
-     * lane emits the three lineage names; the profile/version
-     * qualifiers arrive with the results-vocabulary work.
+     * The normalized verdict surface (spec/results.md), DERIVED from the
+     * facts above and never read from the capsule. `ok == (verdict ==
+     * "valid")` is an invariant: "unsupported" partitions the failures
+     * into "a limitation of THIS verifier, not a defect of the capsule"
+     * (an unknown era, an unimplemented profile, a capsule class this
+     * lane cannot process), it never softens one.
+     */
+    val verdict: String = "invalid",
+    /** Non-null iff [verdict] is "unsupported"; names the limitation. */
+    val verdictReason: String? = null,
+    /**
+     * Weaker-claim facts qualifying a VALID verdict, in the spec-defined
+     * order — the seven base names followed by the three lineage names
+     * (spec/results.md). These are the reduced assurances a conforming
+     * renderer must surface beside the verdict rather than reporting a
+     * bare "verified". Empty unless [verdict] is "valid". BARE strings
+     * only: payload-carrying facts (verified depth, per-entry statuses
+     * and reasons) live in [lineage], never on this array.
      */
     val qualifiers: List<String> = emptyList(),
-    val notes: List<String>,
 ) {
     data class SignerCheck(
         val role: String,
@@ -92,6 +119,24 @@ data class CapsuleVerification(
         val supported: Boolean = false,
         val status: String = "unread",
         val suite: String? = null,
+        val acceptedByPolicy: Boolean? = null,
+    )
+
+    /**
+     * Profile declaration channel (spec/profiles.md), parallel to
+     * [FormatVersionReport]. [effective] is the profile actually applied
+     * — "v0.6-suite" on every successful default path, the absence rule
+     * made machine-visible — and null whenever no profile's rules were
+     * applied. Defaults are the fail-closed "unread" shape.
+     */
+    data class ProfileReport(
+        val observed: String? = null,
+        val observedVersion: String? = null,
+        val declared: Boolean = false,
+        val effective: String? = null,
+        val effectiveVersion: String? = null,
+        val supported: Boolean = false,
+        val status: String = "unread",
         val acceptedByPolicy: Boolean? = null,
     )
 
@@ -122,32 +167,57 @@ object CapsuleVerifier {
         bytes: ByteArray,
         allowlist: Set<String> = emptySet(),
         acceptVersions: Set<String>? = null,
+        acceptProfiles: Set<String>? = null,
         predecessors: List<ByteArray> = emptyList(),
     ): CapsuleVerification {
         val checks = mutableListOf<VerifyCheck>()
         fun rec(name: String, ok: Boolean, detail: String = "") {
             checks += VerifyCheck(name, ok, detail)
         }
+        // Allowlist hygiene first (spec/results.md): every trust fact
+        // below — the per-signer `trusted` flag, the distinct-key count,
+        // both trust advisories and the trust qualifiers — reads the
+        // EFFECTIVE set, so a malformed entry can never masquerade as a
+        // consulted policy.
+        val (effectiveAllowlist, allowlistNotes) = normalizeAllowlist(allowlist)
         val notes = mutableListOf<String>()
-        if (allowlist.isEmpty()) {
+        notes += allowlistNotes
+        if (effectiveAllowlist.isEmpty()) {
             notes += "no allowlist provided; trusted=false for all signers regardless of signature validity"
         }
 
         val parsed = try { CapsuleReader.parse(bytes) } catch (e: Throwable) {
-            // spec/versioning.md: the observed version stays a REPORTED
-            // fact even when open is refused — an unknown-version refusal
-            // must be distinguishable from tamper by machine, not prose.
-            val formatVersion = if (e is UnsupportedVersionException) {
-                CapsuleVerification.FormatVersionReport(
+            // spec/versioning.md, spec/profiles.md: the observed version
+            // and the observed profile declaration stay REPORTED facts
+            // even when open is refused — an unknown-version or
+            // unsupported-profile refusal must be distinguishable from
+            // tamper by machine, not prose. Nothing else is evaluated:
+            // after a gate refusal the diagnosis is the only error the
+            // result carries and every other channel holds its
+            // fail-closed default.
+            val (peekedManifest, peekedEnvelope) = peekDocuments(bytes)
+            val formatVersion = when (e) {
+                // A version refusal carries its own facts: WHICH document
+                // declared the unknown era, and how it classified.
+                is UnsupportedVersionException -> CapsuleVerification.FormatVersionReport(
                     observed = e.observed, supported = false, status = e.status,
                 )
-            } else CapsuleVerification.FormatVersionReport()
+                // Suite honesty (spec/profiles.md obligation 6): a suite
+                // claim about rules this verifier refused to apply would
+                // be false.
+                is ProfileException -> peekFormatVersion(peekedManifest).copy(suite = null)
+                else -> peekFormatVersion(peekedManifest)
+            }
+            val (verdict, verdictReason) = refusalVerdict(e)
             return CapsuleVerification(
                 ok = false, level = "L2",
                 checks = listOf(VerifyCheck("parse", false, e.message ?: "$e")),
                 signers = emptyList(), trustedSignerCount = 0,
                 signerSetBound = false, actorSetBound = false,
-                formatVersion = formatVersion, notes = notes,
+                formatVersion = formatVersion,
+                profile = peekProfile(peekedManifest, peekedEnvelope, e),
+                notes = notes,
+                verdict = verdict, verdictReason = verdictReason,
             )
         }
         rec("zip_parse", true, "${parsed.files.size} files")
@@ -167,11 +237,48 @@ object CapsuleVerifier {
                     "the declared accepted set ${acceptVersions.sorted()}"
             }
         }
+        // Profile channel (spec/profiles.md). CapsuleReader.parse ran the
+        // gate, so a ParsedCapsule is always governed by a profile this
+        // verifier implements; re-deriving the classification here is
+        // what puts the applied profile on the result — the absence rule
+        // (no declaration in a 0.6/0.7 capsule means v0.6-suite/1.0,
+        // permanently) made machine-visible instead of left as folklore.
+        val profileClass = CapsuleProfiles.classify(
+            CapsuleProfiles.manifestDeclaration(parsed.manifest),
+            CapsuleProfiles.envelopeDeclaration(parsed.envelope),
+        )
+        val effectiveIsDefault = profileClass.effective == CapsuleProfiles.DEFAULT.id &&
+            profileClass.effectiveVersion == CapsuleProfiles.DEFAULT.version
+        var acceptedProfileByPolicy: Boolean? = null
+        if (acceptProfiles != null) {
+            acceptedProfileByPolicy = profileClass.effective in acceptProfiles
+            if (!acceptedProfileByPolicy) {
+                notes += "host policy: effective profile ${profileClass.effective}/" +
+                    "${profileClass.effectiveVersion} is not in the declared accepted set " +
+                    "${acceptProfiles.sorted()}"
+            }
+        }
+        val profile = CapsuleVerification.ProfileReport(
+            observed = profileClass.observed,
+            observedVersion = profileClass.observedVersion,
+            declared = profileClass.declared,
+            effective = profileClass.effective,
+            effectiveVersion = profileClass.effectiveVersion,
+            supported = profileClass.supported,
+            status = profileClass.status,
+            acceptedByPolicy = acceptedProfileByPolicy,
+        )
         val formatVersion = CapsuleVerification.FormatVersionReport(
             observed = declaredVersion,
             supported = true,
             status = "known",
-            suite = CapsuleVersions.suiteFor(declaredVersion),
+            // Suite honesty (spec/profiles.md obligation 6): the suite
+            // fact states which algorithm set governs THIS capsule, so it
+            // is null whenever the effective profile is not the era
+            // default. Unreachable while the table holds one row; kept so
+            // a grown table cannot report the default suite under
+            // alternate rules.
+            suite = if (effectiveIsDefault) CapsuleVersions.suiteFor(declaredVersion) else null,
             acceptedByPolicy = acceptedByPolicy,
         )
         // manifest.format.version and envelope.version MUST be equal
@@ -458,7 +565,7 @@ object CapsuleVerifier {
             CapsuleVerification.SignerCheck(
                 role = role, publicKey = pk,
                 valid = valid,
-                trusted = valid && (pk.lowercase() in allowlist),
+                trusted = valid && (pk.lowercase() in effectiveAllowlist),
             )
         }
         val detail = signers.joinToString(", ") {
@@ -541,7 +648,7 @@ object CapsuleVerifier {
             version = declaredVersion,
             pool = predecessors,
             notes = notes,
-        ) { predecessorBytes -> verify(predecessorBytes, allowlist, acceptVersions) }
+        ) { predecessorBytes -> verify(predecessorBytes, effectiveAllowlist, acceptVersions) }
         val lineage = lineageEval.report
         rec(
             "lineage", lineageEval.problems.isEmpty(),
@@ -553,30 +660,17 @@ object CapsuleVerifier {
         )
 
         val ok = checks.all { it.ok }
-        // Verdict qualifiers (spec/lineage.md): bare strings naming a
-        // weaker claim on an otherwise valid verdict — a renderer must
-        // not hide them. Payload-carrying facts (verified_depth, the
-        // per-entry statuses and reasons) live in the lineage area, never
-        // on this array.
-        val qualifiers = mutableListOf<String>()
-        if (ok && lineage.declared) {
-            if (lineage.entries.any {
-                    it.status == Lineage.STATUS_UNVERIFIED ||
-                        it.status == Lineage.STATUS_PREDECESSOR_UNVERIFIABLE
-                }
-            ) {
-                qualifiers += "lineage_declared_unverified"
-            }
-            if (lineage.entries.any { it.status == Lineage.STATUS_MISMATCH }) {
-                qualifiers += "lineage_mismatch"
-            }
-            if (lineage.entries.any { it.status == Lineage.STATUS_PREDECESSOR_INVALID }) {
-                qualifiers += "lineage_predecessor_invalid"
-            }
-        }
         // DISTINCT trusted keys, never rows.
         val trustedCount = signers.filter { it.trusted }
             .map { it.publicKey.lowercase() }.toSet().size
+        // An allowlist that matched nothing is a PASS the host must not
+        // read as trust: without this note a caller sees valid signatures,
+        // trusted=false everywhere, and no statement of why
+        // (spec/results.md canonical notes; vector
+        // result-vocabulary/allowlist-no-match).
+        if (effectiveAllowlist.isNotEmpty() && trustedCount == 0) {
+            notes += "allowlist provided but matched no signer; trusted=false for all signers"
+        }
 
         // Skill trust: DERIVED from this verification, never read from the
         // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
@@ -601,6 +695,50 @@ object CapsuleVerifier {
                 else "unsigned"
         }
 
+        // Normalized verdict surface (spec/results.md), derived last from
+        // the facts above. A parsed capsule cleared both gates, so the
+        // only verdicts reachable here are "valid" and "invalid";
+        // "unsupported" belongs to the refusal path above. Each qualifier
+        // restates exactly one already-reported weaker claim, in the
+        // spec-defined order. encrypted_outer_only has no derivation in
+        // this lane: an encrypted capsule never reaches this point (the
+        // reader refuses it as unsupported_capability), and a capsule
+        // declaring a cipher without a blob fails the envelope_cipher
+        // check, so no result here can be a verified encrypted outer.
+        val qualifiers = mutableListOf<String>()
+        if (ok) {
+            if (!signerSetBound) qualifiers += "signer_set_unbound"
+            if (!actorSetBound) qualifiers += "actor_set_unbound"
+            if (parsed.events.isEmpty()) qualifiers += "empty_chain_not_walked"
+            if (acceptedByPolicy == false) qualifiers += "version_not_accepted_by_policy"
+            // Mutually exclusive: no EFFECTIVE (well-formed) allowlist at
+            // all vs an allowlist that matched no distinct signer key.
+            // Keying off the RAW set here would make this lane emit
+            // no_trusted_signer where sdk-js/sdk-py/verifier-rust emit
+            // trust_not_evaluated for identical bytes.
+            if (effectiveAllowlist.isEmpty()) qualifiers += "trust_not_evaluated"
+            else if (trustedCount == 0) qualifiers += "no_trusted_signer"
+            // Lineage (spec/results.md entries 8-10): "valid verdict,
+            // custody claim not clean" — the facts a renderer must not
+            // hide, as bare strings. verified_depth and the per-entry
+            // statuses/reasons stay in the lineage facts channel.
+            if (lineage.declared) {
+                if (lineage.entries.any {
+                        it.status == Lineage.STATUS_UNVERIFIED ||
+                            it.status == Lineage.STATUS_PREDECESSOR_UNVERIFIABLE
+                    }
+                ) {
+                    qualifiers += "lineage_declared_unverified"
+                }
+                if (lineage.entries.any { it.status == Lineage.STATUS_MISMATCH }) {
+                    qualifiers += "lineage_mismatch"
+                }
+                if (lineage.entries.any { it.status == Lineage.STATUS_PREDECESSOR_INVALID }) {
+                    qualifiers += "lineage_predecessor_invalid"
+                }
+            }
+        }
+
         return CapsuleVerification(
             ok = ok, level = "L2", checks = checks,
             signers = signers,
@@ -608,10 +746,137 @@ object CapsuleVerifier {
             signerSetBound = signerSetBound,
             actorSetBound = actorSetBound,
             formatVersion = formatVersion,
+            profile = profile,
             skillTrust = CapsuleVerification.SkillTrustCheck(capsuleSigned, skillTiers),
             lineage = lineage,
-            qualifiers = qualifiers,
             notes = notes,
+            verdict = if (ok) "valid" else "invalid",
+            qualifiers = qualifiers,
+        )
+    }
+
+    /**
+     * Allowlist hygiene (spec/results.md `trust_not_evaluated`): the
+     * qualifier names an EFFECTIVE — well-formed — allowlist being
+     * empty, so a caller entry that is not a 64-char hex Ed25519 public
+     * key is dropped and REPORTED rather than silently counted. Keeping
+     * it would suppress `trust_not_evaluated` (the raw set is non-empty)
+     * and emit `no_trusted_signer` instead, which is a cross-lane
+     * disagreement on identical bytes — sdk-js, sdk-py and verifier-rust
+     * all filter here.
+     *
+     * The parameter is an unordered Set, so ignored entries are reported
+     * sorted rather than by caller index; the shared substring
+     * `ignored invalid allowlist` is what the other lanes pin.
+     */
+    internal fun normalizeAllowlist(allowlist: Set<String>): Pair<Set<String>, List<String>> {
+        val keyHex = Regex("^[0-9a-f]{64}$")
+        val effective = linkedSetOf<String>()
+        val ignored = mutableListOf<String>()
+        for (entry in allowlist) {
+            val lowered = entry.lowercase()
+            if (keyHex.matches(lowered)) effective += lowered else ignored += entry
+        }
+        val notes = ignored.sorted().map {
+            "ignored invalid allowlist entry: must be a 64-char hex string " +
+                "(32-byte Ed25519 public key); got \"$it\""
+        }
+        return effective to notes
+    }
+
+    /**
+     * The verdict + verdict_reason an OPEN-stage refusal derives
+     * (spec/results.md). "unsupported" names a limitation of THIS
+     * verifier — an era it does not know, a profile it does not
+     * implement, or a capsule class it cannot process — and always
+     * carries a machine-readable reason so a host can route the capsule
+     * to an implementation that can verify it. Everything else is a
+     * defect of the capsule: "invalid", with the causes in `checks`.
+     */
+    private fun refusalVerdict(e: Throwable): Pair<String, String?> = when (e) {
+        is UnsupportedVersionException ->
+            "unsupported" to if (e.status == CapsuleVersions.Status.UNKNOWN_OLDER.token) {
+                "unsupported_version_older"
+            } else {
+                "unsupported_version_newer"
+            }
+        is UnsupportedProfileException -> "unsupported" to "unsupported_profile"
+        // The registry gates what this lane RUNS (requires:["encryption"]);
+        // this is what its API reports when a host hands it such a capsule
+        // anyway — one spelling for both mechanisms.
+        is UnsupportedCapabilityException -> "unsupported" to "unsupported_capability"
+        else -> "invalid" to null
+    }
+
+    /**
+     * The two hashed documents of a capsule whose open was refused, read
+     * best-effort so the refusal can still REPORT what the capsule
+     * declares. Either half is null when it cannot be read.
+     */
+    private fun peekDocuments(bytes: ByteArray): Pair<JCSValue?, JCSValue?> {
+        val files = try { CapsuleZip.unpack(bytes).toMap() } catch (_: Throwable) {
+            return null to null
+        }
+        fun read(name: String): JCSValue? =
+            try { files[name]?.let { CapsuleReader.parseJson(it) } } catch (_: Throwable) { null }
+        return read("manifest.json") to read("provenance/envelope.json")
+    }
+
+    /**
+     * Best-effort format-version channel for a refusal the version gate
+     * did not raise (spec/versioning.md requirement 3: the observed
+     * version is a REPORTED fact even when open is refused). The
+     * fail-closed "unread" shape when the manifest could not be read.
+     */
+    private fun peekFormatVersion(manifest: JCSValue?): CapsuleVerification.FormatVersionReport {
+        val observed = manifest?.let {
+            CapsuleReader.lookupString(it, listOf("format", "version"))
+        } ?: return CapsuleVerification.FormatVersionReport()
+        val status = CapsuleVersions.classify(observed)
+        val known = status == CapsuleVersions.Status.KNOWN
+        return CapsuleVerification.FormatVersionReport(
+            observed = observed,
+            supported = known,
+            status = status.token,
+            suite = if (known) CapsuleVersions.suiteFor(observed) else null,
+        )
+    }
+
+    /**
+     * Best-effort profile channel for a capsule whose open was refused
+     * (spec/profiles.md obligation 8: the observed declaration is a
+     * reported fact even on refusal — it is what lets an auditor route
+     * the capsule to a capable verifier instead of declaring it
+     * corrupt). A typed [ProfileException] carries its own
+     * classification. A VERSION refusal reports the declaration as
+     * "unevaluated": profile semantics are era-scoped, so an unknown era
+     * means the declaration cannot even be classified. Any other refusal
+     * never reached the gate, so the channel stays "unread" with the
+     * declaration surfaced best-effort.
+     */
+    private fun peekProfile(
+        manifest: JCSValue?,
+        envelope: JCSValue?,
+        e: Throwable,
+    ): CapsuleVerification.ProfileReport {
+        if (e is ProfileException) {
+            val cls = e.classification
+            return CapsuleVerification.ProfileReport(
+                observed = cls.observed,
+                observedVersion = cls.observedVersion,
+                declared = cls.declared,
+                status = cls.status,
+            )
+        }
+        val cls = CapsuleProfiles.classify(
+            manifest?.let { CapsuleProfiles.manifestDeclaration(it) },
+            envelope?.let { CapsuleProfiles.envelopeDeclaration(it) },
+        )
+        return CapsuleVerification.ProfileReport(
+            observed = cls.observed,
+            observedVersion = cls.observedVersion,
+            declared = cls.declared,
+            status = if (e is UnsupportedVersionException) "unevaluated" else "unread",
         )
     }
 

@@ -21,7 +21,12 @@ encryption profiles.
 For v0.7 conformance, readers implement the profile described in
 [envelope.md](envelope.md). If a capsule declares an alternate profile,
 a reader that does not understand that profile must reject it rather than
-silently downgrade to the v0.7 defaults.
+silently downgrade to the v0.7 defaults. Since spec revision v0.7.1
+this rule is wire-enforceable: the declaration members, identifier
+grammar, refusal semantics (`unsupported_profile` — a limitation of the
+verifier, never a defect of the capsule), and the reporting channel are
+defined in [profiles.md](profiles.md), and the refusal surfaces on the
+normalized verdict of [results.md](results.md).
 
 ## What L2 proves vs what hosts must add
 
@@ -212,7 +217,7 @@ A malicious capsule author distributing instructions to a trusting LLM | Put pro
 A malicious payload author | Include code, HTML, PDFs, media, archives, or data designed to exploit a renderer or tempt execution | Execute payloads through the capsule format alone or bypass a host sandbox that treats payloads as inert evidence | Won't fix in protocol: verification is not malware analysis. Open: payload handling rules, untrusted-content projection rules, and resource-limit conformance requirements.
 A recipient with a private decryption key | Decrypt inner content; keep, copy, screenshot, or re-export plaintext locally | Re-seal under a signer key they do not control | Won't fix in protocol: no DRM after disclosure. Planned: key lifecycle semantics can limit future access.
 A compromised or retired signer / recipient key | Continue signing or decrypting until verifiers stop trusting that key; decrypt any historical capsule addressed to that key | Forge uncompromised keys or alter already sealed content without detection | Planned/Open: federation vocabulary plus key lifecycle semantics. Open: no v0.7 revocation or retirement record.
-A renderer or verifier report that labels math-only verification as trust | Mislead users by saying "verified" without checking signer allowlists or policy | Make an independent verifier report the same trust conclusion unless it uses the same bad policy | Open: verifier result vocabulary and renderer language. v0.7 already requires per-signer `valid` vs host-computed `trusted`.
+A renderer or verifier report that labels math-only verification as trust | Mislead users by saying "verified" without checking signer allowlists or policy — but from v0.7.1 a conforming renderer that hides a qualifier is provably non-conforming, not merely regrettable | Make an independent verifier report the same trust conclusion: any conforming lane derives the same verdict and the same qualifiers for the same capsule | Solved in v0.7.1 for the vocabulary: [results.md](results.md) normalizes `verdict`/`verdict_reason`/`qualifiers`, fixes the canonical note strings, and sets the renderer minimum-substring floor, pinned by `spec/vectors/result-vocabulary/`. Host UIs outside the conformance suite remain host territory.
 A resource-exhaustion attacker | Send very large capsules, many entries, deeply nested payloads, or expensive files within configured limits | Bypass mandatory ZIP-slip rejection or reader limits when implementations enforce them | Partially solved in v0.6 by path rejection plus file-count and size caps. Open: conformance tests for limit behavior and reader defaults.
 A cross-implementation canonicalization mismatch | Create capsules that verify in one implementation but fail in another if SDKs drift on JCS, hash inputs, ZIP handling, or envelope payloads | Break implementations that are tested against signed vectors and independent verifier parity | Planned: signed test vectors and second independent implementation gate before v1.
 An observer of an encrypted outer capsule | Learn outer metadata such as originator label/public key, recipient public keys, approximate size, signed time, and delivery context | Read `content.enc` without recipient key material | Open: encrypted outer metadata minimization is not designed. v0.7 does not try to hide outer metadata.

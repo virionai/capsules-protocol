@@ -476,4 +476,7 @@ def test_p1_python_built_successor_of_a_js_fixture_verifies_and_links():
     assert result["ok"] is True
     assert result["lineage"]["verified_depth"] == 1
     assert result["lineage"]["entries"][0]["status"] == "verified"
-    assert result["qualifiers"] == []
+    # A clean custody claim adds NO lineage qualifier (spec/results.md);
+    # what remains is this verification's own host-relative fact — the
+    # successor declares participants, and no allowlist was supplied.
+    assert result["qualifiers"] == ["trust_not_evaluated"]

@@ -26,7 +26,14 @@ class LineageTest {
         assertFalse(result.lineage.declared)
         assertTrue(result.lineage.ok, "unchecked is not failed")
         assertEquals(emptyList(), result.lineage.entries)
-        assertEquals(emptyList(), result.qualifiers)
+        // The merged surface (spec/results.md) carries the base
+        // vocabulary too — this fixture is verified with no allowlist —
+        // but an ABSENT declaration contributes no lineage name.
+        assertEquals(listOf("trust_not_evaluated"), result.qualifiers)
+        assertFalse(
+            result.qualifiers.any { it.startsWith("lineage_") },
+            "absence is never a lineage qualifier",
+        )
     }
 
     /**
@@ -47,7 +54,11 @@ class LineageTest {
         assertFalse(v06.lineage.declared)
         assertTrue(v06.lineage.ok)
         assertEquals(emptyList(), v06.lineage.entries)
-        assertEquals(emptyList(), v06.qualifiers)
+        assertEquals(listOf("trust_not_evaluated"), v06.qualifiers)
+        assertFalse(
+            v06.qualifiers.any { it.startsWith("lineage_") },
+            "an uninterpreted member is never a lineage qualifier",
+        )
         assertTrue(
             v06.notes.any { it.contains("unknown member under that era") },
             "the uninterpreted member is reported: ${v06.notes}",
@@ -69,7 +80,9 @@ class LineageTest {
         )
         assertTrue(result.ok, "linkage is REPORT-ONLY: ${result.checks.filter { !it.ok }}")
         assertFalse(result.lineage.ok, "a checked mismatch falsifies the area")
-        assertEquals(listOf("lineage_mismatch"), result.qualifiers)
+        // The merged spec-defined order: the base names (entries 1-7)
+        // first, the lineage names (8-10) after.
+        assertEquals(listOf("trust_not_evaluated", "lineage_mismatch"), result.qualifiers)
         val entry = result.lineage.entries.single()
         assertEquals(Lineage.STATUS_MISMATCH, entry.status)
         val diagnosis = entry.errors.joinToString(" ")

@@ -26,24 +26,34 @@ Requires Node ≥ 20.
 
 ## Commands
 
-### `capsule verify <file> [--allowlist KEY...] [--predecessor FILE...] [--json]`
+### `capsule verify <file> [--allowlist KEY...] [--predecessor FILE...] [--accept-versions VERSION...] [--json]`
 
-Wraps the SDK's `verifyCapsule()` and applies the CLI's **trust policy**
-and **custody policy** on top. The SDK checks the math — signature(s),
-capsule_id derivation, manifest hash, content-index hash, chain hash
-linkage, signer-set binding, the `manifest.predecessors` declaration —
-and reports facts; it never decides policy. The CLI does, because the
-CLI is where the operator says what they demand:
+Wraps the SDK's `verifyCapsule()` and applies the CLI's **policy
+layer** — trust policy, custody policy, version policy — on top. The SDK
+checks the math — signature(s), capsule_id derivation, manifest hash,
+content-index hash, chain hash linkage, signer-set binding, the
+`manifest.predecessors` declaration — and reports facts; it never
+decides policy. The CLI does, because the CLI is where the operator says
+what they demand:
 
 - **No `--allowlist`** — no trust policy. The verdict covers integrity
-  only, and both the report and the `Result:` line say so. Signer
+  only, and both the report and the `Result:` block say so. Signer
   identity is *not checked*: anyone's valid signature passes.
 - **`--allowlist <hex>`** (repeatable) — sets the trust policy: at
   least one **distinct** allowlisted key must carry a valid signature.
   A capsule whose math checks pass but whose signers all miss the
-  allowlist **FAILS with exit 1** — `capsule verify f --allowlist $KEY
-  && deploy` will not deploy an artifact signed by someone you did not
-  trust. An entry that is not 64 hex chars is a usage error (exit 2).
+  allowlist **fails the run with exit 1** — `capsule verify f
+  --allowlist $KEY && deploy` will not deploy an artifact signed by
+  someone you did not trust. An entry that is not 64 hex chars is a
+  usage error (exit 2).
+- **`--accept-versions <major.minor>`** (repeatable) — sets the version
+  policy (`spec/versioning.md` "Host policy"). A capsule declaring a
+  version outside the set still verifies — the math is unaffected, and
+  the SDK reports rather than decides — but the run **fails with exit
+  1** and the verdict carries `version_not_accepted_by_policy`. Absent
+  the flag, no policy is declared and the fact is reported as `null`.
+  A value outside the `<major>.<minor>` grammar is a usage error
+  (exit 2).
 - **No `--predecessor`** — no custody policy. A declared lineage is
   reported in full (it is never omitted) but never affects the exit
   code: linkage is a fact about a *pair* of artifacts, the second one
@@ -94,6 +104,94 @@ naming the era it was checked under.
 `satisfied`) carrying this invocation's policy. `integrity_ok` stays the
 capsule's own verdict: a failed custody check moves `ok` and the exit
 code, never `integrity_ok`.
+
+```text
+$ capsule verify clean.capsule --allowlist c172289fcacf...
+File:                   clean.capsule (4493 bytes)
+Capsule ID:             d6d73f94c78e…
+Originator (Ed25519):   c172289fcacf…
+Sealed at (attested):   2026-05-07T12:00:00Z  — signer-supplied; no external time anchor
+Level:                  L2
+Format version:         0.7  (v0.6 suite)
+Profile:                v0.6-suite/1.0 (default, undeclared)
+
+Checks:
+  [✓] content_index
+  [✓] chain
+  [✓] envelope_signature
+  [✓] signer_set
+  [✓] actor_set
+
+Trust:
+  policy:            allowlist (1 key supplied)
+  trusted signers:   1 distinct allowlisted key(s) with a valid signature
+  policy check:      SATISFIED
+
+Signers:
+  - originator:   c172289fcacf…  valid=true  trusted=true
+
+Result: VALID (no qualifiers; 1 distinct trusted signer)
+  trust policy: SATISFIED
+```
+
+#### The Result block (`spec/results.md`)
+
+The verdict is **verdict-first and fully qualified**: `VALID`,
+`INVALID`, or `UNSUPPORTED`, taken from the SDK's normalized verdict,
+with every qualifier enumerated beneath it. A qualifier names a
+weaker claim the capsule made honestly (or a scope this run did not
+cover); a renderer that hides one turns an honest weaker claim by the
+author into a false stronger claim by the tooling, so the CLI never
+prints a bare `VALID`:
+
+```text
+Result: VALID
+  qualifiers:
+    - signer set is not bound by the seal (manifest.signer_commitment absent)
+    - chain actors are not bound to a declared participant set (manifest.participants empty)
+    - empty chain: no events to walk; envelope anchors checked to be null instead
+    - trust not evaluated: no allowlist supplied
+```
+
+`UNSUPPORTED` is the honest verdict for a capsule this verifier cannot
+understand — an era it does not know, or a declared profile it does not
+implement. It is **a limitation of the verifier, not a defect of the
+capsule**, it stays distinguishable from tamper, and it exits 1:
+
+```text
+Result: UNSUPPORTED (unsupported_version_newer: manifest.format.version '9.9' is newer than this verifier supports (newest known: 0.7))
+Result: UNSUPPORTED (unsupported_profile: profile 'x-acme-kms' version '1.0' is not supported by this verifier (supported: v0.6-suite/1.0))
+```
+
+The ten spec-defined qualifier names include the three lineage names
+(`lineage_declared_unverified`, `lineage_mismatch`,
+`lineage_predecessor_invalid`): a custody claim that is declared but not
+established, contradicted, or backed by an artifact that fails its own
+verification is a *qualified* `VALID`, never a silent one.
+
+A requested policy that went unmet prints its own line under the
+verdict (`trust policy: FAILED — …`, `custody policy: FAILED — …`,
+`version policy: FAILED — …`) — exit 1 with a `VALID` verdict is only
+honest if the report says which demand failed.
+
+`Sealed at` is labelled **(attested)** deliberately: `signed_at` is
+self-attested by the signer and the format has no external time anchor, so
+the CLI never presents it as a verified fact.
+
+`--json` emits a structured result instead of the human-readable
+report. Same exit code in either mode. `ok` is the **overall** verdict
+(integrity AND every requested policy — it always matches the exit
+code); `integrity_ok` preserves the SDK's math-only verdict (the
+analogue of the Rust CLI's `ok`); `verdict` / `verdict_reason` /
+`qualifiers` are the normalized verdict surface, byte-identical in
+every lane; the `trust` block carries
+`{policy, allowlist_size, trusted_signer_count, satisfied}` and
+`version_policy` carries `{policy, accept_versions, satisfied}` and
+`custody` carries `{policy, predecessors_supplied, unmatched_count,
+verified_depth, satisfied}`, where `satisfied` is `null` when that
+policy was not supplied; `format_version`, `profile` and `lineage` are
+the reported version/profile/custody fact channels, under the Rust
+CLI's member names.
 
 ### `capsule rewrap <predecessor.capsule> --key FILE --out FILE [...]`
 
@@ -157,54 +255,18 @@ Rewrap obtains nothing from the predecessor's originator: every
 successful run prints the "not countersigned" note, and the successor's
 id line says **"new identity"**.
 
-```text
-$ capsule verify clean.capsule --allowlist c172289fcacf...
-File:                   clean.capsule (4493 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at (attested):   2026-05-07T12:00:00Z  — signer-supplied; no external time anchor
-Level:                  L2
-
-Checks:
-  [✓] content_index
-  [✓] chain
-  [✓] envelope_signature
-  [✓] signer_set
-
-Trust:
-  policy:            allowlist (1 key supplied)
-  trusted signers:   1 distinct allowlisted key(s) with a valid signature
-  policy check:      SATISFIED
-
-Signers:
-  - originator:   c172289fcacf…  valid=true  trusted=true
-
-Result: PASS (integrity verified; trust policy satisfied)
-```
-
-Without an allowlist the same capsule prints
-`Result: PASS (integrity only — signer identity not checked)`; with an
-allowlist no signer matches, it prints
-`Result: FAIL (integrity verified; trust policy FAILED: no signer
-matches the supplied allowlist)` and exits 1.
-
-`Sealed at` is labelled **(attested)** deliberately: `signed_at` is
-self-attested by the signer and the format has no external time anchor, so
-the CLI never presents it as a verified fact.
-
-`--json` emits a structured result instead of the human-readable
-report. Same exit code in either mode. `ok` is the **overall** verdict
-(integrity AND policy — it always matches the exit code);
-`integrity_ok` preserves the SDK's math-only verdict (the analogue of
-the Rust CLI's `ok`); the `trust` block carries
-`{policy, allowlist_size, trusted_signer_count, satisfied}`, where
-`satisfied` is `null` when no policy was supplied.
-
 ### `capsule inspect <file> [--json]`
 
 One-screen overview: format version, identity, sealed time, file count,
 chain length, action histogram, payload tree size, signer summary. No
 verification — use `verify` for that.
+
+When the capsule **declares** a profile (`spec/profiles.md`), the raw
+declaration is printed as written (`Profile (declared): <id>/<version>`)
+and carried in `--json` under `profile.manifest` / `profile.envelope`.
+Absence is not a missing fact — it *is* the era default — so nothing is
+printed for it; `capsule verify` names the profile actually applied
+either way.
 
 ### `capsule chain <file> [--limit N] [--json]`
 
@@ -288,28 +350,39 @@ Result: PASS
 ## Exit codes
 
 CI depends on these; they are part of the CLI's contract (enforced by
-`test/smoke.mjs`).
+`test/smoke.mjs`) and they are the exit codes `spec/results.md` fixes
+for both reference CLIs. There is no exit 3.
 
 ```
-0    success — for verify: integrity verified AND every supplied policy
-     satisfied (--allowlist, --predecessor). With neither flag, exit 0
-     means integrity only; signer identity was NOT checked and no
-     custody claim was established. For rewrap: the successor was
-     written (including under --allow-invalid-predecessor).
-1    verification failed — integrity checks failed, OR a supplied
-     policy was not satisfied (no allowlisted key signed; a supplied
-     predecessor did not establish the declared linkage), OR vectors
-     mismatch, OR rewrap refused its predecessor (fails its own
-     verification, or declares an era this build does not know).
-     rewrap writes nothing on exit 1.
+0    success — for verify: verdict VALID AND every requested policy
+     (--allowlist, --predecessor, --accept-versions) satisfied. With
+     none of them, exit 0 means integrity only; signer identity was NOT
+     checked, no custody claim was established, and the Result block
+     says so. For rewrap: the successor was written (including under
+     --allow-invalid-predecessor).
+1    verdict INVALID or UNSUPPORTED, a requested policy not satisfied
+     (--allowlist matched no signer; a supplied --predecessor did not
+     establish the declared linkage; --accept-versions excludes the
+     declared version), vectors mismatch, OR rewrap refused its
+     predecessor (fails its own verification, or declares an era this
+     build does not know). rewrap writes nothing on exit 1.
 2    usage, I/O, or environment error — unknown flag, unexpected
-     positional, malformed --allowlist entry, --key file or
-     --created-at/--signed-at value, missing --out, an --out that
-     exists without --force, missing file,
-     capsule that cannot be opened, encrypted-capsule content
+     positional, malformed --allowlist or --accept-versions entry,
+     --key file or --created-at/--signed-at value, missing --out, an
+     --out that exists without --force, missing or unreadable file
+     (including a --predecessor path), encrypted-capsule content
      requested without decryption, an input class a command does not
      take (rewrap of an encrypted or alternate-profile predecessor), …
 ```
+
+**Changed in v0.7.1 (CI-observable):** a capsule this verifier cannot
+open — an unknown format version, an unsupported declared profile, or
+a malformed container — now exits **1**, not 2. An unknown era is a
+verdict about the capsule/verifier pair, not an operator error; `verify`
+feeds the bytes to the total verifier and renders the fail-closed
+result, which is what the Rust `capsule-verify-cli` has always done.
+Exit 2 now means only "this invocation was wrong or the file could not
+be read".
 
 The parser fails closed: any flag a command does not declare, and any
 positional beyond what it accepts, is an exit-2 error. A typo'd

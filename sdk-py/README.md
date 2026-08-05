@@ -97,6 +97,42 @@ Treat a capsule as good when
 `result["ok"] and result["trusted_signer_count"] >= 1` (or your own
 stricter policy).
 
+## The verdict surface: what a report must not hide
+
+Every result also carries the normalized vocabulary of
+[../spec/results.md](../spec/results.md), derived from the facts above:
+
+```python
+result["verdict"]         # "valid" | "invalid" | "unsupported"
+result["verdict_reason"]  # non-null iff "unsupported": unsupported_version_newer,
+                          # unsupported_version_older, unsupported_profile,
+                          # unsupported_capability
+result["qualifiers"]      # e.g. ["signer_set_unbound", "trust_not_evaluated"]
+```
+
+`result["ok"] == (result["verdict"] == "valid")` is an invariant.
+`"unsupported"` names a limitation of *this verifier* — an unknown era
+or a profile it does not implement — never corruption: route the capsule
+to an implementation that has the rules. `qualifiers` names the weaker
+claims a `valid` verdict rests on (an unbound signer set, an unwalked
+empty chain, an unread encrypted body, no allowlist consulted, a custody
+claim that was declared but not verified); a conforming renderer MUST
+show every one of them beside the verdict, so "verified" never means
+more than the capsule actually claimed. The emitted set is the ten names
+of [../spec/results.md](../spec/results.md), always in that order — bare
+strings only: payload-carrying facts stay in their own channels
+(`result["lineage"]`, `result["profile"]`, `result["format_version"]`).
+
+`result["profile"]` is the profile declaration channel
+([../spec/profiles.md](../spec/profiles.md)): `observed` /
+`observed_version` (the declaration as read, reported even on refusal),
+`declared`, `effective` / `effective_version` (the profile actually
+applied — absence means `v0.6-suite`/`1.0`, permanently), `supported`,
+`status`, and `accepted_by_policy`. Host policy is reported and never
+decided: `verify_capsule(data, accept_versions=[...],
+accept_profiles=[...])` fills in the two `accepted_by_policy` facts
+without changing `ok`.
+
 ## Encrypt for specific recipients
 
 Pass `recipients` at seal time to encrypt the capsule body
@@ -165,6 +201,11 @@ once per parent; an archivist holding hashes but not bytes uses
 unknown-era / encrypted / alternate-profile predecessors) raise
 `PredecessorError` with a machine-readable `.reason`.
 
+An unclean custody claim also reaches the verdict surface above:
+`lineage_declared_unverified`, `lineage_mismatch` and
+`lineage_predecessor_invalid` are qualifiers 8-10 — a `valid` verdict
+whose custody claim a renderer must not hide.
+
 ## Develop
 
 ```sh
@@ -179,7 +220,8 @@ ruff format --check src tests  # formatter check
 
 - `tests/test_spec_registry.py` consumes the language-neutral outcome
   registries (`spec/vectors/tamper-detection/`, `malformed-layout/`,
-  `lineage/`, …) and the byte-level `signing-input.json` pins directly.
+  `lineage/`, `profile-declaration/`, `result-vocabulary/`, …) and the
+  byte-level `signing-input.json` pins directly.
 - `tests/test_parity_jssdk.py` runs both directions: Python verifies
   JS-built fixtures, and JS verifies Python-built capsules via a Node
   subprocess.
@@ -203,6 +245,7 @@ ruff format --check src tests  # formatter check
 | `capsule.envelope` | `sdk-js/src/envelope.js` | Envelope build + sign + verify |
 | `capsule.builder` | `sdk-js/src/builder.js` | CapsuleBuilder (plain + encrypted multi-recipient) |
 | `capsule.reader` | `sdk-js/src/reader.js` | CapsuleReader (plain + decrypt) |
+| `capsule.profiles` | `sdk-js/src/profiles.js` | Supported-profile table + the open-stage profile gate |
 | `capsule.verifier` | `sdk-js/src/verifier.js` | verify_capsule (L2 plain, L2 encrypted-aware, L3) |
 
 ## License

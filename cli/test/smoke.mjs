@@ -197,11 +197,11 @@ section("verify - clean and tampered");
 {
   const r = run(["verify", CLEAN]);
   check("clean.capsule exits 0", r.code === 0);
-  check("clean.capsule prints PASS", /Result: PASS/.test(r.stdout));
+  check("clean.capsule prints VALID", /Result: VALID/.test(r.stdout));
 
   const t = run(["verify", TAMPERED]);
   check("tampered-payload exits 1", t.code === 1);
-  check("tampered-payload prints FAIL", /Result: FAIL/.test(t.stdout));
+  check("tampered-payload prints INVALID", /Result: INVALID/.test(t.stdout));
 
   const j = run(["verify", CLEAN, "--json"]);
   {
@@ -346,17 +346,23 @@ section("verify - trust policy drives the verdict (F04)");
   // Allowlisted signer: integrity AND policy hold.
   const match = run(["verify", CLEAN, "--allowlist", okKey]);
   check("allowlisted signer exits 0", match.code === 0);
-  check("allowlisted signer prints qualified PASS",
-    /Result: PASS \(integrity verified; trust policy satisfied\)/.test(match.stdout));
+  check("allowlisted signer prints an unqualified VALID naming its trust basis",
+    /Result: VALID \(no qualifiers; 1 distinct trusted signer\)/.test(match.stdout));
+  check("allowlisted signer reports the satisfied policy beside the verdict",
+    /trust policy: SATISFIED/.test(match.stdout));
   check("allowlisted signer shows trusted=true", /trusted=true/.test(match.stdout));
 
   // Supplied-but-unmatched allowlist: the capsule is signed by someone
-  // the operator did not trust. That must FAIL loudly, not PASS quietly.
+  // the operator did not trust. The MATH is still valid (the SDK reports
+  // facts), so the verdict stays VALID — but the operator's demand went
+  // unmet, so the run FAILS loudly at exit 1 and says which demand.
   const miss = run(["verify", CLEAN, "--allowlist", wrongKey]);
   check("unmatched allowlist exits 1", miss.code === 1);
-  check("unmatched allowlist prints FAIL", /Result: FAIL/.test(miss.stdout));
+  check("unmatched allowlist keeps the math verdict VALID", /Result: VALID/.test(miss.stdout));
+  check("unmatched allowlist reports the failed policy beside the verdict",
+    /trust policy: FAILED/.test(miss.stdout));
   check("unmatched allowlist is loud about why",
-    /no signer matches the supplied allowlist/.test(miss.stdout));
+    /matched no signer/.test(miss.stdout));
 
   const missJson = run(["verify", CLEAN, "--allowlist", wrongKey, "--json"]);
   check("unmatched allowlist --json exits 1", missJson.code === 1);
@@ -415,16 +421,16 @@ section("verify - trust policy drives the verdict (F04)");
         && parsed.skill_trust.skills
         && parsed.skill_trust.skills.exfil === "unsigned");
     const human = run(["verify", phantom, "--allowlist", keys.originator.publicKey]);
-    check("failing-verdict human report FAILs", /Result: FAIL/.test(human.stdout));
+    check("failing-verdict human report is INVALID", /Result: INVALID/.test(human.stdout));
     check("failing-verdict human report derives unsigned",
       /skills \(derived\):\s+exfil=unsigned/.test(human.stdout));
   }
 
-  // No allowlist: no policy. PASS, but the verdict must say what it covers.
+  // No allowlist: no policy. VALID, but the verdict must say what it covers.
   const none = run(["verify", CLEAN]);
   check("no allowlist still exits 0", none.code === 0);
-  check("no-allowlist PASS is qualified as integrity-only",
-    /Result: PASS \(integrity only/.test(none.stdout));
+  check("no-allowlist VALID carries the trust_not_evaluated qualifier",
+    /Result: VALID\n {2}qualifiers:\n(?: {4}- .*\n)* {4}- trust not evaluated: no allowlist supplied/.test(none.stdout));
   check("no-allowlist report says signer identity not checked",
     /signer identity not checked/.test(none.stdout));
 
@@ -527,6 +533,215 @@ section("encrypted capsules - honest decryption pointers (F47)");
   // trust policy applies to the outer envelope like any other capsule.
   const v = run(["verify", ENCRYPTED, "--allowlist", KEYS.originatorPublicKeyHex]);
   check("encrypted capsule verifies at L2 with trust satisfied", v.code === 0);
+}
+
+// ----------------------------------------------------------------------
+
+section("verify - normalized verdict surface (spec/results.md)");
+
+{
+  // The CLI is the reference renderer for spec/results.md: the Result
+  // block is verdict-first, every qualifier is enumerated with its
+  // normative minimum substring, and the exit codes are 0/1/2 with no
+  // third truth value. These run against the checked-in conformance
+  // fixtures so the renderer is pinned to the same bytes the five lanes
+  // verify.
+  const RV = join(ROOT, "..", "spec", "vectors", "result-vocabulary", "output");
+  const PD = join(ROOT, "..", "spec", "vectors", "profile-declaration", "output");
+  const rvKeys = JSON.parse(readFileSync(join(RV, "keys.json"), "utf8"));
+  const json = (args) => {
+    const r = run(args);
+    let parsed;
+    try { parsed = JSON.parse(r.stdout); } catch { /* noop */ }
+    return { ...r, parsed };
+  };
+
+  // P7: an unknown era is a verdict about the capsule/verifier pair, not
+  // an operator error. Exit 2 ("cannot open capsule") was the historical
+  // Node-CLI behavior and disagreed with the Rust CLI's exit 1.
+  const newer = run(["verify", join(RV, "unsupported-newer.capsule")]);
+  check("unknown-newer capsule exits 1, not 2 (P7)", newer.code === 1);
+  check("unknown-newer renders UNSUPPORTED with its machine-readable reason",
+    /Result: UNSUPPORTED \(unsupported_version_newer:/.test(newer.stdout));
+  check("unknown-newer keeps the versioning.md needle in the report",
+    /newer than this verifier supports/.test(newer.stdout));
+  check("unknown-newer still reports the observed version",
+    /Format version:\s+9\.9/.test(newer.stdout));
+  const newerJson = json(["verify", join(RV, "unsupported-newer.capsule"), "--json"]);
+  check("unknown-newer --json carries verdict/verdict_reason/qualifiers",
+    newerJson.parsed
+      && newerJson.parsed.verdict === "unsupported"
+      && newerJson.parsed.verdict_reason === "unsupported_version_newer"
+      && Array.isArray(newerJson.parsed.qualifiers)
+      && newerJson.parsed.qualifiers.length === 0
+      && newerJson.parsed.ok === false
+      && newerJson.parsed.integrity_ok === false);
+  check("unknown-newer --json exits 1", newerJson.code === 1);
+
+  const older = run(["verify", join(RV, "unsupported-older.capsule")]);
+  check("unknown-older capsule exits 1", older.code === 1);
+  check("unknown-older names the other refusal direction",
+    /Result: UNSUPPORTED \(unsupported_version_older:/.test(older.stdout)
+      && /older than any version this verifier supports/.test(older.stdout));
+
+  // A declared profile this verifier does not implement is the same
+  // class of honesty: a limitation of the verifier, never a defect.
+  const unsupProfile = run(["verify", join(PD, "unsupported-vendor-profile.capsule")]);
+  check("unsupported profile exits 1", unsupProfile.code === 1);
+  check("unsupported profile renders UNSUPPORTED with the profile reason",
+    /Result: UNSUPPORTED \(unsupported_profile:/.test(unsupProfile.stdout));
+  check("unsupported profile keeps the profiles.md needles",
+    /profile 'x-test-kms-1' version '1\.0' is not supported by this verifier/.test(unsupProfile.stdout)
+      && /limitation of the verifier/.test(unsupProfile.stdout));
+  check("unsupported profile names the declaration on the Profile line",
+    /Profile:\s+x-test-kms-1\/1\.0/.test(unsupProfile.stdout));
+
+  // M2: a manifest/envelope profile disagreement is a capsule
+  // self-contradiction — INVALID with no verdict_reason, never
+  // UNSUPPORTED (which is reserved for verifier limitations).
+  const mismatch = json(["verify", join(PD, "profile-mismatch-value.capsule"), "--json"]);
+  check("profile mismatch is invalid with a null verdict_reason (M2)",
+    mismatch.code === 1
+      && mismatch.parsed
+      && mismatch.parsed.verdict === "invalid"
+      && mismatch.parsed.verdict_reason === null
+      && mismatch.parsed.profile?.status === "mismatched");
+
+  // The trust.md threat-table capsule: it VERIFIES, and every reduced
+  // assurance reaches the operator beside the verdict.
+  const maxQ = run(["verify", join(RV, "maximally-qualified-valid.capsule")]);
+  check("maximally-qualified capsule exits 0", maxQ.code === 0);
+  for (const needle of [
+    "signer set is not bound by the seal",
+    "actors are not bound to a declared participant set",
+    "no events to walk",
+    "no allowlist",
+  ]) {
+    check(`Result block carries the required substring: ${needle}`,
+      new RegExp(`Result: VALID\\n(?:.*\\n)*?    - .*${needle}`).test(maxQ.stdout));
+  }
+  const maxQJson = json(["verify", join(RV, "maximally-qualified-valid.capsule"), "--json"]);
+  check("maximally-qualified --json qualifiers match the spec order exactly",
+    maxQJson.parsed && JSON.stringify(maxQJson.parsed.qualifiers) === JSON.stringify([
+      "signer_set_unbound",
+      "actor_set_unbound",
+      "empty_chain_not_walked",
+      "trust_not_evaluated",
+    ]));
+
+  // The one shape allowed an empty qualifiers array — and it says so.
+  const unqualified = json([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.originator.publicKey, "--json",
+  ]);
+  check("unqualified valid exits 0 with an empty qualifiers array",
+    unqualified.code === 0
+      && unqualified.parsed
+      && unqualified.parsed.verdict === "valid"
+      && unqualified.parsed.verdict_reason === null
+      && JSON.stringify(unqualified.parsed.qualifiers) === "[]");
+  check("verdict never disagrees with ok (spec/results.md invariant)",
+    unqualified.parsed && unqualified.parsed.integrity_ok === (unqualified.parsed.verdict === "valid"));
+
+  const noMatch = json([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.stranger.publicKey, "--json",
+  ]);
+  check("non-matching allowlist keeps verdict valid and qualifies it",
+    noMatch.code === 1
+      && noMatch.parsed
+      && noMatch.parsed.verdict === "valid"
+      && JSON.stringify(noMatch.parsed.qualifiers) === JSON.stringify(["no_trusted_signer"])
+      && noMatch.parsed.trust?.satisfied === false);
+
+  // P1: --accept-versions is the first reference renderer for
+  // formatVersion.acceptedByPolicy (spec/versioning.md "Host policy").
+  const versionNo = json([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.originator.publicKey,
+    "--accept-versions", "0.6", "--json",
+  ]);
+  check("--accept-versions excluding the capsule's version fails the run",
+    versionNo.code === 1
+      && versionNo.parsed
+      && versionNo.parsed.integrity_ok === true
+      && versionNo.parsed.verdict === "valid"
+      && versionNo.parsed.qualifiers.includes("version_not_accepted_by_policy")
+      && versionNo.parsed.format_version?.accepted_by_policy === false
+      && versionNo.parsed.version_policy?.satisfied === false);
+  const versionNoHuman = run([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.originator.publicKey, "--accept-versions", "0.6",
+  ]);
+  check("--accept-versions failure carries the versioning.md needle",
+    /not in the declared accepted set/.test(versionNoHuman.stdout)
+      && /version policy: FAILED/.test(versionNoHuman.stdout));
+
+  const versionYes = json([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.originator.publicKey,
+    "--accept-versions", "0.6", "--accept-versions", "0.7", "--json",
+  ]);
+  check("--accept-versions including the version satisfies the policy",
+    versionYes.code === 0
+      && versionYes.parsed
+      && versionYes.parsed.format_version?.accepted_by_policy === true
+      && JSON.stringify(versionYes.parsed.qualifiers) === "[]");
+
+  const noVersionPolicy = json([
+    "verify", join(RV, "unqualified-valid.capsule"),
+    "--allowlist", rvKeys.originator.publicKey, "--json",
+  ]);
+  check("absent --accept-versions declares no policy (accepted_by_policy null)",
+    noVersionPolicy.parsed
+      && noVersionPolicy.parsed.format_version?.accepted_by_policy === null
+      && noVersionPolicy.parsed.version_policy?.policy === "none");
+
+  const badVersion = run([
+    "verify", join(RV, "unqualified-valid.capsule"), "--accept-versions", "zero-point-seven",
+  ]);
+  check("malformed --accept-versions entry exits 2", badVersion.code === 2);
+  check("malformed --accept-versions names the expected grammar",
+    /<major>\.<minor>/.test(badVersion.stderr));
+
+  // Qualifiers only ever qualify a VALID verdict.
+  const tamperVec = json([
+    "verify", join(RV, "invalid-tamper.capsule"),
+    "--allowlist", rvKeys.originator.publicKey, "--json",
+  ]);
+  check("invalid capsule reports verdict invalid, no reason, no qualifiers",
+    tamperVec.code === 1
+      && tamperVec.parsed
+      && tamperVec.parsed.verdict === "invalid"
+      && tamperVec.parsed.verdict_reason === null
+      && JSON.stringify(tamperVec.parsed.qualifiers) === "[]");
+
+  // spec/profiles.md §4.2: the profile actually applied, reported beside
+  // the format version, with absence rendered as the era default.
+  check("verify names the effective profile on a default capsule",
+    /Profile:\s+v0\.6-suite\/1\.0 \(default, undeclared\)/.test(maxQ.stdout));
+  check("verify --json carries the profile channel",
+    maxQJson.parsed
+      && maxQJson.parsed.profile?.effective === "v0.6-suite"
+      && maxQJson.parsed.profile?.status === "default"
+      && maxQJson.parsed.profile?.declared === false);
+
+  // The encrypted outer: the seal is verified, the content unread. The
+  // scope is a qualifier, not a footnote.
+  const enc = run(["verify", ENCRYPTED, "--allowlist", KEYS.originatorPublicKeyHex]);
+  check("encrypted outer renders the plain-language scope qualifier",
+    /content is encrypted and was not read/.test(enc.stdout));
+  const encJson = json(["verify", ENCRYPTED, "--allowlist", KEYS.originatorPublicKeyHex, "--json"]);
+  check("encrypted outer --json carries encrypted_outer_only",
+    encJson.parsed && encJson.parsed.qualifiers.includes("encrypted_outer_only"));
+
+  // A file that is not a capsule at all is a verification failure, not
+  // an operator error: the CLI feeds the bytes to the total verifier.
+  const junk = join(TMP, "not-a-capsule.bin");
+  writeFileSync(junk, Buffer.from("this is not a zip file\n", "utf8"));
+  const junkRun = run(["verify", junk]);
+  check("unopenable file exits 1 with an INVALID verdict",
+    junkRun.code === 1 && /Result: INVALID/.test(junkRun.stdout));
 }
 
 // ----------------------------------------------------------------------

@@ -10,6 +10,7 @@ from .chain import events_from_jsonl
 from .crypto import chacha20_poly1305_decrypt, hkdf_sha256, x25519_dh
 from .envelope import EncryptedCapsulesNotSupportedError
 from .keys import _field, to_raw_key
+from .profiles import require_supported_profile
 from .versions import key_wrap_info, require_known_version
 from .zip_io import unpack_zip
 
@@ -137,6 +138,15 @@ class CapsuleReader:
             raise MalformedCapsuleError(f"manifest/envelope parse: {e}") from e
         _validate_manifest_shape(manifest)
         _validate_envelope_shape(envelope)
+        # Profile gate (spec/profiles.md): version gate first (the two
+        # require_known_version calls inside the shape checks above),
+        # profile gate second, nothing else until both pass. Applying an
+        # unknown profile's rules — or silently downgrading to the
+        # defaults — would manufacture mismatch errors indistinguishable
+        # from tampering. The refusal is OPEN-stage: a reader that cannot
+        # establish its governing rules cannot meaningfully construct at
+        # all.
+        require_supported_profile(manifest, envelope)
         return cls(files, manifest, envelope)
 
     def manifest(self) -> dict:
@@ -275,6 +285,11 @@ class CapsuleReader:
             raise MalformedCapsuleError(f"decrypted manifest/envelope parse: {e}") from e
         _validate_manifest_shape(inner_manifest)
         _validate_envelope_shape(inner_envelope)
+        # The inner capsule declares its own profile, gated independently
+        # at L3 (spec/profiles.md obligation 11 — no inner/outer equality
+        # rule: a KMS-wrapped outer over a plain default inner is a
+        # legitimate authorial shape).
+        require_supported_profile(inner_manifest, inner_envelope)
         inner = CapsuleReader(inner_files, inner_manifest, inner_envelope)
         inner._outer_manifest = self._manifest
         return inner

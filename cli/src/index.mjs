@@ -45,10 +45,10 @@ function help() {
   err("  -h, --help          show this help");
   err("");
   err("exit codes:");
-  err("  0  success — for verify: integrity verified AND every supplied");
-  err("     policy (--allowlist, --predecessor) satisfied");
-  err("  1  verification failed, a supplied policy not satisfied, a rewrap");
-  err("     predecessor refusal, or vectors mismatch");
+  err("  0  success — for verify: verdict VALID AND every requested policy");
+  err("     (--allowlist, --predecessor, --accept-versions) satisfied");
+  err("  1  verdict INVALID or UNSUPPORTED, a requested policy not satisfied,");
+  err("     a rewrap predecessor refusal, or vectors mismatch");
   err("  2  usage, I/O, or environment error (unknown flag, malformed key, ...)");
 }
 

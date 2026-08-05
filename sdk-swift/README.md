@@ -120,6 +120,55 @@ Two rules a host must not paper over:
   unverified entries — `notes` carries the pinned "declared, not
   verified" and "not countersigned" wording — rather than dropping them.
 
+## The verdict surface: what a report must not hide
+
+Every result also carries the normalized vocabulary of
+[../spec/results.md](../spec/results.md), derived from the facts above:
+
+```swift
+v.verdict        // "valid" | "invalid" | "unsupported"
+v.verdictReason  // non-nil iff "unsupported": unsupported_version_newer,
+                 // unsupported_version_older, unsupported_profile,
+                 // unsupported_capability
+v.qualifiers     // e.g. ["signer_set_unbound", "trust_not_evaluated"]
+                 // …and the lineage names above: lineage_declared_unverified,
+                 // lineage_mismatch, lineage_predecessor_invalid
+```
+
+`v.ok == (v.verdict == "valid")` is an invariant. `"unsupported"` names a
+limitation of *this verifier* — an unknown era, or a profile it does not
+implement — never corruption: route the capsule to an implementation
+that has the rules. `qualifiers` names the weaker claims a `valid`
+verdict rests on (an unbound signer set, an unwalked empty chain, an
+unread encrypted body, no allowlist consulted, a declared lineage nobody
+supplied bytes for); show every one of them beside the verdict, so
+"verified" never means more to a reader than the capsule actually
+claimed. `trust_not_evaluated` keys off the *effective* allowlist:
+entries that are not 64-char hex are dropped with an `ignored invalid
+allowlist entry` note, so a typo cannot masquerade as a consulted
+policy.
+
+`v.lineage` is the lineage facts channel
+([../spec/lineage.md](../spec/lineage.md)) — `declared`, `ok`,
+`verifiedDepth`, and the per-entry statuses and reasons. Payload-carrying
+facts live there and never on the bare-string `qualifiers` array.
+
+`v.profile` is the profile declaration channel
+([../spec/profiles.md](../spec/profiles.md)): `observed` /
+`observedVersion` (the declaration as read, reported even when the
+capsule was refused), `declared`, `effective` / `effectiveVersion` (the
+profile actually applied — absence means `v0.6-suite`/`1.0`,
+permanently), `supported`, `status`, and `acceptedByPolicy`. Host policy
+is reported and never decided: `CapsuleVerifier.verify(bytes,
+acceptVersions: [...], acceptProfiles: [...])` fills in the two
+accepted-by-policy facts without changing `ok`.
+
+Gate order is version → profile → everything else. On a refusal at either
+gate the diagnosis is the *only* error the result carries: every other
+channel sits at its fail-closed default (`lineage` not evaluated,
+`profile` `unevaluated` after a version refusal) and `qualifiers` is
+empty.
+
 ## Quick start — seal + open an encrypted capsule
 
 ```swift
@@ -237,11 +286,16 @@ shared protocol keeps those adapters thin.
 - `Capsule`: JCS, Crypto (CryptoKit) — SHA-256, Ed25519, `X25519KeyPair`,
   `HKDF`, `ChaCha20Poly1305`, `Random` — Zip (deterministic STORED),
   Chain, Manifest, Envelope, Builder (plain + multi-recipient encrypted
-  `seal(recipients:)`), Reader (`parse` + `openInner`), Verifier (L2
-  outer-only + L3 decrypted-content), JCSValue value type with
-  literal-syntax sugar (`jobj`, `jarr`), Lineage (`manifest.predecessors`
+  `seal(recipients:)`), Reader (`parse` + `openInner`), Profiles (the
+  supported-profile table + the open-stage profile gate, run again for
+  the decrypted inner package), Verifier (L2 outer-only + L3
+  decrypted-content, with the verdict/qualifier surface, the profile
+  channel and the lineage channel), Lineage (`manifest.predecessors`
   standalone checks + the report-only `predecessors:` linkage walk,
-  reported as `CapsuleVerification.lineage`).
+  reported as `CapsuleVerification.lineage`), `CapsuleResults` (the
+  renderer floor: one line per qualifier, each carrying its normative
+  minimum substring), JCSValue value type with literal-syntax sugar
+  (`jobj`, `jarr`).
 - `CapsuleSkills`: `CapsuleSkill` model, `ParsedCapsule.skills()`
   extension, trust-tier semantics.
 - `CapsuleLLM`: `CapsuleLocalLLM` + `CapsuleSkillRuntime` protocols,

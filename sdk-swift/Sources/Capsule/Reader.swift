@@ -104,6 +104,19 @@ public enum CapsuleReader {
         // stays total over whatever the reader hands back.
         try validateManifestShape(manifest)
         try validateEnvelopeShape(envelope)
+        // Profile gate (spec/profiles.md): version gate first (the two
+        // CapsuleVersions.requireKnown calls inside the shape checks
+        // above), profile gate second, nothing else until both pass.
+        // Applying an unknown profile's rules — or silently downgrading
+        // to the defaults — would manufacture mismatch errors
+        // indistinguishable from tampering. The refusal is OPEN-stage:
+        // a reader that cannot establish its governing rules cannot
+        // meaningfully construct at all. `openInner` re-enters this
+        // function for the decrypted inner package, so an encrypted
+        // capsule's inner declaration is gated independently at L3 (no
+        // inner/outer equality rule: a KMS-wrapped outer over a plain
+        // default inner is a legitimate authorial shape).
+        try CapsuleProfiles.requireSupported(manifest: manifest, envelope: envelope)
 
         // Detect encrypted-outer from the SIGNED envelope.cipher plus the
         // presence of the blob — never from the manifest's own claim. The

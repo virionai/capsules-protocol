@@ -583,8 +583,21 @@ async function main() {
       m.format = { ...m.format, profile: { id: "acme-postquantum", version: "1.0" } };
     },
   });
-  const altPredReader = await CapsuleReader.fromBytes(altProfilePred);
-  const altPredEntry = derivePredecessorEntry(altPredReader);
+  // Read the two documents WITHOUT CapsuleReader: since v0.7.1 the
+  // reader applies the profile gate at open (spec/profiles.md), so an
+  // alternate-profile capsule is refused there by design — the whole
+  // point of the fixture. derivePredecessorEntry only needs manifest()
+  // and envelope(), and it recomputes rather than copies, so the
+  // duck-typed pair below produces byte-identical fixtures.
+  const altPredDocs = await (async () => {
+    const files = await unpackZip(altProfilePred);
+    const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json")));
+    const envelope = JSON.parse(
+      new TextDecoder().decode(files.get("provenance/envelope.json")),
+    );
+    return { manifest: () => manifest, envelope: () => envelope };
+  })();
+  const altPredEntry = derivePredecessorEntry(altPredDocs);
   // The successor cites it via the explicit-values path (continueFrom
   // refuses alternate-profile predecessors at the writer).
   const altSuccessorBuilder = new CapsuleBuilder({

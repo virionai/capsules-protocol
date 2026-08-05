@@ -74,7 +74,9 @@ def _sealed_pred(ed, events: int = 2) -> bytes:
     )
 
 
-def _seal_with_predecessors(ed, predecessors_value, *, mutate_manifest=None) -> bytes:
+def _seal_with_predecessors(
+    ed, predecessors_value, *, mutate_manifest=None, mutate_envelope=None
+) -> bytes:
     """Seal a minimal capsule with an arbitrary (possibly malformed) value.
 
     The builder rightly refuses to emit these shapes, so the fixtures are
@@ -125,6 +127,10 @@ def _seal_with_predecessors(ed, predecessors_value, *, mutate_manifest=None) -> 
         cipher="none",
         signed_at=TS,
     )
+    # Before signing: the envelope declaration sits inside the canonical
+    # payload every signature covers (spec/profiles.md).
+    if mutate_envelope is not None:
+        mutate_envelope(envelope)
     sign_envelope(
         envelope,
         [
@@ -240,7 +246,10 @@ def test_pre_lineage_era_member_is_inert_not_shape_checked():
         "verified_depth": 0,
         "entries": [],
     }
-    assert v06["qualifiers"] == []
+    # No LINEAGE qualifier: the member was never interpreted. The base
+    # qualifier is the verification's own host-relative fact (no
+    # allowlist was supplied), spec/results.md order.
+    assert v06["qualifiers"] == ["trust_not_evaluated"]
     assert any("unknown member under that era" in n for n in v06["notes"])
 
 
@@ -315,7 +324,9 @@ def test_no_predecessors_member_declares_false_and_emits_no_qualifier():
         "verified_depth": 0,
         "entries": [],
     }
-    assert result["qualifiers"] == []
+    # No lineage qualifier — absence is no claim. The base entry is this
+    # verification's own host-relative fact (no allowlist supplied).
+    assert result["qualifiers"] == ["trust_not_evaluated"]
 
 
 def test_declared_without_pool_reports_pinned_phrases_and_qualifier():
@@ -347,7 +358,14 @@ def test_declared_without_pool_reports_pinned_phrases_and_qualifier():
     # disappear, and no report may imply a consent bit exists.
     assert "declared, not verified" in notes
     assert "not countersigned" in notes
-    assert result["qualifiers"] == ["lineage_declared_unverified"]
+    # The ten-name vocabulary of spec/results.md in emission order: the
+    # successor carries no participants and is verified with no
+    # allowlist, so the two base facts ride alongside the custody one.
+    assert result["qualifiers"] == [
+        "actor_set_unbound",
+        "trust_not_evaluated",
+        "lineage_declared_unverified",
+    ]
 
 
 def test_linkage_verified_to_depth_1_names_two_identities():
@@ -378,7 +396,9 @@ def test_linkage_verified_to_depth_1_names_two_identities():
     notes = " | ".join(result["notes"])
     assert "successor of capsule" in notes
     assert "verified to depth 1" in notes
-    assert result["qualifiers"] == []
+    # A clean custody claim adds NO lineage qualifier; what remains is
+    # this verification's own host-relative facts.
+    assert result["qualifiers"] == ["actor_set_unbound", "trust_not_evaluated"]
 
 
 def test_recursive_walk_reaches_depth_2_and_rerewrap_declares_one_entry():
@@ -442,7 +462,11 @@ def test_merge_declares_two_parents_one_supplied():
     # Depth counts only when EVERY declared entry within the hop is
     # verified — an operator legitimately holds one branch of a merge.
     assert result["lineage"]["verified_depth"] == 0
-    assert result["qualifiers"] == ["lineage_declared_unverified"]
+    assert result["qualifiers"] == [
+        "actor_set_unbound",
+        "trust_not_evaluated",
+        "lineage_declared_unverified",
+    ]
 
 
 def test_mismatch_is_report_only_and_never_flips_ok():
@@ -488,7 +512,11 @@ def test_mismatch_is_report_only_and_never_flips_ok():
     # tamper vocabulary appears only negated.
     assert "not evidence of tampering" in errs
     assert "corrupt" not in errs.lower()
-    assert result["qualifiers"] == ["lineage_mismatch"]
+    assert result["qualifiers"] == [
+        "actor_set_unbound",
+        "trust_not_evaluated",
+        "lineage_mismatch",
+    ]
 
 
 def test_predecessor_invalid_keeps_the_two_facts_apart():
@@ -519,7 +547,11 @@ def test_predecessor_invalid_keeps_the_two_facts_apart():
     assert entry["status"] == "predecessor_invalid"
     assert entry["artifact"]["ok"] is False
     assert "property of the supplied artifact" in " ".join(entry["errors"])
-    assert result["qualifiers"] == ["lineage_predecessor_invalid"]
+    assert result["qualifiers"] == [
+        "actor_set_unbound",
+        "trust_not_evaluated",
+        "lineage_predecessor_invalid",
+    ]
 
 
 def test_unmatched_supplied_artifact_is_named_in_notes():
@@ -619,29 +651,43 @@ def test_encrypted_supplied_predecessor_is_unverifiable_not_mismatch():
     assert entry["status"] == "predecessor_unverifiable"
     assert entry["reason"] == "encrypted_predecessor"
     assert "declared, not verified" in " | ".join(result["notes"])
-    assert result["qualifiers"] == ["lineage_declared_unverified"]
+    assert result["qualifiers"] == [
+        "actor_set_unbound",
+        "trust_not_evaluated",
+        "lineage_declared_unverified",
+    ]
 
 
 def test_alternate_profile_supplied_predecessor_is_a_scope_limitation():
     alice = generate_ed25519()
     bob = generate_ed25519()
     # A predecessor declaring an alternate profile (default math,
-    # non-default declaration — the default-profile scope case).
+    # non-default declaration — the default-profile scope case). Both
+    # documents declare it: a declaration in only one is a capsule
+    # self-contradiction (profile_mismatch, spec/profiles.md), which is a
+    # different diagnosis from the verifier limitation under test.
+    alt_profile = {"id": "acme-postquantum", "version": "1.0"}
     alt_pred = _seal_with_predecessors(
         alice,
         None,
-        mutate_manifest=lambda m: m["format"].update(
-            {"profile": {"id": "acme-postquantum", "version": "1.0"}}
-        ),
+        mutate_manifest=lambda m: m["format"].update({"profile": dict(alt_profile)}),
+        mutate_envelope=lambda e: e.update({"profile": dict(alt_profile)}),
     )
-    alt_reader = CapsuleReader.from_bytes(alt_pred)
-    alt_manifest = alt_reader.manifest()
+    # Read the declaration WITHOUT the reader: the open-stage profile gate
+    # (spec/profiles.md) refuses this capsule, which is precisely the
+    # limitation under test — an archivist who cannot open the predecessor
+    # still holds its members and cites them via the explicit-values path.
+    alt_files = unpack_zip(alt_pred)
+    alt_manifest = json.loads(alt_files["manifest.json"])
+    alt_envelope = json.loads(alt_files["provenance/envelope.json"])
+    with pytest.raises(ValueError, match="is not supported by this verifier"):
+        CapsuleReader.from_bytes(alt_pred)
     entry = {
         "capsule_id": alt_manifest["id"],
         "format_version": alt_manifest["format"]["version"],
         "originator_public_key": alt_manifest["originator"]["public_key"],
         "first_event_hash": alt_manifest["first_event_hash"],
-        "entry_hash": alt_reader.envelope()["entry_hash"],
+        "entry_hash": alt_envelope["entry_hash"],
         "manifest_hash": manifest_hash(alt_manifest),
     }
     # The successor cites it via the explicit-values path (continue_from

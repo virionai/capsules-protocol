@@ -11,8 +11,13 @@
     {
       "name": "empty-chain-null-anchors",
       "capsule_file": "output/empty-chain-null-anchors.capsule",
-      "expected": { "ok": true, "notes_includes": "empty chain" },
-      "note": "Positive control: zero events, all three anchor claims null, originator-signed with a signer commitment. Absence of history is a weaker claim made honestly; the verifier reports that no events were walked rather than rendering an unqualified pass."
+      "expected": {
+        "ok": true,
+        "notes_includes": "empty chain",
+        "verdict": "valid",
+        "qualifiers": ["empty_chain_not_walked"]
+      },
+      "note": "Positive control: zero events, all three anchor claims null, originator-signed with a signer commitment. Absence of history is a weaker claim made honestly; the verifier reports that no events were walked — as the empty_chain_not_walked qualifier on the verdict (spec/results.md; the fact's first uniform typed surface) — rather than rendering an unqualified pass."
     },
     {
       "name": "empty-chain-claimed-anchors",

@@ -12,6 +12,8 @@
 //!   - signer-set/vectors.json         (signer-set binding outcomes)
 //!   - chain-binding/vectors.json      (empty-chain anchors + stored-line hashing)
 //!   - chain-rules/vectors.json        (per-event actor + kind field rules)
+//!   - profile-declaration/vectors.json (the profile gate + its refusals)
+//!   - result-vocabulary/vectors.json  (verdict / reason / qualifiers)
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
@@ -185,6 +187,7 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
         );
     }
     assert_lineage_outcome(name, expected, result);
+    assert_result_vocabulary(name, expected, result);
     // Skill-trust derivation (spec/trust.md "Skill trust"): the tier MUST
     // come from the verify result — capsule_signed plus the exact per-id
     // map — never from any skill_trust member in the capsule itself.
@@ -210,13 +213,13 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
     }
 }
 
-/// The lineage area + verdict qualifiers (spec/lineage.md "Reporting"),
-/// both ignore-if-absent per the shared outcome-schema contract so every
-/// collection parses. `expected.lineage` pins declared / ok /
-/// verified_depth and, when present, per-entry status / hop / reason /
-/// identity_checked / capsule_id plus the supplied artifact's observed
-/// version. `expected.qualifiers` pins the emitted names EXACTLY (bare
-/// strings, `x-` vendor entries stripped before comparison).
+/// The lineage area (spec/lineage.md "Reporting"), ignore-if-absent per
+/// the shared outcome-schema contract so every collection parses.
+/// `expected.lineage` pins declared / ok / verified_depth and, when
+/// present, per-entry status / hop / reason / identity_checked /
+/// capsule_id plus the supplied artifact's observed version. The three
+/// lineage QUALIFIERS ride `expected.qualifiers`, asserted once by
+/// [`assert_result_vocabulary`] alongside the seven base names.
 fn assert_lineage_outcome(name: &str, expected: &Value, result: &VerifyResult) {
     if let Some(want) = expected.get("lineage") {
         let got = &result.lineage;
@@ -299,19 +302,6 @@ fn assert_lineage_outcome(name: &str, expected: &Value, result: &VerifyResult) {
             }
         }
     }
-    if let Some(want) = expected["qualifiers"].as_array() {
-        let got: Vec<&str> = result
-            .qualifiers
-            .iter()
-            .map(String::as_str)
-            .filter(|q| !q.starts_with("x-"))
-            .collect();
-        let want: Vec<&str> = want
-            .iter()
-            .map(|q| q.as_str().expect("qualifier name"))
-            .collect();
-        assert_eq!(got, want, "{name}: qualifiers");
-    }
 }
 
 /// The lineage linkage pool (spec/lineage.md): per-vector `predecessors`
@@ -333,16 +323,130 @@ fn vector_predecessors(base: &Path, vector: &Value) -> Vec<Vec<u8>> {
         .unwrap_or_default()
 }
 
+/// The normalized verdict surface (spec/results.md) and the profile
+/// channel (spec/profiles.md), asserted on BOTH the verify-stage results
+/// and the fail-closed results of open-stage vectors — the observed facts
+/// are what keep "this verifier is too old / lacks this profile" apart
+/// from "this capsule is corrupt".
+///
+/// `expected.qualifiers` is an EXACT array in the spec-defined order,
+/// compared after stripping `x-` vendor entries from the result: emission
+/// cannot drift by omission or by invention.
+fn assert_result_vocabulary(name: &str, expected: &Value, result: &VerifyResult) {
+    if let Some(want) = expected["verdict"].as_str() {
+        assert_eq!(
+            result.verdict.as_str(),
+            want,
+            "{name}: expected verdict={want:?}; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.ok,
+            want == "valid",
+            "{name}: ok == (verdict == 'valid') is an invariant"
+        );
+    }
+    if expected.get("verdict_reason").is_some() {
+        let want = expected["verdict_reason"].as_str();
+        assert_eq!(
+            result.verdict_reason.as_deref(),
+            want,
+            "{name}: expected verdict_reason={want:?}"
+        );
+    }
+    if let Some(want) = expected["qualifiers"].as_array() {
+        let want: Vec<&str> = want
+            .iter()
+            .map(|q| q.as_str().expect("qualifier name"))
+            .collect();
+        // ONE exact-array comparison for the whole TEN-name vocabulary —
+        // the seven base names and the three lineage names ride the same
+        // member, so a lineage vector pins the base qualifiers its fixture
+        // genuinely produces and vice versa.
+        let got: Vec<&str> = result
+            .qualifiers
+            .iter()
+            .map(String::as_str)
+            .filter(|q| !q.starts_with("x-"))
+            .collect();
+        assert_eq!(got, want, "{name}: qualifiers must match exactly");
+    }
+    // The observed declaration, reported even on refusal.
+    if expected.get("observed_profile").is_some() {
+        assert_eq!(
+            result.profile.observed.as_deref(),
+            expected["observed_profile"].as_str(),
+            "{name}: expected profile.observed"
+        );
+    }
+    if expected.get("observed_profile_version").is_some() {
+        assert_eq!(
+            result.profile.observed_version.as_deref(),
+            expected["observed_profile_version"].as_str(),
+            "{name}: expected profile.observed_version"
+        );
+    }
+    if let Some(want) = expected["profile"].as_object() {
+        for (key, value) in want {
+            let got = match key.as_str() {
+                "observed" => Value::from(result.profile.observed.clone()),
+                "observed_version" => Value::from(result.profile.observed_version.clone()),
+                "declared" => Value::from(result.profile.declared),
+                "effective" => Value::from(result.profile.effective.clone()),
+                "effective_version" => Value::from(result.profile.effective_version.clone()),
+                "supported" => Value::from(result.profile.supported),
+                "status" => Value::from(result.profile.status.clone()),
+                other => panic!("{name}: unknown expected.profile key {other:?}"),
+            };
+            assert_eq!(&got, value, "{name}: expected profile.{key}={value}");
+        }
+    }
+    // Suite honesty: the suite fact nulls whenever the effective profile
+    // is not the era default, including on every profile-gate refusal.
+    if expected.get("suite").is_some() {
+        assert_eq!(
+            result.format_version.suite.as_deref(),
+            expected["suite"].as_str(),
+            "{name}: expected format_version.suite"
+        );
+    }
+}
+
+/// Resolve a per-vector `allowlist` of keypair NAMES against the
+/// collection's keys_file (`[]` = verify with no allowlist).
+fn named_allowlist(name: &str, keys: &Value, entries: &Value) -> Vec<String> {
+    entries
+        .as_array()
+        .expect("per-vector allowlist")
+        .iter()
+        .map(|entry| {
+            let key_name = entry.as_str().expect("allowlist name");
+            keys.pointer(&format!("/{key_name}/publicKey"))
+                .and_then(|k| k.as_str())
+                .unwrap_or_else(|| panic!("{name}: allowlist entry {key_name:?} not in keys_file"))
+                .to_string()
+        })
+        .collect()
+}
+
 fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyResult {
     let file = vector["capsule_file"].as_str().expect("capsule_file");
     let bytes =
         std::fs::read(base.join(file)).unwrap_or_else(|e| panic!("read fixture {file:?}: {e}"));
+    // Host version policy (spec/versioning.md "Host policy"): reported,
+    // never decided — but only reachable when a vector declares it.
+    let accept_versions = vector["accept_versions"].as_array().map(|versions| {
+        versions
+            .iter()
+            .map(|v| v.as_str().expect("accept_versions entry").to_string())
+            .collect()
+    });
     verify_capsule(
         &bytes,
         &VerifyOptions {
             allowlist: allowlist.to_vec(),
             recipient_private_key: None,
-            accept_versions: None,
+            accept_versions,
             predecessors: vector_predecessors(base, vector),
         },
     )
@@ -474,20 +578,183 @@ fn skill_trust_registry_outcomes() {
     assert!(!vectors.is_empty());
     for v in vectors {
         let name = v["name"].as_str().expect("name");
-        let allowlist: Vec<String> = v["allowlist"]
-            .as_array()
-            .expect("per-vector allowlist")
-            .iter()
-            .map(|entry| {
-                let key_name = entry.as_str().expect("allowlist name");
-                keys.pointer(&format!("/{key_name}/publicKey"))
-                    .and_then(|k| k.as_str())
-                    .unwrap_or_else(|| panic!("{name}: allowlist entry {key_name:?} not in keys_file"))
-                    .to_string()
-            })
-            .collect();
+        let allowlist = named_allowlist(name, &keys, &v["allowlist"]);
         let result = verify_fixture(&base, &allowlist, v);
         assert_verify_outcome(name, &v["expected"], &result);
+    }
+}
+
+/// spec/profiles.md: a capsule may DECLARE the verification profile that
+/// governs it, and this verifier fails closed on any declaration it cannot
+/// apply — with three distinguishable diagnoses, because they carry three
+/// different remediations. `unsupported_profile` is a limitation of the
+/// verifier (route the capsule to an implementation of that profile);
+/// `profile_mismatch` is a capsule self-contradiction, diagnosed BEFORE
+/// any table lookup (verdict `invalid`, never a verdict_reason); a shape
+/// or grammar violation is a malformed document, never "unsupported".
+/// Absence means the default profile `v0.6-suite`/`1.0` permanently, and
+/// explicit declaration of the default is exactly equivalent to absence.
+///
+/// Every negative fixture is internally coherent under default rules
+/// except the declaration under test — the declaration sits inside
+/// `manifest_hash` and the signed envelope payload — so a lane that skips
+/// the gate verifies it `ok: true` and fails here: each negative vector
+/// doubles as the anti-silent-downgrade pin.
+#[test]
+fn profile_declaration_registry_outcomes() {
+    let path = vectors_dir().join("profile-declaration/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let expected = &v["expected"];
+        let result = verify_fixture(&base, &allowlist, v);
+        if expected["stage"].as_str() == Some("open") {
+            let reason = expected["reason"].as_str().expect("reason");
+            let needles: &[&str] = match reason {
+                // This lane's profile shape problems are field-path
+                // prefixed (the invalid_manifest_shape idiom) and can name
+                // either document — the profile object is closed in both.
+                "invalid_manifest_shape" => &["manifest.format.profile", "envelope.profile"],
+                other => open_reason_needles(other),
+            };
+            assert!(!result.ok, "{name}: open-stage fixture must not verify");
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                needles.iter().any(|n| haystack.contains(n)),
+                "{name}: expected an error matching reason {reason:?} (any of {needles:?}); got {haystack:?}"
+            );
+            if reason == "invalid_manifest_shape" {
+                assert!(
+                    !haystack.contains("is not supported by this verifier"),
+                    "{name}: a malformed declaration is a defect of the capsule, never a support gap"
+                );
+            }
+            if let Some(observed) = expected["observed_version"].as_str() {
+                assert_eq!(
+                    result.format_version.observed.as_deref(),
+                    Some(observed),
+                    "{name}: the observed format version is reported even on refusal"
+                );
+            }
+            // The refused capsule still REPORTS: the declaration it
+            // carried, the verdict class, and the nulled suite fact.
+            assert_result_vocabulary(name, expected, &result);
+        } else {
+            assert_verify_outcome(name, expected, &result);
+        }
+    }
+}
+
+/// spec/results.md: every verify result derives `verdict`,
+/// `verdict_reason`, and `qualifiers` from facts it already carries. The
+/// qualifiers are the weaker-claim facts a renderer must not hide beside a
+/// valid verdict — an unbound signer set, an unwalked empty chain, an
+/// unread encrypted payload, a version outside the host's accepted set, an
+/// allowlist that was never supplied or matched nothing.
+///
+/// Several vectors verify the SAME capsule bytes under different host
+/// configurations (per-vector `allowlist`, `accept_versions`): the
+/// host-relative qualifiers are facts about THIS verification, which is
+/// exactly why they can never be capsule members.
+#[test]
+fn result_vocabulary_registry_outcomes() {
+    let path = vectors_dir().join("result-vocabulary/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let keys = load_json(&base.join(doc["keys_file"].as_str().expect("keys_file")));
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let expected = &v["expected"];
+        if let Some(requires) = v["requires"].as_array() {
+            for req in requires {
+                // This lane implements every capability defined today;
+                // fail loudly on one it does not know rather than skipping.
+                assert_eq!(
+                    req.as_str(),
+                    Some("encryption"),
+                    "{name}: unknown requirement {req:?}"
+                );
+            }
+        }
+        let mut allowlist = match v.get("allowlist") {
+            Some(entries) => named_allowlist(name, &keys, entries),
+            None => Vec::new(),
+        };
+        // `allowlist_literal` entries reach the verifier VERBATIM — never
+        // resolved against keys_file, because a MALFORMED entry is by
+        // construction one no keypair can produce. Allowlist hygiene
+        // (spec/results.md: `trust_not_evaluated` is about the EFFECTIVE,
+        // well-formed set) is otherwise inexpressible at the registry
+        // surface, and it is exactly the rule that drifted apart across
+        // lanes once. The vector drives the LIBRARY here: this lane's CLI
+        // rejects a malformed --allowlist up front as a usage error, so
+        // only the library surface can show the qualifier.
+        if let Some(entries) = v["allowlist_literal"].as_array() {
+            allowlist.extend(
+                entries
+                    .iter()
+                    .map(|e| e.as_str().expect("allowlist_literal entry").to_string()),
+            );
+        }
+        let result = verify_fixture(&base, &allowlist, v);
+        if expected["stage"].as_str() == Some("open") {
+            let reason = expected["reason"].as_str().expect("reason");
+            let needles = open_reason_needles(reason);
+            assert!(!result.ok, "{name}: open-stage fixture must not verify");
+            let haystack = all_error_messages(&result).join(" ");
+            assert!(
+                needles.iter().any(|n| haystack.contains(n)),
+                "{name}: expected an error matching reason {reason:?} (any of {needles:?}); got {haystack:?}"
+            );
+            if let Some(observed) = expected["observed_version"].as_str() {
+                assert_eq!(
+                    result.format_version.observed.as_deref(),
+                    Some(observed),
+                    "{name}: the observed version is reported even on refusal"
+                );
+            }
+            assert_result_vocabulary(name, expected, &result);
+            continue;
+        }
+        assert_verify_outcome(name, expected, &result);
+
+        // encrypted_outer_only is PER-RESULT: the outer L2 result of an
+        // encrypted capsule carries it; the L3 result of the decrypted
+        // inner — an ordinary plain-capsule verification — never does.
+        if let Some(key_name) = expected["decryptable_with"].as_str() {
+            let priv_hex = keys
+                .pointer(&format!("/{key_name}/privateKey"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("{name}: keys_file has no {key_name}/privateKey"));
+            let priv_bytes: [u8; 32] = hex::decode(priv_hex)
+                .expect("private key hex")
+                .try_into()
+                .expect("private key must be 32 bytes");
+            let file = v["capsule_file"].as_str().expect("capsule_file");
+            let bytes = std::fs::read(base.join(file)).expect("read fixture");
+            let l3 = verify_capsule(
+                &bytes,
+                &VerifyOptions {
+                    allowlist: allowlist.clone(),
+                    recipient_private_key: Some(priv_bytes),
+                    accept_versions: None,
+                    predecessors: Vec::new(),
+                },
+            );
+            assert!(l3.ok, "{name}: L3 must verify; errors: {:?}", l3.errors);
+            assert_eq!(l3.level, "L3", "{name}: level must upgrade to L3");
+            assert!(
+                !l3.qualifiers.iter().any(|q| q == "encrypted_outer_only"),
+                "{name}: the L3 result read the content — it must not carry encrypted_outer_only; got {:?}",
+                l3.qualifiers
+            );
+        }
     }
 }
 
@@ -762,6 +1029,12 @@ fn open_reason_needles(reason: &str) -> &'static [&'static str] {
         // diagnosis DISTINCT from malformation or tampering.
         "unsupported_version_newer" => &["newer than this verifier supports"],
         "unsupported_version_older" => &["older than any version this verifier supports"],
+        // spec/profiles.md: a declared profile outside this verifier's
+        // table is a LIMITATION OF THE VERIFIER (never corruption);
+        // disagreeing declarations are a capsule defect, diagnosed before
+        // any table lookup.
+        "unsupported_profile" => &["is not supported by this verifier"],
+        "profile_mismatch" => &["envelope.profile does not match manifest.format.profile"],
         "invalid_json" => &["failed to parse manifest.json"],
         "duplicate_entry" => &["duplicate entry"],
         "unsafe_path" => &["parent-traversal", "path is absolute"],
@@ -807,6 +1080,13 @@ fn version_compat_registry_outcomes() {
                 needles.iter().any(|n| haystack.contains(n)),
                 "{name}: expected an error matching reason {reason:?} (any of {needles:?}); got {haystack:?}"
             );
+            // The same refusal at the NORMALIZED surface: verdict
+            // "unsupported" with a machine-readable reason, so a host
+            // never has to substring-match this lane's errors to tell an
+            // unknown era from tampering. The envelope-side vector pins
+            // that the refusal derives even when the MANIFEST's observed
+            // version is known.
+            assert_result_vocabulary(name, expected, &result);
         } else {
             assert_verify_outcome(name, expected, &result);
         }

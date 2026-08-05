@@ -47,6 +47,8 @@
       "expected": {
         "ok": true,
         "actor_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["actor_set_unbound"],
         "notes_includes": "chain actors are not bound to a declared participant set"
       },
       "note": "Positive control: participants[] is EMPTY and the single event names human:origin anyway. Absence is a weaker claim made honestly — the verifier MUST verify this capsule and MUST report the unbound actor set, never an unqualified pass and never a rejection."
@@ -100,6 +102,8 @@
       "expected": {
         "ok": true,
         "actor_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["actor_set_unbound"],
         "notes_includes": "chain actors are not bound to a declared participant set"
       },
       "note": "Positive control for the participants shape rule: the manifest carries NO participants member at all. Absence is not a violation — the capsule MUST verify with the actor set reported unbound, exactly like the empty array (unbound-actors). Only a PRESENT non-array declaration is malformed (malformed-shape: participants-not-array / participants-string). A lane whose typed manifest view REQUIRES the member refuses a spec-valid capsule."

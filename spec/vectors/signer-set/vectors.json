@@ -17,8 +17,14 @@
     {
       "name": "commitment-absent",
       "capsule_file": "output/commitment-absent.capsule",
-      "expected": { "ok": true, "signer_set_bound": false },
-      "note": "Absence is a weaker claim made honestly: verification succeeds, and the verifier MUST report the signer set as unbound. This is what lets unsigned templates and legacy capsules share the format with a fully committed one."
+      "expected": {
+        "ok": true,
+        "signer_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["signer_set_unbound"],
+        "notes_includes": "the signer set is not bound by the seal"
+      },
+      "note": "Absence is a weaker claim made honestly: verification succeeds, and the verifier MUST report the signer set as unbound — machine-readably as the signer_set_unbound qualifier on the verdict (spec/results.md) and with the canonical note pinned here. This is what lets unsigned templates and legacy capsules share the format with a fully committed one."
     },
     {
       "name": "commitment-strip",

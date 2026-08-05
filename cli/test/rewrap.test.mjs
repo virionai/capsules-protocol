@@ -193,7 +193,7 @@ section("hand-off step 1-2 - Alice seals; the naive continuation is blocked");
 
 {
   const a = run(["verify", F("alice.capsule")]);
-  check("alice.capsule verifies", a.code === 0 && /Result: PASS/.test(a.stdout));
+  check("alice.capsule verifies", a.code === 0 && /Result: VALID/.test(a.stdout));
   check("alice.capsule declares no predecessor",
     !/Custody \(lineage\)/.test(a.stdout));
 
@@ -241,7 +241,7 @@ section("hand-off step 4 - the successor verifies, declared but unverified");
 {
   const v = run(["verify", F("bob.capsule")]);
   check("successor verifies without predecessor bytes", v.code === 0);
-  check("successor PASSes", /Result: PASS/.test(v.stdout));
+  check("successor is VALID", /Result: VALID/.test(v.stdout));
   // The two pinned phrases a report may never drop.
   check("unchecked entry renders 'declared, not verified'",
     /declared, not verified/.test(v.stdout));

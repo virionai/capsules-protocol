@@ -240,6 +240,68 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         return;
     }
 
+    // Step 3a-iii: inner profile gate (spec/profiles.md obligation 11).
+    // The outer layer's effective profile governs L2 and the decryption
+    // flow; the INNER capsule declares its own profile and is gated
+    // independently here — there is deliberately no inner/outer equality
+    // rule, because a KMS-wrapped outer over a plain default inner is a
+    // legitimate authorial shape. Refusal exclusivity applies to the
+    // inner: the profile diagnosis is the only inner error, and no inner
+    // recompute runs under rules this verifier did not apply.
+    //
+    // The `profile` channel and the derived verdict describe the OUTER
+    // capsule, which is what this lane's single aggregate result is
+    // about, so an inner refusal surfaces the same way an inner unknown
+    // VERSION already does: `ok: false` with the inner-scope diagnosis
+    // carrying the distinction. Promoting an inner limitation to the
+    // aggregate verdict would need its own channel and its own vectors —
+    // no builder in any lane can seal an alternate-profile inner today.
+    let inner_profile = crate::profiles::classify_profile(
+        inner_manifest_value
+            .get("format")
+            .and_then(|f| f.get("profile")),
+        inner_envelope_value.get("profile"),
+    );
+    match inner_profile.status {
+        crate::profiles::ProfileStatus::Default | crate::profiles::ProfileStatus::Supported => {}
+        crate::profiles::ProfileStatus::Invalid => {
+            for problem in &inner_profile.problems {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Profile,
+                    format!("L3 inner: {problem}"),
+                ));
+            }
+            return;
+        }
+        crate::profiles::ProfileStatus::Mismatched => {
+            let (manifest_pair, envelope_pair) = inner_profile
+                .normalized
+                .as_ref()
+                .expect("a mismatched classification carries both normalized pairs");
+            errors.push(TopError::inner(
+                TopErrorCategory::Profile,
+                format!(
+                    "L3 inner: {}",
+                    crate::profiles::profile_mismatch_message(manifest_pair, envelope_pair)
+                ),
+            ));
+            return;
+        }
+        _ => {
+            errors.push(TopError::inner(
+                TopErrorCategory::Profile,
+                format!(
+                    "L3 inner: {}",
+                    crate::profiles::unsupported_profile_message(
+                        inner_profile.observed.as_deref().unwrap_or_default(),
+                        inner_profile.observed_version.as_deref().unwrap_or_default(),
+                    )
+                ),
+            ));
+            return;
+        }
+    }
+
     // Step 3a-ii (v0.5): inner capsule_id derivation. Mirrors the outer
     // pipeline's step 5 — recompute `compute_capsule_id(originator_pubkey,
     // first_event_hash)` and compare to both `inner_manifest.id` and

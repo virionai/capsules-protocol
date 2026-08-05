@@ -61,6 +61,13 @@ export async function inspectCmd(argv) {
       encryption: m.encryption,
       signed_at: env.signed_at,
       cipher: env.cipher,
+      // spec/profiles.md: the raw declaration as written, per document.
+      // null in both means absence — which IS the era default, never an
+      // unknown (`capsule verify` reports the profile actually applied).
+      profile: {
+        manifest: m.format?.profile ?? null,
+        envelope: env.profile ?? null,
+      },
       signers: env.signers?.map((s) => ({ role: s.role, public_key: s.public_key })) ?? [],
       // The lineage declaration verbatim (spec/lineage.md). inspect
       // verifies nothing, so this is the claim as sealed — `capsule
@@ -77,6 +84,18 @@ export async function inspectCmd(argv) {
 
   out(`File:                   ${file} (${bytesText(bytes.length)})`);
   out(`Format:                 ${m.format.version} / ${m.format.canonicalization} / ${m.format.hash_algorithm}`);
+  // spec/profiles.md: the DECLARATION as written, printed only when the
+  // capsule makes one. Absence is the era default, not a missing fact,
+  // so a "(none)" line here would report a gap that does not exist —
+  // `capsule verify` names the profile actually applied either way.
+  {
+    const declared = m.format?.profile ?? env.profile;
+    if (declared !== undefined && declared !== null) {
+      out(`Profile (declared):     ${declared.id}/${declared.version}` +
+          (m.format?.profile === undefined ? "  (envelope only)" : "") +
+          (declared.params ? "  (+params)" : ""));
+    }
+  }
   out(`Capsule ID:             ${m.id}`);
   out(`Originator:             ${m.originator.label || "(no label)"}`);
   out(`  pubkey (Ed25519):     ${m.originator.public_key}`);
