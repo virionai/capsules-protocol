@@ -379,22 +379,17 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         chain_check.note = None;
     }
 
-    // The inner manifest's DECLARED participants must sit in the closed
-    // actor-id namespace set, exactly like the outer manifest's at L2
-    // (manifest.md field rules, A06). The JS reference re-runs the full
-    // manifest checks on the decrypted inner capsule; mirror the
-    // namespace rule here so an inner-only violation cannot hide behind
-    // a clean outer sidecar manifest.
-    for (i, p) in inner_manifest.participants.iter().enumerate() {
-        if !crate::chain::is_valid_actor_id(&p.actor_id) {
-            errors.push(TopError::inner(
-                TopErrorCategory::ActorId,
-                format!(
-                    "L3 inner: manifest.participants[{i}].actor_id {:?} does not match an allowed namespace (human:, ai:, system:, capsule:)",
-                    p.actor_id
-                ),
-            ));
-        }
+    // The inner manifest's DECLARED participants must carry interpretable
+    // actor ids in the closed namespace set, exactly like the outer
+    // manifest's at L2 (manifest.md field rules, A06 + P2). The JS
+    // reference re-runs the full manifest checks on the decrypted inner
+    // capsule; mirror the entry rule here so an inner-only violation
+    // cannot hide behind a clean outer sidecar manifest.
+    for problem in crate::chain::participant_actor_id_problems(&inner_manifest.participants) {
+        errors.push(TopError::inner(
+            TopErrorCategory::ActorId,
+            format!("L3 inner: manifest.{problem}"),
+        ));
     }
 
     // Step 5: L3 cross-checks: inner manifest/envelope anchors must match

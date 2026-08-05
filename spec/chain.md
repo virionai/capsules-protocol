@@ -26,7 +26,7 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
 
 - `seq`: 1-based integer, strictly monotonic per chain.
 - `event_id`: free-form, conventionally `evt_NNN`. Not cryptographically
-  bound; for human reference only.
+  bound; for human reference only. Advisory — MAY be absent.
 - `actor`: `human:`, `ai:`, `system:`, or `capsule:` prefix. When the
   manifest declares a non-empty `participants[]`, the actor must appear
   there *or* be the literal `system:host` for backstop events emitted by
@@ -44,9 +44,23 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
   rule this is not an assurance tier: a capsule with a custom event
   kind is not making a weaker claim, it is unreadable to the foreign
   LLM reader the format exists to serve.
+- `action`, `target`: free-form strings describing the act and the
+  thing acted on, for human and LLM readers. Advisory — no verification
+  rule reads them.
 - `timestamp`: ISO 8601 UTC, no fractional seconds. Advisory only;
   authoritative time-binding is the envelope's `signed_at`.
 - `payload`: free-form JSON object. May contain LLM-authored text.
+  Advisory — an event MAY omit it, which is simply making no payload
+  claim.
+- Advisory members (`event_id`, `action`, `target`, `timestamp`,
+  `payload`) MAY be absent: the event hash commits to the stored line
+  exactly as sealed, so omitting them is a weaker claim made honestly,
+  never a malformation. Readers MUST NOT reject an event for omitting
+  an advisory member, and a typed reader MUST NOT refuse to parse it —
+  the members verification rules read are `seq`, `kind`, `prev_hash`,
+  `hash`, and (only when the manifest binds an actor set) `actor`.
+  Conformance vector: `spec/vectors/chain-rules/`
+  (`minimal-event-fields`).
 - `untrusted_payload_fields`: paths into `payload` naming members whose
   contents must be treated as untrusted by readers. Every entry MUST
   match the path grammar in "Untrusted content" below; writers refuse

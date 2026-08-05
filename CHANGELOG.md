@@ -122,6 +122,36 @@ incompatible wire changes ship as a new format version, as `0.7` did).
   performed by this policy change; the release entry above executes it —
   this policy is what makes it safe.
 
+### Fixed
+
+- **Cross-lane participant parity (P2, supersedes addendum A12): the
+  Rust verifier could not open capsules the reference lane seals.** The
+  typed Rust manifest view required `participants[].role` (and
+  previously `label`) to PARSE, so a spec-valid capsule declaring a
+  participant with only an `actor_id` — which the JS/Python builders
+  emit and every dynamic lane verifies — failed as
+  "failed to parse manifest.json: missing field `role`", presenting an
+  honest capsule as corrupt. The rule is now normative in
+  `spec/manifest.md`: `actor_id` is the ONE participants[] member the
+  spec interprets (closed grammar, fail-closed, cross-lane
+  `participants[i].actor_id` diagnosis — never a parse crash); a bare
+  actor-id string entry is equivalent shorthand for `{actor_id}` and
+  BINDS the actor set (Swift/Kotlin previously grammar-checked the
+  shorthand but silently reported it unbound); `role`/`label` are
+  OPTIONAL advisory attribution text, never verification inputs —
+  verifiers gate nothing on their presence, absence, or type. The same
+  typed-view audit made the other advisory members lenient in Rust
+  (`originator.label`, `created_at`, and the advisory chain-event
+  members `event_id`/`action`/`target`/`timestamp`/`payload`, per the
+  amended `spec/chain.md` field rules), and the Swift/Kotlin builders
+  can now declare a participant without `role`/`label` (absent members
+  are omitted from the sealed manifest, matching the JS reference). Six
+  new chain-rules conformance vectors pin the rule in every lane:
+  `participant-only-actor-id`, `participant-bare-string`,
+  `advisory-members-any-type`, `participant-missing-actor-id`,
+  `absent-advisory-manifest-members`, and `minimal-event-fields`. No
+  wire change: capsules sealed before this fix verify identically.
+
 ### Security
 
 - **The Swift builder's encrypted seal path is now version-keyed — a

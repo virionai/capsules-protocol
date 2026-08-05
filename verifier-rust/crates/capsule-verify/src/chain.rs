@@ -50,6 +50,41 @@ pub fn is_valid_actor_id(actor_id: &str) -> bool {
     }
 }
 
+/// Validate declared `participants[]` entries against the manifest.md
+/// field rules. Returns problem strings prefixed `participants[i]` (empty
+/// = well-formed); callers add their own context (`manifest.` at the top
+/// level, `L3 inner: manifest.` for the inner manifest). Mirrors the JS
+/// reference's `participantActorIdProblems` message-for-message:
+///
+///   - an entry with no interpretable string `actor_id` — an object
+///     without the member, a non-string value, or a non-object/non-string
+///     entry — is a DECLARED participant no reader can bind ("must be a
+///     string" diagnosis, conformance vector
+///     chain-rules/participant-missing-actor-id);
+///   - an interpretable id outside the closed namespace grammar gets the
+///     "does not match" diagnosis (chain-rules/invalid-actor-namespace).
+///
+/// Advisory members (`role`, `label`) are never inspected here — they are
+/// not verification inputs (chain-rules/advisory-members-any-type).
+pub(crate) fn participant_actor_id_problems(
+    participants: &[crate::schemas::Participant],
+) -> Vec<String> {
+    const GRAMMAR: &str = "(human:, ai:, system:, capsule:)";
+    let mut problems = Vec::new();
+    for (i, p) in participants.iter().enumerate() {
+        match p.actor_id.as_deref() {
+            None => problems.push(format!(
+                "participants[{i}].actor_id must be a string in an allowed namespace {GRAMMAR}"
+            )),
+            Some(id) if !is_valid_actor_id(id) => problems.push(format!(
+                "participants[{i}].actor_id {id:?} does not match an allowed namespace {GRAMMAR}"
+            )),
+            Some(_) => {}
+        }
+    }
+    problems
+}
+
 /// The normative `untrusted_payload_fields` path grammar from `chain.md`
 /// "Untrusted content":
 ///

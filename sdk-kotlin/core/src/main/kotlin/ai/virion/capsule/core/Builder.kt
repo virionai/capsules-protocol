@@ -20,10 +20,16 @@ class CapsuleBuilder(
         val label: String = "",
     )
 
+    /**
+     * Builder-side participant declaration. [role] and [label] are
+     * OPTIONAL advisory attribution text (spec/manifest.md field rules):
+     * a participant declared with only an actor id is a weaker claim
+     * made honestly, and the sealed manifest omits the absent members.
+     */
     data class Participant(
         val actorId: String,
-        val role: String,
-        val label: String,
+        val role: String? = null,
+        val label: String? = null,
     )
 
     data class PayloadFile(val path: String, val bytes: ByteArray) {

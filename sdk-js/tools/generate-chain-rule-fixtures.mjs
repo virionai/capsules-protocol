@@ -59,7 +59,7 @@ import { fileURLToPath } from "node:url";
 
 import { hexToBytes, bytesToHex } from "../src/canonical.js";
 import { ed25519PrivateFromRaw, ed25519PublicToRaw } from "../src/crypto.js";
-import { buildChainEvents, eventsToJsonl, firstAndEntryHash } from "../src/chain.js";
+import { buildChainEvents, eventsToJsonl, firstAndEntryHash, hashEvent } from "../src/chain.js";
 import {
   buildContentIndex,
   buildManifest,
@@ -132,8 +132,12 @@ async function seal(builder, keys) {
  * plain path exactly: real signature, correct manifest hash, correct
  * content index, so ONLY the rule under test decides the outcome.
  */
-async function buildLowLevelCapsule(keys, { participants, event, mutateManifest }) {
-  const events = buildChainEvents([event]);
+async function buildLowLevelCapsule(keys, { participants, event, rawEvents, mutateManifest }) {
+  // `rawEvents` bypasses buildChainEvents entirely: it takes events whose
+  // hashes are already assigned, so a fixture can pin the ABSENCE of the
+  // members buildChainEvents auto-fills (event_id, payload, the untrusted
+  // defaults). The stored line is the hash preimage either way.
+  const events = rawEvents ?? buildChainEvents([event]);
   const { firstEventHash, entryHash } = firstAndEntryHash(events);
   const files = new Map();
   files.set(
@@ -259,6 +263,78 @@ async function main() {
   );
   const invalidUntrustedPath = await seal(untrustedBuilder, originator);
 
+  // (9) participant-only-actor-id (positive control): the declared
+  // participant carries ONLY actor_id — no role, no label. role/label are
+  // advisory attribution members (spec/manifest.md field rules); a
+  // participant declared without them is a weaker claim made honestly, so
+  // every lane MUST verify this capsule with the actor set bound. Built
+  // through the front door: the reference builder accepts the shape.
+  const onlyActorIdBuilder = newBuilder(originator, [{ actor_id: "human:origin" }]);
+  onlyActorIdBuilder.appendEvent(bareEvent());
+  const participantOnlyActorId = await seal(onlyActorIdBuilder, originator);
+
+  // (10) participant-bare-string (positive control): the entry is the bare
+  // actor-id string "human:origin" — the accepted shorthand for
+  // { actor_id: "human:origin" } (spec/manifest.md field rules). Verifiers
+  // MUST interpret both shapes identically: grammar-checked AND binding
+  // the actor set. A lane that grammar-checks the string but does not bind
+  // it silently downgrades the capsule's own claim (actor_set unbound).
+  const bareStringBuilder = newBuilder(originator, ["human:origin"]);
+  bareStringBuilder.appendEvent(bareEvent());
+  const participantBareString = await seal(bareStringBuilder, originator);
+
+  // (11) advisory-members-any-type (positive control): role and label
+  // carry non-string values. Advisory members are NEVER verification
+  // inputs — verifiers gate nothing on their presence, absence, or type —
+  // so this capsule verifies in every lane. A typed lane whose manifest
+  // view demands strings here refuses a capsule the reference sealed.
+  const advisoryTypesBuilder = newBuilder(originator, [
+    { actor_id: "human:origin", role: 42, label: { note: "not a string" } },
+  ]);
+  advisoryTypesBuilder.appendEvent(bareEvent());
+  const advisoryMembersAnyType = await seal(advisoryTypesBuilder, originator);
+
+  // (12) participant-missing-actor-id: the second declared entry has no
+  // actor_id at all. actor_id is the ONE member the spec interprets; an
+  // entry without it is a declared participant no reader can bind — not a
+  // weaker claim, a malformed one, rejected fail-closed with the same
+  // diagnosis in every lane (never a lane-specific parse crash). Built
+  // low-level because the reference builder refuses the shape.
+  const participantMissingActorId = await buildLowLevelCapsule(originator, {
+    participants: [
+      { actor_id: "human:origin", role: "originator", label: "Origin" },
+      { role: "advisor", label: "No id declared" },
+    ],
+    event: bareEvent(),
+  });
+
+  // (13) absent-advisory-manifest-members (positive control): the manifest
+  // omits originator.label and created_at — both advisory, neither a
+  // verification input (spec/manifest.md field rules). Auditors verify the
+  // public key and the seal, not display text. Built low-level because the
+  // reference builder always writes both.
+  const absentAdvisoryManifestMembers = await buildLowLevelCapsule(originator, {
+    participants: DECLARED,
+    event: bareEvent(),
+    mutateManifest: (m) => {
+      delete m.originator.label;
+      delete m.created_at;
+    },
+  });
+
+  // (14) minimal-event-fields (positive control): the single event carries
+  // ONLY the members verification rules read — seq, kind, prev_hash, hash.
+  // event_id, action, target, timestamp, and payload are advisory
+  // (spec/chain.md field rules): the event hash commits to the stored
+  // line, so their absence is a weaker claim made honestly, never a parse
+  // failure. participants[] is empty so the absent actor binds nothing.
+  const minimalEvent = { seq: 1, kind: "decision", prev_hash: "0".repeat(64) };
+  minimalEvent.hash = bytesToHex(hashEvent({ ...minimalEvent }));
+  const minimalEventFields = await buildLowLevelCapsule(originator, {
+    participants: [],
+    rawEvents: [minimalEvent],
+  });
+
   const keys = {
     originator: {
       publicKey: originator.publicKeyHex,
@@ -275,6 +351,12 @@ async function main() {
     ["invalid-untrusted-path.capsule", invalidUntrustedPath],
     ["invalid-actor-namespace.capsule", invalidActorNamespace],
     ["absent-participants.capsule", absentParticipants],
+    ["participant-only-actor-id.capsule", participantOnlyActorId],
+    ["participant-bare-string.capsule", participantBareString],
+    ["advisory-members-any-type.capsule", advisoryMembersAnyType],
+    ["participant-missing-actor-id.capsule", participantMissingActorId],
+    ["absent-advisory-manifest-members.capsule", absentAdvisoryManifestMembers],
+    ["minimal-event-fields.capsule", minimalEventFields],
     ["keys.json", Buffer.from(JSON.stringify(keys, null, 2) + "\n", "utf8")],
   ];
 

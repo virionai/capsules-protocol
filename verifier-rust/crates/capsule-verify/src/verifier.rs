@@ -1041,8 +1041,15 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     // manifest.participants[] bound the chain walk above (fail-closed);
     // an empty one is the manifest declining to name who acted, which
     // verifies at a visibly lower assurance.
+    // `bound` mirrors the reference lanes: the set of INTERPRETABLE actor
+    // ids binds the chain, not the raw entry count — an entry that
+    // declares no bindable id cannot bind anything (and is flagged as
+    // malformed just below).
     let actor_set_check = ActorSetCheck {
-        bound: !manifest.participants.is_empty(),
+        bound: manifest
+            .participants
+            .iter()
+            .any(|p| p.actor_id.is_some()),
     };
     if !actor_set_check.bound {
         notes.push(
@@ -1050,23 +1057,18 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 .to_string(),
         );
     }
-    // manifest.md field rules (A06): every DECLARED actor_id must sit in
-    // the closed namespace set (human/ai/system/capsule, non-empty id).
-    // Unlike an empty participants[], an uninterpretable declared entry
-    // is not a weaker claim — it is a malformed one, rejected fail-closed.
-    // Conformance vector: chain-rules/invalid-actor-namespace. (A bare
-    // non-object participants entry already fails this lane's typed
-    // manifest parse before reaching here.)
-    for (i, p) in manifest.participants.iter().enumerate() {
-        if !crate::chain::is_valid_actor_id(&p.actor_id) {
-            errors.push(TopError::outer(
-                TopErrorCategory::ActorId,
-                format!(
-                    "manifest.participants[{i}].actor_id {:?} does not match an allowed namespace (human:, ai:, system:, capsule:)",
-                    p.actor_id
-                ),
-            ));
-        }
+    // manifest.md field rules (A06 + P2): every DECLARED entry must carry
+    // an interpretable actor_id in the closed namespace set (human/ai/
+    // system/capsule, non-empty id). Unlike an empty participants[], an
+    // uninterpretable declared entry is not a weaker claim — it is a
+    // malformed one, rejected fail-closed with the cross-lane diagnosis.
+    // Conformance vectors: chain-rules/invalid-actor-namespace,
+    // chain-rules/participant-missing-actor-id.
+    for problem in crate::chain::participant_actor_id_problems(&manifest.participants) {
+        errors.push(TopError::outer(
+            TopErrorCategory::ActorId,
+            format!("manifest.{problem}"),
+        ));
     }
 
     // ---- (10c) originator binding (invariant) ---------------------------
@@ -1565,16 +1567,23 @@ pub(crate) fn chain_walk_into(
     let participant_ids: std::collections::BTreeSet<&str> = manifest
         .participants
         .iter()
-        .map(|p| p.actor_id.as_str())
+        .filter_map(|p| p.actor_id.as_deref())
         .collect();
     for e in events.iter().map(|p| &p.event) {
+        let actor = e.actor.as_deref();
         if !participant_ids.is_empty()
-            && e.actor != "system:host"
-            && !participant_ids.contains(e.actor.as_str())
+            && actor != Some("system:host")
+            && !actor.map(|a| participant_ids.contains(a)).unwrap_or(false)
         {
+            // An absent (or non-string) actor renders as `null`, matching
+            // the JS reference's JSON.stringify(actor ?? null).
+            let rendered = match actor {
+                Some(a) => format!("{a:?}"),
+                None => "null".to_string(),
+            };
             chain_check.errors.push(format!(
-                "seq {}: actor {:?} not in manifest.participants and not system:host",
-                e.seq, e.actor
+                "seq {}: actor {rendered} not in manifest.participants and not system:host",
+                e.seq
             ));
         }
         // The `kind` enum is closed in every tier: chain.md declares the
@@ -1932,7 +1941,7 @@ mod tests {
             !manifest.participants.is_empty(),
             "fixture must declare participants for this test to bind"
         );
-        events[0].event.actor = "human:mallory".to_string();
+        events[0].event.actor = Some("human:mallory".to_string());
 
         let chain_check = walk(&events, &manifest, &envelope);
         assert!(!chain_check.ok, "undeclared actor must fail the chain check");
@@ -1958,7 +1967,7 @@ mod tests {
         // Mutate the typed view only (the raw tree feeds the hash
         // recompute); the assertion below is about the ABSENCE of the
         // actor error, not the hash.
-        events[0].event.actor = "human:anyone".to_string();
+        events[0].event.actor = Some("human:anyone".to_string());
 
         let chain_check = walk(&events, &manifest, &envelope);
         assert!(

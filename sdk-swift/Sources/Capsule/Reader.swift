@@ -589,6 +589,14 @@ public enum CapsuleReader {
     }
 
     /// Collect `manifest.participants[].actor_id` into a lookup set.
+    /// Accepts both entry shapes the spec interprets (manifest.md field
+    /// rules): a participant object with `actor_id`, and the bare
+    /// actor-id STRING shorthand — the two are equivalent, so both BIND
+    /// the actor set (conformance vector
+    /// chain-rules/participant-bare-string; grammar-checking a shape
+    /// without binding it silently rewrites the capsule's own claim).
+    /// Uninterpretable entries are skipped here and FLAGGED by
+    /// `participantActorIdProblems`.
     public static func participantActorIds(_ manifest: JCSValue) -> Set<String> {
         guard case .object(let pairs) = manifest,
               let ps = pairs.first(where: { $0.0 == "participants" })?.1,
@@ -596,9 +604,14 @@ public enum CapsuleReader {
         else { return [] }
         var out: Set<String> = []
         for item in items {
-            guard case .object(let fields) = item,
-                  let id = stringField(fields, "actor_id") else { continue }
-            out.insert(id)
+            switch item {
+            case .string(let id):
+                out.insert(id)
+            case .object(let fields):
+                if let id = stringField(fields, "actor_id") { out.insert(id) }
+            default:
+                continue
+            }
         }
         return out
     }

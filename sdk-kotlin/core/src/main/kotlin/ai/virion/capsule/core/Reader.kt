@@ -178,15 +178,29 @@ object CapsuleReader {
         return (cur as? JCSValue.Str)?.v
     }
 
-    /** Collect `manifest.participants[].actor_id` into a lookup set. */
+    /**
+     * Collect `manifest.participants[].actor_id` into a lookup set.
+     * Accepts both entry shapes the spec interprets (manifest.md field
+     * rules): a participant object with `actor_id`, and the bare
+     * actor-id STRING shorthand — the two are equivalent, so both BIND
+     * the actor set (conformance vector
+     * chain-rules/participant-bare-string; grammar-checking a shape
+     * without binding it silently rewrites the capsule's own claim).
+     * Uninterpretable entries are skipped here and FLAGGED by
+     * [participantActorIdProblems].
+     */
     fun participantActorIds(manifest: JCSValue): Set<String> {
         val obj = manifest as? JCSValue.Obj ?: return emptySet()
         val ps = obj.pairs.firstOrNull { it.first == "participants" }?.second
         val arr = ps as? JCSValue.Arr ?: return emptySet()
         val out = mutableSetOf<String>()
         for (item in arr.items) {
-            val fields = (item as? JCSValue.Obj)?.pairs ?: continue
-            val id = (fields.firstOrNull { it.first == "actor_id" }?.second as? JCSValue.Str)?.v
+            val id = when (item) {
+                is JCSValue.Str -> item.v
+                is JCSValue.Obj ->
+                    (item.pairs.firstOrNull { it.first == "actor_id" }?.second as? JCSValue.Str)?.v
+                else -> null
+            }
             if (id != null) out += id
         }
         return out

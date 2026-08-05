@@ -90,6 +90,48 @@ class RoundTripTest {
         )
     }
 
+    /**
+     * spec/manifest.md field rules: role and label are OPTIONAL advisory
+     * members. This writer can now express the weaker-but-honest claim —
+     * a participant declared with only an actor id — and the sealed
+     * manifest omits the absent members instead of backfilling them
+     * (cross-lane pin: chain-rules/participant-only-actor-id).
+     */
+    @Test
+    fun participantWithOnlyActorIdSealsAndVerifiesBound() {
+        val kp = CapsuleCrypto.generateEd25519()
+
+        val result = CapsuleBuilder(
+            originator = CapsuleBuilder.Originator(keyPair = kp, label = "Origin"),
+        )
+            .setProgram("# Minimal participant\n")
+            .setParticipants(listOf(CapsuleBuilder.Participant(actorId = "human:test")))
+            .appendEvent(
+                actor = "human:test",
+                kind = "decision",
+                action = "approved",
+                target = "program.md",
+                payload = jobj("note" to jstr("x")),
+            )
+            .seal()
+
+        val v = CapsuleVerifier.verify(bytes = result.bytes, allowlist = setOf(kp.publicKeyHex))
+        assertTrue(
+            v.ok,
+            "verification failed: ${v.checks.filter { !it.ok }.joinToString { "${it.name}: ${it.detail}" }}",
+        )
+        assertTrue(v.actorSetBound, "a declared actor_id must bind the actor set")
+
+        // The sealed manifest must omit the advisory members, not invent
+        // them: absence is the claim the author made.
+        val parsed = CapsuleReader.parse(result.bytes)
+        val participants = ((parsed.manifest as JCSValue.Obj).pairs
+            .first { it.first == "participants" }.second as JCSValue.Arr).items
+        val entry = participants.single() as JCSValue.Obj
+        assertEquals(listOf("actor_id"), entry.pairs.map { it.first },
+            "only the declared member may appear")
+    }
+
     @Test
     fun tamperedCapsuleFailsVerification() {
         val kp = CapsuleCrypto.generateEd25519()

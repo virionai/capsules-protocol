@@ -56,6 +56,41 @@ final class RoundTripTests: XCTestCase {
         XCTAssertEqual(parsed.programMd.split(separator: "\n").first, "# Hello")
     }
 
+    /// spec/manifest.md field rules: role and label are OPTIONAL advisory
+    /// members. This writer can now express the weaker-but-honest claim —
+    /// a participant declared with only an actor id — and the sealed
+    /// manifest omits the absent members instead of backfilling them
+    /// (cross-lane pin: chain-rules/participant-only-actor-id).
+    func testParticipantWithOnlyActorIdSealsAndVerifiesBound() throws {
+        let kp = Ed25519KeyPair.generate()
+        let result = try CapsuleBuilder(originator: .init(keyPair: kp, label: "Origin"))
+            .setProgram("# Minimal participant\n")
+            .setParticipants([.init(actorId: "human:test")])
+            .appendEvent(
+                actor: "human:test", kind: "decision",
+                action: "approved", target: "program.md",
+                payload: jobj(("note", "x"))
+            )
+            .seal()
+
+        let v = CapsuleVerifier.verify(result.bytes,
+                                       allowlist: [kp.publicKeyHex.lowercased()])
+        XCTAssertTrue(v.ok, "verification failed: \(v.checks.filter { !$0.ok })")
+        XCTAssertTrue(v.actorSetBound, "a declared actor_id must bind the actor set")
+
+        // The sealed manifest must omit the advisory members, not invent
+        // them: absence is the claim the author made.
+        let parsed = try CapsuleReader.parse(result.bytes)
+        guard case .object(let manifest) = parsed.manifest,
+              let psValue = manifest.first(where: { $0.0 == "participants" })?.1,
+              case .array(let participants) = psValue,
+              let first = participants.first,
+              case .object(let entry) = first
+        else { return XCTFail("manifest.participants[0] must be an object") }
+        XCTAssertEqual(entry.map(\.0), ["actor_id"],
+                       "only the declared member may appear")
+    }
+
     func testTamperedCapsuleFailsVerification() throws {
         let kp = Ed25519KeyPair.generate()
         let result = try CapsuleBuilder(originator: .init(keyPair: kp))
