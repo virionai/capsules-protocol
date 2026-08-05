@@ -53,12 +53,24 @@ here.
 
 ## Field rules
 
-- `format.*`: fixed for v0.7 capsules. `format.version` declares the
-  capsule's format era and MUST equal `envelope.version`. Readers accept
-  any KNOWN version under that era's rules, and fail closed on an
-  unknown one with a diagnosis distinct from tamper detection — see
-  [versioning.md](versioning.md). Conformance vectors:
+- `format.version`, `format.container`, `format.canonicalization`,
+  `format.hash_algorithm`: fixed for v0.7 capsules. `format.version`
+  declares the capsule's format era and MUST equal `envelope.version`.
+  Readers accept any KNOWN version under that era's rules, and fail
+  closed on an unknown one with a diagnosis distinct from tamper
+  detection — see [versioning.md](versioning.md). Conformance vectors:
   `spec/vectors/version-compat/`.
+- `format.profile`: OPTIONAL profile declaration
+  `{ id, version, params? }` — the capsule's selection of the
+  verification rule set that governs it, mirrored (without `params`) as
+  `envelope.profile`. Absence means the default profile
+  `v0.6-suite`/`1.0`, permanently; a declared profile a reader does not
+  implement is refused fail-closed with `unsupported_profile` — a
+  limitation of the verifier, never a defect of the capsule. Shape,
+  grammar, the normalization/equality rule, and the closed-object rule
+  (any extra member is malformed) are defined in
+  [profiles.md](profiles.md). Conformance vectors:
+  `spec/vectors/profile-declaration/`.
 - `id`: derived; see "Capsule identity" below. Computed by the writer
   and checked by the reader.
 - `originator.public_key`: 32 bytes of Ed25519 raw public key, lowercase

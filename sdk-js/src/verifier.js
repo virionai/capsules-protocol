@@ -27,12 +27,45 @@ import { CapsuleReader } from "./reader.js";
 import { toKeyHex } from "./keys.js";
 import { parseJsonStrict } from "./canonical.js";
 import { unpackZip } from "./zip.js";
-import { SUITES, classifyVersion, unsupportedVersionMessage } from "./versions.js";
+import {
+  SUITES,
+  UnsupportedVersionError,
+  classifyVersion,
+  unsupportedVersionMessage,
+} from "./versions.js";
+import {
+  DEFAULT_PROFILE,
+  ProfileError,
+  classifyProfile,
+  profileMismatchMessage,
+  unsupportedProfileMessage,
+} from "./profiles.js";
 
 /** The unread (fail-closed) formatVersion channel. */
 function unreadFormatVersion() {
   return { observed: null, supported: false, status: "unread", suite: null, acceptedByPolicy: null };
 }
+
+/** The unread (fail-closed) profile channel (spec/profiles.md). */
+function unreadProfile() {
+  return {
+    observed: null,
+    observedVersion: null,
+    declared: false,
+    effective: null,
+    effectiveVersion: null,
+    supported: false,
+    status: "unread",
+    acceptedByPolicy: null,
+  };
+}
+
+// Canonical cross-lane note strings (spec/results.md) that back the
+// qualifier derivations below. The chain-note markers double as the
+// derivational facts for empty_chain_not_walked / encrypted_outer_only.
+const EMPTY_CHAIN_NOTE =
+  "empty chain: no events to walk; envelope anchors checked to be null instead";
+const DEFERRED_CHAIN_NOTE = "deferred to L3 (encrypted outer)";
 
 /** The documented fail-closed result: every channel present, nothing trusted. */
 function failClosed(message, level) {
@@ -46,10 +79,70 @@ function failClosed(message, level) {
     signerSet: { bound: false, ok: false, errors: [] },
     actorSet: { bound: false },
     formatVersion: unreadFormatVersion(),
+    profile: unreadProfile(),
     skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
     notes: [],
   };
+}
+
+/**
+ * Derive the normalized verdict surface (spec/results.md): `verdict`,
+ * `verdictReason`, `qualifiers`. Report-only — every member restates
+ * facts the result already carries; `ok == (verdict === "valid")` is an
+ * invariant. Mutates and returns `result`.
+ *
+ * options:
+ *   versionRefusal: "unknown_newer" | "unknown_older" when the refusal
+ *                   was an unsupported-version refusal that the
+ *                   formatVersion channel alone cannot show (the
+ *                   envelope-side refusal: the manifest's observed
+ *                   version can be known while envelope.version is not).
+ *   allowlistSize:  effective (well-formed) allowlist entry count, for
+ *                   the two host-relative trust qualifiers. Only results
+ *                   that can reach verdict "valid" need it.
+ */
+function deriveVerdict(result, { versionRefusal = null, allowlistSize = null } = {}) {
+  let verdict;
+  let reason = null;
+  const versionStatus = versionRefusal ?? result.formatVersion?.status;
+  if (versionStatus === "unknown_newer" || versionStatus === "unknown_older") {
+    // Refused because the verifier cannot understand what the capsule
+    // DECLARES — a different verifier may verify it. Not corruption.
+    verdict = "unsupported";
+    reason = versionStatus === "unknown_older" ? "unsupported_version_older" : "unsupported_version_newer";
+  } else if (result.profile?.status === "unsupported") {
+    verdict = "unsupported";
+    reason = "unsupported_profile";
+  } else if (result.ok === true) {
+    verdict = "valid";
+  } else {
+    verdict = "invalid";
+  }
+  const qualifiers = [];
+  if (verdict === "valid") {
+    // Spec-defined emission order (spec/results.md). Each entry is a
+    // pure restatement of one already-reported fact.
+    if (result.signerSet?.bound === false) qualifiers.push("signer_set_unbound");
+    if (result.actorSet?.bound === false) qualifiers.push("actor_set_unbound");
+    if (result.chain?.note === EMPTY_CHAIN_NOTE) qualifiers.push("empty_chain_not_walked");
+    if (result.level === "L2" && result.chain?.note === DEFERRED_CHAIN_NOTE) {
+      qualifiers.push("encrypted_outer_only");
+    }
+    if (result.formatVersion?.acceptedByPolicy === false) {
+      qualifiers.push("version_not_accepted_by_policy");
+    }
+    // Mutually exclusive by construction: no allowlist vs an allowlist
+    // that matched no distinct signer key.
+    if (allowlistSize === 0) qualifiers.push("trust_not_evaluated");
+    else if (allowlistSize > 0 && result.trustedSignerCount === 0) {
+      qualifiers.push("no_trusted_signer");
+    }
+  }
+  result.verdict = verdict;
+  result.verdictReason = reason;
+  result.qualifiers = qualifiers;
+  return result;
 }
 
 const SKILL_PATH = /^skills\/([^/]+)\/(skill\.json|SKILL\.md)$/;
@@ -121,6 +214,80 @@ function peekFormatVersion(files) {
 }
 
 /**
+ * Best-effort profile channel for a capsule whose reader construction
+ * failed (spec/profiles.md obligation: the observed declaration is a
+ * reported fact even on refusal — it is what lets an auditor route the
+ * capsule to a capable verifier instead of declaring it corrupt).
+ *
+ * A typed ProfileError carries its own classification. A version-gate
+ * refusal reports the declaration with status "unevaluated" (read but
+ * not classified: the version gate refused first — profile semantics
+ * are era-scoped, so an unknown era means the declaration cannot be
+ * classified). Any other open failure never reached the gate either:
+ * the channel stays at the fail-closed "unread" default, with the
+ * manifest's declaration surfaced best-effort when it parses.
+ */
+function peekProfile(files, err) {
+  if (err instanceof ProfileError) {
+    const cls = err.classification;
+    return {
+      observed: cls.observed,
+      observedVersion: cls.observedVersion,
+      declared: cls.declared,
+      effective: null,
+      effectiveVersion: null,
+      supported: false,
+      status: cls.status,
+      acceptedByPolicy: null,
+    };
+  }
+  let observed = null;
+  let observedVersion = null;
+  let declared = false;
+  try {
+    const bytes = files.get("manifest.json");
+    if (!bytes) return unreadProfile();
+    const manifest = parseJsonStrict(bytes, "manifest.json");
+    const decl = manifest?.format?.profile;
+    declared = decl !== undefined;
+    if (decl !== null && typeof decl === "object" && !Array.isArray(decl)) {
+      if (typeof decl.id === "string") observed = decl.id;
+      if (typeof decl.version === "string") observedVersion = decl.version;
+    }
+    if (!declared) {
+      try {
+        const envBytes = files.get("provenance/envelope.json");
+        if (envBytes) {
+          const envelope = parseJsonStrict(envBytes, "provenance/envelope.json");
+          if (envelope?.profile !== undefined) {
+            declared = true;
+            const e = envelope.profile;
+            if (e !== null && typeof e === "object" && !Array.isArray(e)) {
+              if (typeof e.id === "string") observed = e.id;
+              if (typeof e.version === "string") observedVersion = e.version;
+            }
+          }
+        }
+      } catch {
+        // envelope unreadable: the manifest-side observation stands
+      }
+    }
+  } catch {
+    return unreadProfile();
+  }
+  return {
+    observed,
+    observedVersion,
+    declared,
+    effective: null,
+    effectiveVersion: null,
+    supported: false,
+    status: err instanceof UnsupportedVersionError ? "unevaluated" : "unread",
+    acceptedByPolicy: null,
+  };
+}
+
+/**
  * verifyCapsule(readerOrBytes, options)
  *
  * Accepts a CapsuleReader or the raw .capsule bytes. When given bytes,
@@ -133,14 +300,21 @@ function peekFormatVersion(files) {
  * underlying message in `errors`.
  *
  * options:
- *   allowlist:     signer public keys to trust (hex strings or 32-byte
- *                  keys) — signers must appear here for trusted=true
- *   outerEnvelope: optional envelope — for L3 verification, pass the outer
- *                  envelope so the inner can be checked against it.
+ *   allowlist:      signer public keys to trust (hex strings or 32-byte
+ *                   keys) — signers must appear here for trusted=true
+ *   outerEnvelope:  optional envelope — for L3 verification, pass the outer
+ *                   envelope so the inner can be checked against it.
+ *   acceptVersions: host policy — accepted format versions; reported in
+ *                   formatVersion.acceptedByPolicy, never decided.
+ *   acceptProfiles: host policy — accepted profile ids; reported in
+ *                   profile.acceptedByPolicy, never decided.
  *
  * returns:
  *   {
  *     ok: bool,
+ *     verdict: "valid" | "invalid" | "unsupported",
+ *     verdictReason: string | null,   // non-null iff verdict "unsupported"
+ *     qualifiers: [string],           // non-empty only when verdict "valid"
  *     level: "L2" | "L3",
  *     errors: [string],
  *     chain: { ok, errors },
@@ -148,10 +322,25 @@ function peekFormatVersion(files) {
  *     envelope: { ok, signers: [{role, public_key, valid, trusted}] },
  *     signerSet: { bound, ok, errors: [string] },
  *     actorSet: { bound },
+ *     formatVersion: { observed, supported, status, suite, acceptedByPolicy },
+ *     profile: { observed, observedVersion, declared, effective,
+ *                effectiveVersion, supported, status, acceptedByPolicy },
  *     skillTrust: { capsuleSigned, skills: { [id]: "signed"|"unsigned" } },
  *     trustedSignerCount: number,
  *     notes: [string]
  *   }
+ *
+ * verdict/verdictReason/qualifiers are the normalized verdict surface
+ * (spec/results.md), DERIVED from the facts above — `ok == (verdict ===
+ * "valid")` is an invariant, `unsupported` partitions today's failures
+ * into "a limitation of this verifier, not a defect of the capsule"
+ * (unknown version, unsupported profile), and each qualifier restates
+ * exactly one weaker-claim fact a renderer must not hide.
+ * profile is the profile declaration channel (spec/profiles.md):
+ * observed is the declaration as read (reported even on refusal),
+ * effective the profile actually applied (the absence rule made
+ * machine-visible), status one of default | supported | unsupported |
+ * mismatched | invalid | unevaluated | unread.
  *
  * signerSet is the signer-set binding check (manifest.signer_commitment):
  *   bound=true  — the manifest commits to the exact signer set; ok reflects
@@ -184,14 +373,19 @@ function peekFormatVersion(files) {
  */
 export async function verifyCapsule(readerOrBytes, options = {}) {
   const level = options?.outerEnvelope ? "L3" : "L2";
+  let result;
   try {
-    return await verifyCapsuleInner(readerOrBytes, options);
+    result = await verifyCapsuleInner(readerOrBytes, options);
   } catch (err) {
     // The contract above promises callers a result, not an exception, for
     // every input. Anything that escapes the checks below is a capsule we
     // could not fully evaluate, which is a verification failure.
-    return failClosed(`verification failed: ${err?.message ?? String(err)}`, level);
+    result = failClosed(`verification failed: ${err?.message ?? String(err)}`, level);
   }
+  // Paths with refusal context (unsupported version/profile, the valid
+  // path with its allowlist) derive the verdict surface themselves;
+  // everything else is an ordinary failure.
+  return "verdict" in result ? result : deriveVerdict(result);
 }
 
 async function verifyCapsuleInner(readerOrBytes, options = {}) {
@@ -208,10 +402,23 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
       reader = new CapsuleReader(files);
     } catch (err) {
       const result = failClosed(`capsule cannot be opened: ${err.message}`, "L2");
-      // Report the observed version even when open is refused: an
-      // unknown-version refusal must stay distinguishable from tamper.
+      // Report the observed version and profile declaration even when
+      // open is refused: an unknown-version or unsupported-profile
+      // refusal must stay distinguishable from tamper.
       result.formatVersion = peekFormatVersion(files);
-      return result;
+      result.profile = peekProfile(files, err);
+      if (err instanceof ProfileError) {
+        // Suite honesty (spec/versioning.md, spec/profiles.md): the
+        // suite fact is a statement about the rules governing THIS
+        // capsule; after a profile-gate refusal no suite fact is known.
+        result.formatVersion.suite = null;
+      }
+      return deriveVerdict(result, {
+        // The envelope-side version refusal: the manifest's observed
+        // version can be known while envelope.version is not, so the
+        // formatVersion channel alone cannot carry the refusal class.
+        versionRefusal: err instanceof UnsupportedVersionError ? err.status : null,
+      });
     }
   }
   const errors = [];
@@ -236,6 +443,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     signerSet: { bound: false, ok: true, errors: [] },
     actorSet: { bound: false },
     formatVersion: unreadFormatVersion(),
+    profile: unreadProfile(),
     skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
     notes,
@@ -243,6 +451,25 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
 
   const manifest = reader.manifest();
   const envelope = reader.envelope();
+
+  // The observed profile declaration is a reported fact from here on.
+  // Until BOTH documents pass the version gate the declaration cannot
+  // be classified (the absence rule is era-keyed), so the channel
+  // starts "unevaluated" and the version-gate early returns below carry
+  // it as-is — the version diagnosis stays the only error.
+  {
+    const cls = classifyProfile(manifest?.format?.profile, envelope?.profile);
+    result.profile = {
+      observed: cls.observed,
+      observedVersion: cls.observedVersion,
+      declared: cls.declared,
+      effective: null,
+      effectiveVersion: null,
+      supported: false,
+      status: "unevaluated",
+      acceptedByPolicy: null,
+    };
+  }
 
   // Actor-set binding: like signer_commitment, PRESENCE BINDS, ABSENCE
   // REPORTS. A non-empty manifest.participants[] binds every chain event
@@ -310,7 +537,11 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
         ? `envelope.version: not a '<major>.<minor>' version string, got ${JSON.stringify(envelope.version)}`
         : unsupportedVersionMessage("envelope.version", envelope.version, envVersionClass.status),
     );
-    return result;
+    // The formatVersion channel reports the MANIFEST's observed version
+    // (possibly known); the refusal class rides explicitly.
+    return deriveVerdict(result, {
+      versionRefusal: envVersionClass.status === "invalid" ? null : envVersionClass.status,
+    });
   }
   if (envelope.version !== capsuleVersion) {
     // Two KNOWN versions that disagree: the capsule is ambiguous about
@@ -320,6 +551,58 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     );
     return result;
   }
+
+  // Profile gate (spec/profiles.md): version gate first, profile gate
+  // second, nothing else until both pass. The CapsuleReader enforces
+  // this at open; re-deriving it here keeps verification total over
+  // hand-constructed readers and pins refusal exclusivity — after a
+  // profile refusal the profile diagnosis is the only error carried and
+  // every other channel holds its fail-closed default.
+  const profileClass = classifyProfile(manifest.format?.profile, envelope.profile);
+  result.profile = {
+    observed: profileClass.observed,
+    observedVersion: profileClass.observedVersion,
+    declared: profileClass.declared,
+    effective: profileClass.effective,
+    effectiveVersion: profileClass.effectiveVersion,
+    supported: profileClass.supported,
+    status: profileClass.status,
+    acceptedByPolicy: null,
+  };
+  if (profileClass.status !== "default" && profileClass.status !== "supported") {
+    if (profileClass.status === "invalid") {
+      errors.push(...profileClass.problems);
+    } else if (profileClass.status === "mismatched") {
+      errors.push(
+        profileMismatchMessage(profileClass.normalized.manifest, profileClass.normalized.envelope),
+      );
+    } else {
+      errors.push(unsupportedProfileMessage(profileClass.observed, profileClass.observedVersion));
+    }
+    // Suite honesty: the suite fact is a statement about the rules
+    // governing THIS capsule; after a profile-gate refusal none is known.
+    result.formatVersion.suite = null;
+    return deriveVerdict(result);
+  }
+  if (
+    profileClass.effective !== DEFAULT_PROFILE.id ||
+    profileClass.effectiveVersion !== DEFAULT_PROFILE.version
+  ) {
+    // Unreachable while the reference table holds one row; kept so a
+    // grown table cannot report the default suite under alternate rules.
+    result.formatVersion.suite = null;
+  }
+  // Host policy: DECLARED accepted profiles. Reported, never decided —
+  // same shape as acceptVersions and signer allowlists.
+  if (Array.isArray(options.acceptProfiles)) {
+    result.profile.acceptedByPolicy = options.acceptProfiles.includes(profileClass.effective);
+    if (!result.profile.acceptedByPolicy) {
+      notes.push(
+        `host policy: effective profile ${profileClass.effective}/${profileClass.effectiveVersion} is not in the declared accepted set [${options.acceptProfiles.join(", ")}]`,
+      );
+    }
+  }
+
   // Host policy: DECLARED accepted versions. Reported, never decided —
   // integrity ok is unaffected, exactly as with signer allowlists.
   if (Array.isArray(options.acceptVersions)) {
@@ -510,11 +793,9 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
       result.chain = {
         ok: true,
         errors: [],
-        note: "empty chain: no events to walk; envelope anchors checked to be null instead",
+        note: EMPTY_CHAIN_NOTE,
       };
-      notes.push(
-        "empty chain: no events to walk; envelope anchors checked to be null instead",
-      );
+      notes.push(EMPTY_CHAIN_NOTE);
       if (envelope.first_event_hash !== null) {
         errors.push(
           `envelope.first_event_hash must be null when the chain has no events; got ${envelope.first_event_hash}`,
@@ -547,7 +828,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     }
   } else {
     // Encrypted outer cannot verify chain without decrypt; defer to L3.
-    result.chain = { ok: true, errors: [], note: "deferred to L3 (encrypted outer)" };
+    result.chain = { ok: true, errors: [], note: DEFERRED_CHAIN_NOTE };
   }
 
   // Envelope signatures
@@ -694,5 +975,7 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     notes.push("allowlist provided but matched no signer; trusted=false for all signers");
   }
 
-  return result;
+  // Normalized verdict surface (spec/results.md): derived last, from
+  // the facts above — the only path that can reach verdict "valid".
+  return deriveVerdict(result, { allowlistSize: allowlist.size });
 }

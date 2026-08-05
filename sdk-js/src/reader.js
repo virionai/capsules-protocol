@@ -12,6 +12,7 @@ import {
 import { unpackZip } from "./zip.js";
 import { toRawKey } from "./keys.js";
 import { keyWrapInfo, requireKnownVersion } from "./versions.js";
+import { requireSupportedProfile } from "./profiles.js";
 
 const dec = new TextDecoder();
 
@@ -110,6 +111,18 @@ export class CapsuleReader {
     if (!envBytes) throw new Error("missing provenance/envelope.json");
     this._envelope = parseJsonStrict(envBytes, "provenance/envelope.json");
     validateEnvelopeShape(this._envelope);
+    // Profile gate (spec/profiles.md): version gate first (the two
+    // requireKnownVersion calls above), profile gate second, nothing
+    // else until both pass. Applying an unknown profile's rules — or
+    // silently downgrading to the defaults — would manufacture mismatch
+    // errors indistinguishable from tampering. The refusal is OPEN-
+    // stage: a reader that cannot establish its governing rules cannot
+    // meaningfully construct at all. The decrypt() path re-enters this
+    // constructor for the inner capsule, so an encrypted capsule's
+    // inner declaration is gated independently at L3 (no inner/outer
+    // equality rule: a KMS-wrapped outer over a plain default inner is
+    // a legitimate authorial shape).
+    requireSupportedProfile(this._manifest, this._envelope);
   }
 
   static async fromBytes(bytes) {

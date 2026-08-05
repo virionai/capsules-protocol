@@ -41,12 +41,17 @@ points that deployments can replace with their own systems, provided the
 capsule declares the profile unambiguously and readers fail closed when
 they do not understand it.
 
-In v0.7, alternate profiles are experimental and outside the conformance
-target. A future version or profile registry can standardize additional
-bindings for enterprise KMS, hardware keys, transparency logs,
-organization identity providers, or jurisdiction-specific audit systems
-without changing the core idea: portable work, context, and verifiable
-history travel together.
+Since spec revision v0.7.1 the declaration and refusal machinery is
+in the conformance target: a capsule declares its profile via
+`manifest.format.profile` / `envelope.profile`, and a reader that does
+not implement the declared profile refuses it with a diagnosis distinct
+from both tampering and malformation ([profiles.md](profiles.md)).
+Alternate profile *rule sets* themselves remain experimental and
+outside the conformance target. A future version or profile registry
+can standardize additional bindings for enterprise KMS, hardware keys,
+transparency logs, organization identity providers, or
+jurisdiction-specific audit systems without changing the core idea:
+portable work, context, and verifiable history travel together.
 
 ## What v0.6 strips
 
@@ -101,7 +106,15 @@ procedure.
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
 - [versioning.md](versioning.md) — version compatibility: known versions
   open forever, unknown ones fail closed with a non-tamper diagnosis,
-  domain strings keyed by declared version, the v0.6 algorithm suite
+  domain strings keyed by declared version, the v0.6 algorithm suite,
+  and the bright-line rule for in-era fail-closed additions
+- [profiles.md](profiles.md) — profile declaration: the
+  `format.profile` / `envelope.profile` dyad, the default profile and
+  absence rule, fail-closed refusal of undeclared-rule-set capsules,
+  and the Profile Authoring Contract
+- [results.md](results.md) — verifier results and renderer language:
+  the normalized `verdict` / `verdict_reason` / `qualifiers` surface,
+  canonical note strings, and the renderer minimum-substring floor
 - [trust.md](trust.md) — trust model, allowlists, derived skill trust
 - [pith.md](pith.md) — authoring-layer context discipline for narrative
   fields (opt-in normalizer; verification never depends on it)

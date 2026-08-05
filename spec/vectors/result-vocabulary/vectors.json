@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "name": "result-vocabulary",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the normalized result vocabulary (spec/results.md): the derived verdict ('valid' | 'invalid' | 'unsupported', with ok == (verdict=='valid') as an invariant), the verdict_reason channel (non-null iff 'unsupported' — it names a limitation of the VERIFIER, never a defect of the capsule), and the qualifier vocabulary (the weaker-claim facts that must reach any renderer beside a valid verdict). expected.qualifiers is an EXACT array in the spec-defined order, compared after stripping x- vendor entries from the result — cross-lane emission cannot drift by omission or invention. Several vectors verify the SAME capsule bytes under different host configurations (allowlist, accept_versions): the host-relative qualifiers are facts about THIS verification, which is exactly why they can never be capsule members. The encrypted vector pins encrypted_outer_only as PER-RESULT: the outer L2 result of an encrypted capsule carries it; the L3 result of the decrypted inner never does.",
+    "generator": "sdk-js/tools/generate-result-vocabulary-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "notes": [
+    "'allowlist' names keypairs in keys_file ([] = verify with no allowlist). 'accept_versions' is passed to the verifier's declared-accepted-versions policy option (spec/versioning.md 'Host policy').",
+    "The encrypted fixture is a byte-copy of ../tamper-detection/output/clean-encrypted.capsule (fresh encryption is not deterministic); its signer and recipient keypairs are mirrored into this collection's keys_file as encrypted_originator / recipient."
+  ],
+  "vectors": [
+    {
+      "name": "unqualified-valid",
+      "capsule_file": "output/unqualified-valid.capsule",
+      "allowlist": ["originator"],
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "verdict_reason": null,
+        "qualifiers": []
+      },
+      "note": "The strongest honest shape: committed signer set, bound actors, walked chain, matching allowlist. The ONLY capsule allowed an empty qualifiers array — every weaker shape below must say so on the verdict."
+    },
+    {
+      "name": "maximally-qualified-valid",
+      "capsule_file": "output/maximally-qualified-valid.capsule",
+      "allowlist": [],
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "verdict_reason": null,
+        "qualifiers": [
+          "signer_set_unbound",
+          "actor_set_unbound",
+          "empty_chain_not_walked",
+          "trust_not_evaluated"
+        ],
+        "signer_set_bound": false,
+        "actor_set_bound": false,
+        "notes_includes": "the signer set is not bound by the seal"
+      },
+      "note": "The trust.md threat-table capsule: no signer_commitment, no participants, zero events, verified with no allowlist. It VERIFIES — each is a weaker claim made honestly — and every reduced assurance is a qualifier a conforming renderer must surface beside the verdict. A host that says just 'verified' about this capsule is the failure mode this collection exists to kill."
+    },
+    {
+      "name": "encrypted-outer-l2",
+      "capsule_file": "output/encrypted-outer.capsule",
+      "requires": ["encryption"],
+      "allowlist": ["encrypted_originator"],
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "verdict_reason": null,
+        "qualifiers": ["encrypted_outer_only"],
+        "decryptable_with": "recipient"
+      },
+      "note": "Clean encrypted capsule verified at L2 without a recipient key: the seal is verified, the content unread, the chain deferred — a scope fact the verdict must carry. Lanes with L3 decrypt the same bytes with 'recipient' and MUST NOT find encrypted_outer_only on the inner result: the qualifier is per-result, not per-capsule."
+    },
+    {
+      "name": "allowlist-no-match",
+      "capsule_file": "output/unqualified-valid.capsule",
+      "allowlist": ["stranger"],
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "qualifiers": ["no_trusted_signer"],
+        "notes_includes": "matched no signer"
+      },
+      "note": "The SAME bytes as unqualified-valid under a non-matching allowlist: valid math, zero trusted signers — a PASS that must never be silent about why trusted=false everywhere. First registry pin of the allowlist-matched-no-signer advisory (the lanes that never emitted it gain it here)."
+    },
+    {
+      "name": "policy-version-not-accepted",
+      "capsule_file": "output/unqualified-valid.capsule",
+      "allowlist": ["originator"],
+      "accept_versions": ["0.6"],
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "qualifiers": ["version_not_accepted_by_policy"],
+        "notes_includes": "not in the declared accepted set"
+      },
+      "note": "The same bytes with a host policy excluding 0.7. Integrity is intact (ok stays true — the SDK reports, the host decides), and the policy verdict is a qualifier: the v1.0 gate names policy failure as a distinction hosts must be able to make without out-of-band wording. First vector able to exercise accepted_by_policy at all."
+    },
+    {
+      "name": "unsupported-newer-verdict",
+      "capsule_file": "output/unsupported-newer.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_version_newer",
+        "observed_version": "9.9",
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_version_newer",
+        "qualifiers": []
+      },
+      "note": "Internally coherent under the 9.9 domain strings; only the version gate refuses it. verdict 'unsupported' with a machine-readable reason keeps 'this verifier is too old' distinguishable from tamper at the NORMALIZED surface — no substring matching on lane-specific errors."
+    },
+    {
+      "name": "unsupported-older-verdict",
+      "capsule_file": "output/unsupported-older.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_version_older",
+        "observed_version": "0.1",
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_version_older",
+        "qualifiers": []
+      },
+      "note": "The other refusal direction: an era older than any this line of implementations has supported. Not evidence of tampering; verdict_reason says which direction, so a host can route to an implementation retaining the 0.1 rules."
+    },
+    {
+      "name": "invalid-tamper-verdict",
+      "capsule_file": "output/invalid-tamper.capsule",
+      "allowlist": ["originator"],
+      "expected": {
+        "ok": false,
+        "error_includes": "file hash mismatch",
+        "verdict": "invalid",
+        "verdict_reason": null,
+        "qualifiers": []
+      },
+      "note": "unqualified-valid with program.md rewritten post-seal. verdict 'invalid', verdict_reason null (an invalid capsule's causes live in errors/failing, which have their own vocabulary), qualifiers empty — qualifiers only ever qualify a VALID verdict."
+    }
+  ]
+}

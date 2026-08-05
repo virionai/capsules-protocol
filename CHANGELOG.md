@@ -7,6 +7,109 @@ protocol uses semantic-version pinning at the format layer (the
 version in the file format will not silently mean different things —
 incompatible wire changes ship as a new format version, as `0.7` did).
 
+## v0.7.1 — Unreleased
+
+### Added
+
+- **Profile declaration is on the wire (`spec/profiles.md`), additive
+  within era 0.7.** Two OPTIONAL members — `manifest.format.profile`
+  (`{ id, version, params? }`, closed object) and `envelope.profile`
+  (`{ id, version }`, params single-sourced in the manifest) — let a
+  capsule declare the verification rule set that governs it, making the
+  era's own fail-closed prose (`spec/envelope.md`, `spec/trust.md`)
+  enforceable and testable. Absence means the default profile
+  **`v0.6-suite`/`1.0`**, permanently (the mirror of the
+  algorithm-suite pin); explicit declaration of the default is legal
+  and exactly equivalent to absence, in both documents or (via
+  normalization) in one. The gate runs at OPEN stage, after the version
+  gate: normalized manifest/envelope declarations that disagree refuse
+  with `profile_mismatch` (a capsule defect) BEFORE any table lookup; a
+  declared `(id, version)` outside the verifier's exact-match table
+  refuses with `unsupported_profile` — **a limitation of the verifier,
+  not a defect of the capsule** — with refusal exclusivity (the profile
+  diagnosis is the only error; no channel is evaluated under refused
+  rules, and the reported `formatVersion.suite` fact nulls, since a
+  suite claim about refused rules would be false); shape/grammar
+  violations (including `null`, extra members, and the reserved
+  `critical` name — the object is closed) are malformed documents,
+  never "unsupported". Every verify result gains a `profile` channel
+  (`observed`/`observedVersion`/`declared`/`effective`/
+  `effectiveVersion`/`supported`/`status`/`acceptedByPolicy`, status
+  vocabulary `default | supported | unsupported | mismatched | invalid
+  | unevaluated | unread`), populated even on refusal — the observed
+  declaration is what lets an auditor route a capsule to a capable
+  verifier instead of declaring it corrupt. `spec/profiles.md` also
+  fixes the identifier grammar (1–64 bytes, lowercase, `x-<vendor>-`
+  fence), the Profile Authoring Contract (area-by-area disposition, the
+  invariant core — including `predecessors` interpretation — and the
+  profile-keyed domain-separation MUST that makes dual-valid capsules
+  unconstructible for conforming profiles), offline negotiation
+  (`SUPPORTED_PROFILES` as an API constant + reported facts), and the
+  overlay-vs-profile SHOULD. The in-era fail-closed addition is
+  licensed by the new bright-line rule in `spec/versioning.md` ("In-era
+  rule changes"), which also ratifies the rule-selector-vs-claim
+  retroactivity split (selectors like `format.profile` have cross-era
+  era-keyed force; claim members follow per-era rule sets). sdk-js
+  implements the gate (`src/profiles.js`, reader open-stage gate,
+  `acceptProfiles` report-only policy); reference builders emit absence
+  and expose no profile parameter. Conformance:
+  `spec/vectors/profile-declaration/` (16 vectors, generator
+  `generate-profile-declaration-fixtures.mjs`, `--check` in the
+  harness) — every negative fixture is internally coherent under
+  default rules except the declaration under test, so a lane that
+  skips the gate verifies it `ok: true` and fails the suite. No domain
+  strings added or changed; capsules already sealed verify
+  byte-identically forever.
+
+- **Normalized verdict surface (`spec/results.md`): every verify result
+  derives `verdict`, `verdict_reason`, and `qualifiers`.** A
+  reporting normalization, not a verification feature — zero new
+  rejection rules, zero capsule-byte changes. `verdict` is
+  `valid | invalid | unsupported` with `ok == (verdict == 'valid')` as
+  a pinned invariant; `unsupported` partitions refusals that are a
+  limitation of the verifier (`unsupported_version_newer/older`,
+  `unsupported_profile`, `unsupported_capability` — one spelling
+  everywhere), with `verdict_reason` non-null iff `unsupported`;
+  profile MISMATCH maps to `invalid` with no verdict_reason (a capsule
+  self-contradiction is a defect, stated once in results.md).
+  `qualifiers` carries the weaker-claim facts a renderer must not hide,
+  as a closed ten-name vocabulary (`signer_set_unbound`,
+  `actor_set_unbound`, `empty_chain_not_walked`,
+  `encrypted_outer_only` (per-result: never on the decrypted inner's
+  L3 result), `version_not_accepted_by_policy`, `trust_not_evaluated`,
+  `no_trusted_signer`, plus the three lineage qualifiers
+  `lineage_declared_unverified`/`lineage_mismatch`/
+  `lineage_predecessor_invalid` emitted by the predecessors machinery)
+  — non-empty only on `valid`, `x-<vendor>-` extension entries
+  allowed, unknown entries surfaced verbatim and never treated as
+  satisfied, a result *lacking* the member vocabulary-unaware rather
+  than unqualified. results.md also fixes the canonical note strings
+  (closing the Python `trusted=False` wording drift and the
+  three-lane-missing "matched no signer" advisory as lane ports land),
+  the renderer minimum substrings (a conforming renderer MUST NOT
+  present a valid verdict without every qualifier rendered beside it),
+  and the CLI contract: verdict-first Result block, exit codes 0 =
+  valid + policies satisfied / 1 = invalid, unsupported, or any
+  requested-policy failure / 2 = usage-I/O only — **which makes the
+  Node CLI's unknown-version exit code 2 → 1 a documented breaking
+  change for CI when its renderer port lands** (the Rust CLI already
+  exits 1). sdk-js derives the surface in `verifier.js`. Conformance:
+  `spec/vectors/result-vocabulary/` (8 vectors incl. both
+  unsupported-version directions and the inner-L3-drops-
+  `encrypted_outer_only` assertion; generator
+  `generate-result-vocabulary-fixtures.mjs`), additive
+  verdict/qualifier assertions on `signer-set/commitment-absent`,
+  `chain-rules/unbound-actors` + `absent-participants`,
+  `chain-binding/empty-chain-null-anchors`, and `version-compat`
+  (frozen v0.6 fixture: assertions only, bytes untouched), and
+  registry-consumer support for `expected.verdict` /
+  `expected.verdict_reason` / `expected.qualifiers` (exact array,
+  `x-` stripped) / `expected.profile.*` / `expected.suite` /
+  per-vector `accept_versions` (ignore-if-absent for consumers that
+  predate them). The four non-JS lanes' ports are tracked as explicit
+  per-collection exemptions in `spec/vectors/registry.json` — never a
+  silent omission.
+
 ## v0.7.0 — 2026-08-04
 
 ### Changed

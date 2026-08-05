@@ -230,6 +230,36 @@
         }
       }
     },
+    "profile-declaration/vectors.json": {
+      "kind": "outcome-collection",
+      "open_reasons": [
+        "invalid_manifest_shape",
+        "profile_mismatch",
+        "unsupported_profile",
+        "unsupported_version_newer"
+      ],
+      "lanes": {
+        "js": {
+          "consumer": "tools/check-spec-vectors.mjs",
+          "mode": "walker"
+        },
+        "python": {
+          "exempt": "v0.7.1 Track B foundation: the profile gate ships in the js reference lane first; sdk-py's gate + profile channel land with its verdict-surface port (coherence.md Track B item 2), which replaces this exemption with a test_spec_registry.py consumer"
+        },
+        "rust": {
+          "exempt": "v0.7.1 Track B foundation: verifier-rust's gate + ProfileCheck land with its verdict-surface port (coherence.md Track B item 3), which replaces this exemption with a spec_registry.rs consumer"
+        },
+        "swift": {
+          "exempt": "v0.7.1 Track B foundation: sdk-swift's gate + ProfileReport (incl. the L3 inner gate) land with its verdict-surface port (coherence.md Track B item 4), which replaces this exemption with a SpecRegistryTests.swift consumer"
+        },
+        "kotlin": {
+          "exempt": "v0.7.1 Track B foundation: sdk-kotlin's gate + ProfileReport land with its verdict-surface port (coherence.md Track B item 5), which replaces this exemption with a SpecRegistryTest.kt consumer"
+        }
+      },
+      "notes": [
+        "spec/profiles.md. Every negative fixture is internally coherent under default rules except the declaration under test (the declaration is inside manifest_hash and the signed envelope payload), so only the profile gate can refuse it — a lane that skips the gate verifies the fixture ok=true and fails the suite. expected.profile.* pins the profile channel; expected.verdict/verdict_reason pin the normalized surface (unsupported_profile is a verifier limitation; profile_mismatch is a capsule defect mapping to verdict 'invalid'); expected.suite pins the suite-nulling rule."
+      ]
+    },
     "plain-basic.json": {
       "kind": "embedded-capsule",
       "lanes": {
@@ -409,6 +439,34 @@
       },
       "notes": [
         "spec/versioning.md. The unknown-version fixtures are internally coherent under their DECLARED version's domain strings, so only the version gate refuses them: the pinned reasons distinguish 'this verifier is too old / the era is unknown' from malformation and tampering, and expected.observed_version pins that the verify result still REPORTS the declared version as a fact even when open is refused."
+      ]
+    },
+    "result-vocabulary/vectors.json": {
+      "kind": "outcome-collection",
+      "open_reasons": [
+        "unsupported_version_newer",
+        "unsupported_version_older"
+      ],
+      "lanes": {
+        "js": {
+          "consumer": "tools/check-spec-vectors.mjs",
+          "mode": "walker"
+        },
+        "python": {
+          "exempt": "v0.7.1 Track B foundation: the verdict/verdict_reason/qualifiers surface ships in the js reference lane first; sdk-py's derivation lands with its verdict-surface port (coherence.md Track B item 2), which replaces this exemption with a test_spec_registry.py consumer"
+        },
+        "rust": {
+          "exempt": "v0.7.1 Track B foundation: verifier-rust's Verdict/qualifiers surface lands with its verdict-surface port (coherence.md Track B item 3), which replaces this exemption with a spec_registry.rs consumer"
+        },
+        "swift": {
+          "exempt": "v0.7.1 Track B foundation: sdk-swift's verdict surface lands with its port (coherence.md Track B item 4), which replaces this exemption with a SpecRegistryTests.swift consumer"
+        },
+        "kotlin": {
+          "exempt": "v0.7.1 Track B foundation: sdk-kotlin's verdict surface (incl. the unsupported_capability mapping for its plain-only refusal) lands with its port (coherence.md Track B item 5), which replaces this exemption with a SpecRegistryTest.kt consumer; the encrypted vector additionally stays gated by requires:['encryption']"
+        }
+      },
+      "notes": [
+        "spec/results.md. expected.qualifiers is an EXACT array in the spec-defined order, compared after stripping x- vendor entries from the result. Several vectors verify the same capsule bytes under different host configurations (per-vector allowlist, accept_versions) — the host-relative qualifiers are facts about THIS verification. The encrypted vector pins encrypted_outer_only as per-result: lanes with L3 decrypt the same bytes and must not find it on the inner result."
       ]
     },
     "unicode-boundary/vectors.json": {

@@ -70,6 +70,43 @@ lane):
    observed version — that reported fact is what lets an auditor tell a
    version-support gap apart from tampering.
 
+   Outcome vectors may additionally pin the NORMALIZED result surface of
+   `spec/results.md` and the profile channel of `spec/profiles.md` —
+   asserted on the verify result at either stage (open-stage assertions
+   bind the fail-closed result, the same way `observed_version` already
+   does): `expected.verdict` (`valid` | `invalid` | `unsupported`),
+   `expected.verdict_reason` (string or null), `expected.qualifiers`
+   (EXACT array in the spec-defined order, compared after stripping
+   `x-` vendor entries from the result), `expected.profile.{observed,
+   observed_version, declared, effective, effective_version, supported,
+   status}`, the shorthand pair `expected.observed_profile` /
+   `expected.observed_profile_version`, and `expected.suite`
+   (`formatVersion.suite`, which nulls under any non-default effective
+   profile). A vector may also carry per-vector host policy:
+   `accept_versions` is passed to the verifier's declared
+   accepted-versions option. Consumers ignore expected keys they
+   predate (ignore-if-absent), and a missing `qualifiers` member on a
+   result means vocabulary-unaware, never unqualified.
+
+   `profile-declaration/vectors.json` pins `spec/profiles.md`: the
+   absence rule (absence = the default profile `v0.6-suite`/`1.0`),
+   explicit-default equivalence, the normalized-dyad equality rule,
+   fail-closed refusal of unsupported profiles (`unsupported_profile` —
+   a limitation of the verifier), mismatch-before-lookup
+   (`profile_mismatch` — a capsule defect), shape/grammar malformation,
+   gate ordering under an unknown version, x-member inertness, and
+   declaration-stripping tamper. Every negative fixture is internally
+   coherent under default rules except the declaration under test, so a
+   lane that skips the gate verifies it ok=true and fails the registry.
+
+   `result-vocabulary/vectors.json` pins `spec/results.md`: the derived
+   verdict for all three classes (including both unsupported-version
+   directions), the non-null-iff-unsupported `verdict_reason` rule, and
+   exact qualifier arrays for the strongest and weakest honest shapes,
+   host-relative trust/policy configurations, and the per-result
+   `encrypted_outer_only` scope fact (never on the decrypted inner's L3
+   result).
+
    `unicode-boundary/vectors.json` is a positive collection: a capsule whose
    event summary is 200 astral code points, long enough that the Pith
    normalizer must truncate it. Every implementation MUST verify it
@@ -195,6 +232,17 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-attestation-vectors.mjs` →
   `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
   byte-stable, supports `--check`)
+- `sdk-js/tools/generate-profile-declaration-fixtures.mjs` →
+  `profile-declaration/output/` (fixed throwaway TEST keypair;
+  byte-stable, supports `--check`). Negative fixtures are internally
+  coherent under default rules except the declaration under test, so
+  only the profile gate refuses them.
+- `sdk-js/tools/generate-result-vocabulary-fixtures.mjs` →
+  `result-vocabulary/output/` (fixed throwaway TEST keypairs;
+  byte-stable, supports `--check`). The encrypted fixture is a
+  byte-copy of `tamper-detection/output/clean-encrypted.capsule`
+  (fresh encryption would not be deterministic), with that fixture's
+  keypairs mirrored into the collection's keys.json.
 
 No warranty: vectors are conformance fixtures only. They are not production
 templates, compliance artifacts, legal advice, security advice, or

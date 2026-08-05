@@ -235,6 +235,12 @@ export interface VerifyOptions {
    * and never fails verification over it — exactly as with allowlist.
    */
   acceptVersions?: string[];
+  /**
+   * Host policy: profile ids this deployment accepts. Reported in
+   * VerifyResult.profile.acceptedByPolicy, never decided — an
+   * unsupported profile is never accepted-by-policy (spec/profiles.md).
+   */
+  acceptProfiles?: string[];
 }
 
 /**
@@ -251,14 +257,80 @@ export interface FormatVersionReport {
   observed: string | null;
   supported: boolean;
   status: "known" | "unknown_newer" | "unknown_older" | "invalid" | "unread";
+  /**
+   * The era's algorithm-suite identifier — reported only when the
+   * effective profile is the era default; null on any profile-gate
+   * refusal (the suite fact would be false for a capsule governed by
+   * rules this verifier did not apply — spec/profiles.md).
+   */
   suite: string | null;
   /** null when the host declared no acceptVersions policy. */
   acceptedByPolicy: boolean | null;
 }
 
+/**
+ * The profile declaration channel (spec/profiles.md). `observed` /
+ * `observedVersion` report the declaration as read — even on refusal
+ * (an unauthenticated observation that lets an auditor route the
+ * capsule to a capable verifier instead of declaring it corrupt).
+ * `effective` names the profile actually applied ("v0.6-suite"/"1.0"
+ * on every successful default path — the absence rule made machine-
+ * visible); null whenever no profile's rules were applied. `status`:
+ * `default` (no declaration or the explicit era default), `supported`
+ * (declared alternate this reader implements), `unsupported` (declared
+ * alternate it does not — a limitation of the verifier, not a defect
+ * of the capsule), `mismatched` (the two documents' normalized
+ * declarations disagree: a capsule defect), `invalid` (malformed
+ * declaration), `unevaluated` (the version gate refused first),
+ * `unread` (fail-closed default).
+ */
+export interface ProfileReport {
+  observed: string | null;
+  observedVersion: string | null;
+  declared: boolean;
+  effective: string | null;
+  effectiveVersion: string | null;
+  supported: boolean;
+  status:
+    | "default"
+    | "supported"
+    | "unsupported"
+    | "mismatched"
+    | "invalid"
+    | "unevaluated"
+    | "unread";
+  /** null when the host declared no acceptProfiles policy (or on refusal). */
+  acceptedByPolicy: boolean | null;
+}
+
+/** The normalized verdict surface (spec/results.md). */
+export type Verdict = "valid" | "invalid" | "unsupported";
+export type VerdictReason =
+  | "unsupported_version_newer"
+  | "unsupported_version_older"
+  | "unsupported_profile"
+  | "unsupported_capability";
+
 export interface VerifyResult {
   /** True only when every check passed. Trust is reported separately. */
   ok: boolean;
+  /**
+   * Normalized verdict (spec/results.md), derived from the facts on
+   * this result: `ok == (verdict === "valid")` is an invariant, and
+   * "unsupported" names a refusal that is a limitation of THIS
+   * verifier (unknown version, unsupported profile) — not corruption.
+   */
+  verdict: Verdict;
+  /** Machine-readable refusal cause; non-null iff verdict is "unsupported". */
+  verdictReason: VerdictReason | null;
+  /**
+   * Weaker-claim facts qualifying a "valid" verdict, in the spec-defined
+   * order; empty unless verdict is "valid". Spec-defined entries are
+   * drawn from the closed vocabulary of spec/results.md; `x-` entries
+   * are vendor extensions (never emitted by this SDK). A renderer MUST
+   * NOT present a valid verdict without rendering every entry.
+   */
+  qualifiers: string[];
   level: "L2" | "L3";
   errors: string[];
   chain: { ok: boolean; errors: Array<{ seq: number; message: string }>; note?: string };
@@ -286,6 +358,8 @@ export interface VerifyResult {
   actorSet: { bound: boolean };
   /** Observed format version + support/policy verdicts (reported facts). */
   formatVersion: FormatVersionReport;
+  /** Observed/effective profile declaration (reported facts; see above). */
+  profile: ProfileReport;
   /**
    * DERIVED skill-trust classification (spec/trust.md "Skill trust").
    * capsuleSigned is the single capsule-level fact — ok (the overall
@@ -453,3 +527,38 @@ export class UnsupportedVersionError extends Error {
 export function idDomain(version: string): Uint8Array;
 export function provenanceDomain(version: string, role: string): Uint8Array;
 export function keyWrapInfo(version: string): Uint8Array;
+
+// Profile declaration policy (spec/profiles.md).
+export interface ProfileRow {
+  id: string;
+  version: string;
+}
+export const SUPPORTED_PROFILES: readonly ProfileRow[];
+export const DEFAULT_PROFILE: Readonly<ProfileRow>;
+export function isValidProfileId(id: unknown): boolean;
+export function profileDeclarationProblems(
+  value: unknown,
+  path: string,
+  options?: { envelope?: boolean },
+): string[];
+export function classifyProfile(
+  manifestDecl: unknown,
+  envelopeDecl: unknown,
+): {
+  status: "default" | "supported" | "unsupported" | "mismatched" | "invalid";
+  observed: string | null;
+  observedVersion: string | null;
+  declared: boolean;
+  effective: string | null;
+  effectiveVersion: string | null;
+  supported: boolean;
+  problems: string[];
+  normalized?: { manifest: ProfileRow; envelope: ProfileRow };
+};
+export class ProfileError extends Error {
+  observed: string | null;
+  observedVersion: string | null;
+}
+export class UnsupportedProfileError extends ProfileError {}
+export class ProfileMismatchError extends ProfileError {}
+export class InvalidProfileError extends ProfileError {}
