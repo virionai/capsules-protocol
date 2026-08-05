@@ -9,9 +9,13 @@
 // bug wearing a tampering costume. See spec/canonicalization.md and
 // spec/pith.md "Truncation and the canonicalization boundary".
 //
-// The fixture goes through CapsuleBuilder.appendEvent on purpose: Pith is
-// DEFAULT ON there, so the truncation path is the thing under test. Nothing
-// here hand-writes the truncated string.
+// The fixture goes through CapsuleBuilder.appendEvent with { pith: true }
+// on purpose (Pith is opt-in as of the v0.7 authoring-layer fix): the
+// truncation path is the thing under test. Nothing here hand-writes the
+// truncated string. The event therefore also carries the
+// pith_normalized_fields marker the builder records for a changed field,
+// so this fixture doubles as cross-lane evidence that the marker member
+// is preserved and hashed like any other event member.
 //
 // Output (spec/vectors/unicode-boundary/output/):
 //   astral-pith.capsule   plain, must verify ok:true in every lane
@@ -69,6 +73,7 @@ async function buildCapsule(originator) {
     originator: { publicKey: originator.publicKeyHex, label: "ConformanceOriginator" },
     participants: [{ actor_id: "human:origin", role: "originator", label: "Origin" }],
     createdAt: SIGNED_AT,
+    pith: true,
   });
   builder.setProgram("# Unicode Boundary\n\nAstral-character Pith fixture.\n");
   builder.appendEvent({
@@ -103,6 +108,10 @@ async function assertFixtureIsSound(bytes, publicKeyHex) {
   }
   if (!summary.endsWith("…")) {
     throw new Error("fixture summary was not truncated; the fixture tests nothing");
+  }
+  const marks = reader.events()[0].pith_normalized_fields;
+  if (!Array.isArray(marks) || marks[0] !== "payload.summary") {
+    throw new Error("fixture event does not carry the pith_normalized_fields marker");
   }
 }
 

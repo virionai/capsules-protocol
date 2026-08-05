@@ -61,6 +61,7 @@ export { packZip, unpackZip, scanCentralDirectory, DEFAULT_ZIP_LIMITS } from "./
 export {
   compressText,
   compressEventPayload,
+  normalizeEventPayload,
   PITH_VERSION,
 } from "./pith.js";
 

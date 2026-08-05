@@ -60,7 +60,12 @@ from .manifest import (
     manifest_bytes,
     manifest_hash,
 )
-from .pith import PITH_VERSION, compress_event_payload, compress_text
+from .pith import (
+    PITH_VERSION,
+    compress_event_payload,
+    compress_text,
+    normalize_event_payload,
+)
 from .reader import CapsuleReader, MalformedCapsuleError
 from .verifier import verify_capsule
 from .versions import (
@@ -110,6 +115,7 @@ __all__ = [
     "classify_version",
     "chacha20_poly1305_encrypt",
     "compress_event_payload",
+    "normalize_event_payload",
     "compress_text",
     "compute_capsule_id",
     "concat_bytes",

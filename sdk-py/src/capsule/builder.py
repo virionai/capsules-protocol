@@ -37,7 +37,7 @@ from .manifest import (
     manifest_bytes,
     manifest_hash,
 )
-from .pith import compress_event_payload
+from .pith import normalize_event_payload
 from .zip_io import pack_zip
 from .versions import CURRENT_VERSION, key_wrap_info
 
@@ -64,7 +64,7 @@ class CapsuleBuilder:
         originator,
         participants: list[dict] | None = None,
         created_at: str | None = None,
-        pith: bool = True,
+        pith: bool = False,
     ) -> None:
         # `originator` accepts {"public_key": ..., "label"?} with the key
         # as a hex string or 32 raw bytes — or the Ed25519KeyPair returned
@@ -89,7 +89,11 @@ class CapsuleBuilder:
         self.skills: dict[str, _SkillEntry] = {}
         self.payload: dict[str, bytes] = {}
         self.bare_events: list[dict] = []
-        self.pith = bool(pith)
+        # Pith is OPT-IN (v0.7): lossy narrative normalization lands inside
+        # the hash chain where the original is not preserved, so an author
+        # who writes prose gets their prose unless they ask for the rewrite
+        # (spec/pith.md; ROADMAP "Pith protocol boundary").
+        self.pith = pith is True
 
     def set_program(self, md: str) -> CapsuleBuilder:
         self.program_md = md
@@ -131,7 +135,13 @@ class CapsuleBuilder:
 
         ``actor`` and ``action`` are required; ``kind`` defaults to
         "observation", ``target`` to "capsule", and ``timestamp`` to the
-        builder's ``created_at`` value.
+        builder's ``created_at`` value. Pith normalization follows the
+        builder setting (opt-in, default off); a per-call ``pith=True``
+        or ``pith=False`` overrides it for this event only. When
+        normalization actually changed a field, the event records the
+        affected payload members in ``pith_normalized_fields``
+        (spec/chain.md) — a lossy rewrite inside the hash chain is
+        never silent.
 
         Rejects (spec/chain.md):
           - a ``kind`` outside the closed enum, always, and
@@ -161,9 +171,35 @@ class CapsuleBuilder:
                 f'{{"actor_id": {json.dumps(actor)}, "role": "..."}} to the builder\'s '
                 'participants[] (only "system:host" may appear without one)'
             )
-        apply_pith = self.pith if pith is None else (self.pith and pith)
+        # Caller-declared Pith provenance (an LLM applying Pith as practice
+        # may honestly mark the fields it rewrote). Same writer obligation
+        # as untrusted_payload_fields: refuse an out-of-grammar entry here,
+        # at the call site that introduced it.
+        pith_marks: list[str] = []
+        declared_marks = "pith_normalized_fields" in event
+        if declared_marks:
+            marks = event["pith_normalized_fields"]
+            if not isinstance(marks, list):
+                raise ValueError(
+                    "append_event: pith_normalized_fields must be an array of payload paths"
+                )
+            for path in marks:
+                if not is_valid_untrusted_payload_path(path):
+                    raise ValueError(
+                        f"append_event: pith_normalized_fields entry {json.dumps(path)} "
+                        'is not a valid payload path (expected "payload.<segment>" '
+                        "per spec/chain.md)"
+                    )
+            pith_marks = list(marks)
+        apply_pith = self.pith if pith is None else pith is True
         raw_payload = event.get("payload", {})
-        payload = compress_event_payload(raw_payload) if apply_pith else raw_payload
+        payload = raw_payload
+        if apply_pith:
+            normalized = normalize_event_payload(raw_payload)
+            payload = normalized["payload"]
+            for field in normalized["normalized_fields"]:
+                if field not in pith_marks:
+                    pith_marks.append(field)
         bare = {
             "actor": actor,
             "kind": kind,
@@ -192,6 +228,10 @@ class CapsuleBuilder:
                         "per spec/chain.md)"
                     )
             bare["untrusted_payload_fields"] = upf
+        # Present when the caller declared marks OR the normalizer changed
+        # a field; an event whose narrative was rewritten says so in-chain.
+        if declared_marks or pith_marks:
+            bare["pith_normalized_fields"] = pith_marks
         self.bare_events.append(bare)
         return self
 

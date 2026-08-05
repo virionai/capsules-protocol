@@ -65,7 +65,10 @@ export interface CapsuleBuilderOptions {
   participants?: Participant[];
   /** ISO 8601 UTC; defaults to now. */
   createdAt?: string;
-  /** Pith payload normalization for events; default true. */
+  /**
+   * Opt IN to Pith payload normalization for events (default false —
+   * lossy narrative rewriting is never applied unless asked for).
+   */
   pith?: boolean;
 }
 
@@ -82,6 +85,12 @@ export interface EventInput {
   timestamp?: string;
   payload?: Record<string, unknown>;
   untrusted_payload_fields?: string[];
+  /**
+   * Author-declared Pith provenance: payload paths (spec/chain.md
+   * grammar) whose narrative the author already normalized. The builder
+   * unions in the fields its own normalizer changed.
+   */
+  pith_normalized_fields?: string[];
 }
 
 export interface SignerInput {
@@ -115,6 +124,7 @@ export class CapsuleBuilder {
   setAgents(markdown: string): this;
   addSkill(id: string, skill: SkillInput): this;
   addPayload(path: string, bytes: Uint8Array): this;
+  /** Per-event { pith: true | false } overrides the builder's setting. */
   appendEvent(event: EventInput, options?: { pith?: boolean }): this;
   /** capsule_id seal() will assign; requires >= 1 appended event. */
   previewCapsuleId(): string;
@@ -405,8 +415,22 @@ export function scanCentralDirectory(
   localHeaderOffset: number;
 }>;
 
-export function compressText(text: string, options?: Record<string, unknown>): { text: string };
-export function compressEventPayload<T>(payload: T, options?: Record<string, unknown>): T;
+export interface PithOptions {
+  /** Output length cap including the ellipsis; default 280. */
+  maxChars?: number;
+  /** Whole sentences kept before the length cap; default 3. */
+  maxSentences?: number;
+}
+export function compressText(
+  text: string,
+  options?: PithOptions,
+): { text: string; changed: boolean; version: string };
+export function compressEventPayload<T>(payload: T, options?: PithOptions): T;
+/** compressEventPayload plus the list of payload paths that changed. */
+export function normalizeEventPayload<T>(
+  payload: T,
+  options?: PithOptions,
+): { payload: T; normalizedFields: string[] };
 export const PITH_VERSION: string;
 
 /** Optional identity/encryption/policy overlay; see spec/federation.md. */

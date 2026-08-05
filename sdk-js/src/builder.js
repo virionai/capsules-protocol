@@ -35,7 +35,7 @@ import {
   manifestBytes,
   manifestHash,
 } from "./manifest.js";
-import { compressEventPayload } from "./pith.js";
+import { normalizeEventPayload } from "./pith.js";
 import { packZip } from "./zip.js";
 import { CURRENT_VERSION, keyWrapInfo } from "./versions.js";
 import { nowIso, toKeyHex, toRecipient, toSigner } from "./keys.js";
@@ -47,7 +47,7 @@ function assertValidParticipants(participants) {
 }
 
 export class CapsuleBuilder {
-  constructor({ originator, participants = [], createdAt, pith = true } = {}) {
+  constructor({ originator, participants = [], createdAt, pith = false } = {}) {
     // `originator` accepts { publicKey, label? } with the key as a hex
     // string or 32 raw bytes — including the keypair object returned by
     // generateEd25519() (spread in a label: { ...keys, label: "MyApp" }).
@@ -72,7 +72,11 @@ export class CapsuleBuilder {
     this.skills = new Map(); // id -> { json, markdown }
     this.payload = new Map(); // path -> bytes
     this.bareEvents = [];
-    this.pith = pith !== false; // default on; pass {pith:false} to disable
+    // Pith is OPT-IN (v0.7): lossy narrative normalization lands inside
+    // the hash chain where the original is not preserved, so an author
+    // who writes prose gets their prose unless they ask for the rewrite
+    // (spec/pith.md; ROADMAP "Pith protocol boundary").
+    this.pith = pith === true;
   }
 
   setProgram(md) {
@@ -121,8 +125,12 @@ export class CapsuleBuilder {
   /**
    * Append a chain event. `actor` and `action` are required; `kind`
    * defaults to "observation", `target` to "capsule", and `timestamp`
-   * to the builder's `createdAt` value. Per-call opt-out: { pith: false }
-   * skips payload normalization for this event.
+   * to the builder's `createdAt` value. Pith normalization follows the
+   * builder setting (opt-in, default off); a per-call { pith: true } or
+   * { pith: false } overrides it for this event only. When normalization
+   * actually changed a field, the event records the affected payload
+   * members in `pith_normalized_fields` (spec/chain.md) — a lossy
+   * rewrite inside the hash chain is never silent.
    *
    * Rejects (spec/chain.md):
    *   - a `kind` outside the closed enum, always, and
@@ -171,9 +179,35 @@ export class CapsuleBuilder {
         }
       }
     }
-    const applyPith = options.pith !== false && this.pith;
+    // Caller-declared Pith provenance (an LLM applying Pith as practice
+    // may honestly mark the fields it rewrote). Same writer obligation as
+    // untrusted_payload_fields: refuse an out-of-grammar entry here, at
+    // the call site that introduced it.
+    let pithMarks = [];
+    if (event.pith_normalized_fields !== undefined) {
+      if (!Array.isArray(event.pith_normalized_fields)) {
+        throw new Error("appendEvent: pith_normalized_fields must be an array of payload paths");
+      }
+      for (const p of event.pith_normalized_fields) {
+        if (!isValidUntrustedPayloadPath(p)) {
+          throw new Error(
+            `appendEvent: pith_normalized_fields entry ${JSON.stringify(p)} is not a valid ` +
+              `payload path (expected "payload.<segment>" per spec/chain.md)`,
+          );
+        }
+      }
+      pithMarks = [...event.pith_normalized_fields];
+    }
+    const applyPith = options.pith === undefined ? this.pith : options.pith === true;
     const rawPayload = event.payload ?? {};
-    const payload = applyPith ? compressEventPayload(rawPayload) : rawPayload;
+    let payload = rawPayload;
+    if (applyPith) {
+      const normalized = normalizeEventPayload(rawPayload);
+      payload = normalized.payload;
+      for (const field of normalized.normalizedFields) {
+        if (!pithMarks.includes(field)) pithMarks.push(field);
+      }
+    }
     // Fail here, not at seal(): a payload outside the I-JSON acceptance
     // boundary (spec/canonicalization.md) cannot be canonicalized, and the
     // caller still has the offending value in scope at this point.
@@ -190,6 +224,11 @@ export class CapsuleBuilder {
       timestamp: event.timestamp ?? this.createdAt,
       payload,
       ...(event.untrusted_payload_fields ? { untrusted_payload_fields: event.untrusted_payload_fields } : {}),
+      // Present when the caller declared marks OR the normalizer changed
+      // a field; an event whose narrative was rewritten says so in-chain.
+      ...(event.pith_normalized_fields !== undefined || pithMarks.length > 0
+        ? { pith_normalized_fields: pithMarks }
+        : {}),
     });
     return this;
   }
