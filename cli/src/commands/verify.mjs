@@ -1,10 +1,11 @@
-// `capsule verify <file> [--allowlist KEY...] [--json]`
+// `capsule verify <file> [--allowlist KEY...] [--accept-versions V...] [--json]`
 //
-// Wraps the SDK's verifyCapsule() and applies the CLI's TRUST POLICY on
+// Wraps the SDK's verifyCapsule() and applies the CLI's POLICY LAYER on
 // top. The split is deliberate: the SDK reports facts (which integrity
-// checks passed; which signers are trusted under the supplied
-// allowlist) and never decides policy — the CLI is the policy layer,
-// because the CLI is where an operator expresses what they demand.
+// checks passed; which signers are trusted under the supplied allowlist;
+// whether the observed format version is in the declared accepted set)
+// and never decides policy — the CLI is the policy layer, because the
+// CLI is where an operator expresses what they demand.
 //
 //   - No --allowlist:  no trust policy. The verdict covers integrity
 //                      only, and the report says so explicitly.
@@ -15,23 +16,39 @@
 //                      `capsule verify f --allowlist $KEY && deploy`
 //                      must never deploy an artifact signed by someone
 //                      the operator did not trust.
+//   - --accept-versions V (repeatable): version policy "the capsule's
+//                      declared format version must be one of these".
+//                      spec/versioning.md "Host policy": the SDK reports
+//                      the verdict as a fact and MUST NOT be silent; the
+//                      demand is the operator's, so an unaccepted
+//                      version fails the run (exit 1) like an unmatched
+//                      allowlist. Absent the flag, every known version is
+//                      accepted and the fact is reported as null.
 //
-// Exit codes (documented in cli/README.md; CI depends on them):
-//   0  integrity verified AND trust policy satisfied (or none supplied)
-//   1  integrity failed OR the supplied trust policy is not satisfied
-//   2  usage / I-O error (unknown flag, malformed key, unreadable file)
+// Exit codes (spec/results.md "CLI reference renderer"; cli/README.md;
+// CI depends on them):
+//   0  verdict VALID and every requested policy satisfied
+//   1  verdict INVALID or UNSUPPORTED, or a requested policy not
+//      satisfied. A capsule this verifier cannot open — unknown era,
+//      unsupported profile, malformed container — is a verdict about
+//      the capsule/verifier pair, NOT an operator error: it is rendered
+//      from the total verifier's fail-closed result and exits 1, the
+//      same as the Rust CLI.
+//   2  usage / I-O error only (unknown flag, malformed key, malformed
+//      version string, unreadable file)
 //
 // The plain report mirrors the Rust verifier's layout. The JSON output
-// carries the same integrity fields as the Rust CLI plus a `trust`
-// block; `ok` here is the OVERALL verdict (integrity AND policy) and
-// always matches the exit code, while `integrity_ok` preserves the
-// SDK/Rust math-only verdict.
+// carries the same integrity fields as the Rust CLI plus `trust` and
+// `version_policy` blocks; `ok` here is the OVERALL verdict (integrity
+// AND every requested policy) and always matches the exit code, while
+// `integrity_ok` preserves the SDK/Rust math-only verdict and `verdict`
+// carries the SDK's normalized verdict (spec/results.md).
 
 import { CapsuleReader, verifyCapsule } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, check, out, readBytes, truncHex } from "../format.mjs";
 
-const USAGE = `usage: capsule verify <file> [--allowlist KEY...] [--json]
+const USAGE = `usage: capsule verify <file> [--allowlist KEY...] [--accept-versions VERSION...] [--json]
 
   --allowlist KEY    Trusted Ed25519 public key (64 hex chars). Repeat
                      the flag for multiple keys. Supplying an allowlist
@@ -39,14 +56,83 @@ const USAGE = `usage: capsule verify <file> [--allowlist KEY...] [--json]
                      unless at least one allowlisted key carries a
                      valid signature. Without it the verdict covers
                      integrity only, and the report says so.
+  --accept-versions VERSION
+                     Accepted capsule format version ('<major>.<minor>',
+                     e.g. 0.7). Repeat for multiple. Supplying it sets
+                     the version policy: a capsule whose declared
+                     version is outside the set still verifies (the math
+                     is unaffected) but FAILS the run (exit 1), and the
+                     verdict carries version_not_accepted_by_policy.
   --json             Emit the full result as pretty-printed JSON.
                      Same exit code in either mode.
 `;
 
+// spec/results.md "Required renderer language": one rendering per
+// qualifier, each containing that qualifier's normative minimum
+// substring, printed in the same report as the verdict.
+const QUALIFIER_LINES = {
+  signer_set_unbound: () =>
+    "signer set is not bound by the seal (manifest.signer_commitment absent)",
+  actor_set_unbound: () =>
+    "chain actors are not bound to a declared participant set (manifest.participants empty)",
+  empty_chain_not_walked: () =>
+    "empty chain: no events to walk; envelope anchors checked to be null instead",
+  encrypted_outer_only: () =>
+    "content is encrypted and was not read (L2 outer only; chain deferred to L3)",
+  version_not_accepted_by_policy: (result) =>
+    `format version ${result.formatVersion?.observed} is not in the declared accepted set of this host`,
+  trust_not_evaluated: () => "trust not evaluated: no allowlist supplied",
+  no_trusted_signer: () =>
+    "allowlist provided but matched no signer; trusted=false for all signers",
+};
+
+// A qualifier this CLI cannot name is surfaced VERBATIM (spec/results.md
+// consumer rule): a later revision's name or an x- vendor entry must
+// never be silently dropped, which would read as "unqualified". A lane
+// adding a spec-defined qualifier adds its rendering to the table above,
+// with that qualifier's required substring in the string.
+function qualifierLine(name, result) {
+  const render = QUALIFIER_LINES[name];
+  return render ? render(result) : name;
+}
+
+// The first clause of the refusal diagnosis, for the Result line. The
+// full wording — including the "limitation of the verifier" sentence the
+// cross-lane needles pin — still prints in the Errors section.
+function primaryDiagnosis(result) {
+  const first = result.errors?.[0];
+  if (typeof first !== "string" || first.length === 0) return null;
+  return first.replace(/^capsule cannot be opened: /, "").split("; ")[0];
+}
+
+// spec/profiles.md §4.2: one line beside `Format version:`. The profile
+// actually APPLIED, and whether the capsule declared it.
+function profileLine(profile) {
+  if (!profile) return "(unread)";
+  switch (profile.status) {
+    case "default":
+    case "supported":
+      return `${profile.effective}/${profile.effectiveVersion}` +
+        ` (${profile.status}, ${profile.declared ? "declared" : "undeclared"})`;
+    case "unsupported":
+      return `${profile.observed}/${profile.observedVersion}` +
+        " — declared but not supported by this verifier";
+    case "mismatched":
+      return "mismatched — envelope.profile does not match manifest.format.profile";
+    case "invalid":
+      return "invalid declaration (see Errors)";
+    case "unevaluated":
+      return (profile.declared ? `${profile.observed}/${profile.observedVersion} ` : "") +
+        "(unevaluated — the version gate refused first)";
+    default:
+      return "(unread)";
+  }
+}
+
 export async function verifyCmd(argv) {
   const args = parseArgs(argv, {
     booleans: ["json"],
-    arrays: ["allowlist"],
+    arrays: ["allowlist", "accept_versions"],
     maxPositionals: 1,
   });
   if (args.help) {
@@ -72,38 +158,82 @@ export async function verifyCmd(argv) {
       );
     }
   }
+  // Same boundary for the version policy: a value outside the
+  // '<major>.<minor>' grammar (spec/versioning.md) can never match a
+  // declared version, so it would only ever manufacture a policy failure
+  // the operator did not intend.
+  const acceptVersionsArg = args.accept_versions || [];
+  for (const entry of acceptVersionsArg) {
+    if (!/^\d+\.\d+$/.test(entry)) {
+      throw new CLIError(
+        `--accept-versions entry must be a '<major>.<minor>' version string; got: ${entry}`,
+        2,
+      );
+    }
+  }
+  // Absent flag = no declared policy at all, which is NOT the same as an
+  // empty accepted set: only a declared policy is reported and decided.
+  const acceptVersions = acceptVersionsArg.length > 0 ? acceptVersionsArg : null;
 
   const bytes = await readBytes(file);
 
-  let reader;
+  // The capsule is opened best-effort for the report header, but
+  // verification always runs over a surface the total verifier accepts:
+  // an unknown era or an unsupported profile is refused at open, and
+  // that refusal is a VERDICT (UNSUPPORTED, exit 1), not an operator
+  // error (exit 2). spec/results.md; parity with the Rust CLI, which has
+  // always fed raw bytes to verify_capsule.
+  let reader = null;
   try {
     reader = await CapsuleReader.fromBytes(bytes);
-  } catch (e) {
-    throw new CLIError(`cannot open capsule: ${e.message}`, 2);
+  } catch {
+    reader = null;
   }
 
-  const result = await verifyCapsule(reader, { allowlist });
+  const result = await verifyCapsule(reader ?? bytes, {
+    allowlist,
+    ...(acceptVersions ? { acceptVersions } : {}),
+  });
 
-  // TRUST POLICY (the CLI-level decision the SDK deliberately never
-  // makes). trustedSignerCount counts DISTINCT keys that are both valid
-  // and allowlisted, so duplicate signer rows cannot satisfy the policy.
+  // POLICY (the CLI-level decisions the SDK deliberately never makes).
+  // trustedSignerCount counts DISTINCT keys that are both valid and
+  // allowlisted, so duplicate signer rows cannot satisfy the policy.
   const policy = allowlist.length > 0 ? "allowlist" : "none";
   const policySatisfied = policy === "none" ? null : result.trustedSignerCount > 0;
-  const ok = result.ok && policySatisfied !== false;
+  // acceptedByPolicy is null whenever the policy was not declared or the
+  // capsule never reached the check (a refusal); only an explicit false
+  // is a failed demand.
+  const versionPolicySatisfied = acceptVersions
+    ? result.formatVersion?.acceptedByPolicy ?? null
+    : null;
+  const ok = result.ok && policySatisfied !== false && versionPolicySatisfied !== false;
 
   if (args.json) {
     out(JSON.stringify(
       {
         ok,
         integrity_ok: result.ok,
+        // spec/results.md: the normalized verdict surface. `verdict` is
+        // the SDK's fact about the capsule; `ok` above stays the CLI's
+        // overall verdict (integrity AND every requested policy).
+        verdict: result.verdict,
+        verdict_reason: result.verdictReason,
+        qualifiers: result.qualifiers,
         level: result.level,
-        capsule_id: reader.manifest().id,
-        signed_at: reader.envelope().signed_at,
+        capsule_id: reader ? reader.manifest().id : null,
+        signed_at: reader ? reader.envelope().signed_at : null,
         trust: {
           policy,
           allowlist_size: allowlist.length,
           trusted_signer_count: result.trustedSignerCount,
           satisfied: policySatisfied,
+        },
+        // spec/versioning.md "Host policy": reported by the SDK, decided
+        // here. satisfied is null when no policy was declared.
+        version_policy: {
+          policy: acceptVersions ? "accept_versions" : "none",
+          accept_versions: acceptVersions ?? [],
+          satisfied: versionPolicySatisfied,
         },
         errors: result.errors,
         chain: result.chain,
@@ -112,8 +242,28 @@ export async function verifyCmd(argv) {
         signer_set: result.signerSet,
         actor_set: result.actorSet,
         // spec/versioning.md: the observed format version is a reported
-        // fact, next to (never inside) the integrity verdict.
-        format_version: result.formatVersion,
+        // fact, next to (never inside) the integrity verdict. Member
+        // names are the Rust CLI's (this JSON is the cross-CLI wire
+        // surface; the SDK's camelCase stays inside the SDK).
+        format_version: {
+          observed: result.formatVersion.observed,
+          supported: result.formatVersion.supported,
+          status: result.formatVersion.status,
+          suite: result.formatVersion.suite,
+          accepted_by_policy: result.formatVersion.acceptedByPolicy,
+        },
+        // spec/profiles.md: which profile's rules were applied, and
+        // whether the capsule declared one.
+        profile: {
+          observed: result.profile.observed,
+          observed_version: result.profile.observedVersion,
+          declared: result.profile.declared,
+          effective: result.profile.effective,
+          effective_version: result.profile.effectiveVersion,
+          supported: result.profile.supported,
+          status: result.profile.status,
+          accepted_by_policy: result.profile.acceptedByPolicy,
+        },
         // Derived at verify time from THIS invocation's allowlist —
         // never read from the capsule (spec/trust.md "Skill trust").
         skill_trust: {
@@ -130,69 +280,93 @@ export async function verifyCmd(argv) {
   }
 
   // Human report.
-  const m = reader.manifest();
-  const e = reader.envelope();
   out(`File:                   ${file} (${bytes.length} bytes)`);
-  out(`Capsule ID:             ${truncHex(m.id)}`);
-  out(`Originator (Ed25519):   ${truncHex(m.originator.public_key)}`);
-  // signed_at is asserted by the signer; the format has no external
-  // time anchor, so it is labelled as attested, never verified.
-  out(`Sealed at (attested):   ${e.signed_at}  — signer-supplied; no external time anchor`);
+  if (reader) {
+    const m = reader.manifest();
+    const e = reader.envelope();
+    out(`Capsule ID:             ${truncHex(m.id)}`);
+    out(`Originator (Ed25519):   ${truncHex(m.originator.public_key)}`);
+    // signed_at is asserted by the signer; the format has no external
+    // time anchor, so it is labelled as attested, never verified.
+    out(`Sealed at (attested):   ${e.signed_at}  — signer-supplied; no external time anchor`);
+  }
   out(`Level:                  ${result.level}`);
   // spec/versioning.md: report which era's rules were applied. Suite
   // "v0.6" = Ed25519 / SHA-256 / JCS / X25519+HKDF-SHA-256+ChaCha20.
-  out(`Format version:         ${result.formatVersion.observed}` +
-      (result.formatVersion.suite ? `  (${result.formatVersion.suite} suite)` : ""));
-  out("");
-  out("Checks:");
-  out(`  [${check(result.contentIndex.ok)}] content_index` +
-      (result.contentIndex.errors?.length ? `  (${result.contentIndex.errors.length} error(s))` : ""));
-  out(`  [${check(result.chain.ok)}] chain` +
-      (result.chain.errors?.length ? `  (${result.chain.errors.length} error(s))` : "") +
-      (result.chain.note ? `  — ${result.chain.note}` : ""));
-  out(`  [${check(result.envelope.ok)}] envelope_signature`);
-  out(`  [${check(result.signerSet.ok)}] signer_set` +
-      (result.signerSet.bound ? "" : "  — unbound (manifest.signer_commitment absent)"));
-  // Actor-set binding: violations surface as chain errors; the line
-  // fails when any chain error is an actor-rule error, and bound/unbound
-  // is the honest-assurance report (mirrors signer_set).
-  const actorErrors = (result.chain.errors ?? []).filter((ce) =>
-    String(ce.message ?? "").includes("not in manifest.participants"));
-  out(`  [${check(actorErrors.length === 0)}] actor_set` +
-      (actorErrors.length ? `  (${actorErrors.length} error(s))` : "") +
-      (result.actorSet.bound ? "" : "  — unbound (manifest.participants empty)"));
+  // The observed version is reported even when the capsule was refused —
+  // that is what keeps "too old a verifier" apart from "corrupt file".
+  out(`Format version:         ${result.formatVersion.observed ?? "(unread)"}` +
+      (result.formatVersion.suite ? `  (${result.formatVersion.suite} suite)` : "") +
+      (result.formatVersion.status === "known" ? "" : `  [${result.formatVersion.status}]`));
+  out(`Profile:                ${profileLine(result.profile)}`);
 
-  // Trust is reported apart from the integrity checks: the checks above
-  // are facts about the capsule; this block is the operator's policy.
-  out("");
-  out("Trust:");
-  if (policy === "none") {
-    out(`  policy:            none — no --allowlist supplied`);
-    out(`  trusted signers:   0 (nothing is trusted without an allowlist)`);
-    out(`  policy check:      NOT EVALUATED — signer identity not checked`);
-  } else {
-    out(`  policy:            allowlist (${allowlist.length} key${allowlist.length === 1 ? "" : "s"} supplied)`);
-    out(`  trusted signers:   ${result.trustedSignerCount} distinct allowlisted key(s) with a valid signature`);
-    out(`  policy check:      ${policySatisfied
-      ? "SATISFIED"
-      : "FAILED — no signer matches the supplied allowlist"}`);
-  }
-  // Skill trust is DERIVED from this invocation's allowlist, never read
-  // from the capsule (spec/trust.md "Skill trust").
-  const skillTiers = Object.entries(result.skillTrust.skills);
-  if (skillTiers.length > 0) {
-    out(`  skills (derived):  ${skillTiers.map(([id, tier]) => `${id}=${tier}`).join(", ")}`);
-  }
+  if (reader) {
+    out("");
+    out("Checks:");
+    out(`  [${check(result.contentIndex.ok)}] content_index` +
+        (result.contentIndex.errors?.length ? `  (${result.contentIndex.errors.length} error(s))` : ""));
+    out(`  [${check(result.chain.ok)}] chain` +
+        (result.chain.errors?.length ? `  (${result.chain.errors.length} error(s))` : "") +
+        (result.chain.note ? `  — ${result.chain.note}` : ""));
+    out(`  [${check(result.envelope.ok)}] envelope_signature`);
+    out(`  [${check(result.signerSet.ok)}] signer_set` +
+        (result.signerSet.bound ? "" : "  — unbound (manifest.signer_commitment absent)"));
+    // Actor-set binding: violations surface as chain errors; the line
+    // fails when any chain error is an actor-rule error, and bound/unbound
+    // is the honest-assurance report (mirrors signer_set).
+    const actorErrors = (result.chain.errors ?? []).filter((ce) =>
+      String(ce.message ?? "").includes("not in manifest.participants"));
+    out(`  [${check(actorErrors.length === 0)}] actor_set` +
+        (actorErrors.length ? `  (${actorErrors.length} error(s))` : "") +
+        (result.actorSet.bound ? "" : "  — unbound (manifest.participants empty)"));
 
-  out("");
-  out("Signers:");
-  if (result.envelope.signers?.length) {
-    for (const s of result.envelope.signers) {
-      out(`  - ${(s.role + ":").padEnd(13)} ${truncHex(s.public_key)}` +
-          `  valid=${s.valid}  trusted=${s.trusted}`);
+    // Trust is reported apart from the integrity checks: the checks above
+    // are facts about the capsule; this block is the operator's policy.
+    out("");
+    out("Trust:");
+    if (policy === "none") {
+      out(`  policy:            none — no --allowlist supplied`);
+      out(`  trusted signers:   0 (nothing is trusted without an allowlist)`);
+      out(`  policy check:      NOT EVALUATED — signer identity not checked`);
+    } else {
+      out(`  policy:            allowlist (${allowlist.length} key${allowlist.length === 1 ? "" : "s"} supplied)`);
+      out(`  trusted signers:   ${result.trustedSignerCount} distinct allowlisted key(s) with a valid signature`);
+      out(`  policy check:      ${policySatisfied
+        ? "SATISFIED"
+        : "FAILED — allowlist provided but matched no signer"}`);
     }
-  } else {
-    out("  (none)");
+    // Skill trust is DERIVED from this invocation's allowlist, never read
+    // from the capsule (spec/trust.md "Skill trust").
+    const skillTiers = Object.entries(result.skillTrust.skills);
+    if (skillTiers.length > 0) {
+      out(`  skills (derived):  ${skillTiers.map(([id, tier]) => `${id}=${tier}`).join(", ")}`);
+    }
+
+    // The version policy is the operator's second demand, reported like
+    // the first: the SDK supplies the fact (spec/versioning.md "Host
+    // policy"), this block is the decision made on it.
+    if (acceptVersions) {
+      out("");
+      out("Version policy:");
+      out(`  accepted:          ${acceptVersions.join(", ")}`);
+      out(`  observed:          ${result.formatVersion.observed}`);
+      out(`  policy check:      ${versionPolicySatisfied === null
+        ? "NOT EVALUATED"
+        : versionPolicySatisfied
+          ? "SATISFIED"
+          : `FAILED — format version ${result.formatVersion.observed} is not in the declared accepted set`}`);
+    }
+
+    out("");
+    out("Signers:");
+    if (result.envelope.signers?.length) {
+      for (const s of result.envelope.signers) {
+        out(`  - ${(s.role + ":").padEnd(13)} ${truncHex(s.public_key)}` +
+            `  valid=${s.valid}  trusted=${s.trusted}`);
+      }
+    } else {
+      out("  (none)");
+    }
   }
 
   if (result.errors?.length) {
@@ -210,30 +384,48 @@ export async function verifyCmd(argv) {
     out("Content-index errors:");
     for (const ie of result.contentIndex.errors) out(`  - ${ie}`);
   }
+  // Canonical note strings pass through verbatim (spec/results.md): the
+  // notes are the lanes' shared wording for the same facts the
+  // qualifiers name, and a renderer that drops them drops the evidence.
   if (result.notes?.length) {
     out("");
     out("Notes:");
     for (const n of result.notes) out(`  - ${n}`);
   }
 
-  // The verdict line says exactly what it covers. PASS must never be
-  // readable as more than what was actually checked.
-  const qualifiers = [];
-  if (result.ok) {
-    qualifiers.push(policy === "none"
-      ? "integrity only — signer identity not checked"
-      : "integrity verified");
-  } else {
-    qualifiers.push("integrity checks failed");
-  }
-  if (policy !== "none") {
-    qualifiers.push(policySatisfied
-      ? "trust policy satisfied"
-      : "trust policy FAILED: no signer matches the supplied allowlist");
-  }
-  if (!result.signerSet.bound) qualifiers.push("signer set unbound");
-
+  // The verdict block (spec/results.md "CLI reference renderer"). It is
+  // verdict-first and enumerates every qualifier: a VALID verdict must
+  // never be readable as more than what was actually checked, and a
+  // qualifier the operator never sees converts an honest weaker claim by
+  // the author into a false stronger claim by the tooling.
   out("");
-  out(`Result: ${ok ? "PASS" : "FAIL"} (${qualifiers.join("; ")})`);
+  if (result.verdict === "unsupported") {
+    const diagnosis = primaryDiagnosis(result);
+    out(`Result: UNSUPPORTED (${result.verdictReason}${diagnosis ? `: ${diagnosis}` : ""})`);
+  } else if (result.verdict === "invalid") {
+    out("Result: INVALID");
+  } else if (result.qualifiers.length === 0) {
+    out(`Result: VALID (no qualifiers; ${result.trustedSignerCount} distinct trusted signer` +
+        `${result.trustedSignerCount === 1 ? "" : "s"})`);
+  } else {
+    out("Result: VALID");
+    out("  qualifiers:");
+    for (const q of result.qualifiers) out(`    - ${qualifierLine(q, result)}`);
+  }
+  // Requested policies are the operator's demands, so their outcome
+  // belongs beside the verdict: exit 1 with a VALID verdict is only
+  // honest if the report says which demand went unmet. A capsule that
+  // never opened has no policy outcome to report — refusal exclusivity
+  // (spec/profiles.md, spec/versioning.md) keeps the diagnosis alone.
+  if (policy !== "none" && reader) {
+    out(`  trust policy: ${policySatisfied
+      ? "SATISFIED"
+      : "FAILED — allowlist provided but matched no signer"}`);
+  }
+  if (acceptVersions && versionPolicySatisfied !== null) {
+    out(`  version policy: ${versionPolicySatisfied
+      ? "SATISFIED"
+      : `FAILED — format version ${result.formatVersion.observed} is not in the declared accepted set`}`);
+  }
   return ok ? 0 : 1;
 }

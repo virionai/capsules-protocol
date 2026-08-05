@@ -2,7 +2,7 @@
   "meta": {
     "name": "profile-declaration",
     "spec_version": "0.7",
-    "description": "Language-neutral expected verifier outcomes for the profile declaration policy (spec/profiles.md). ABSENCE of a declaration in a 0.6/0.7 capsule means the default profile v0.6-suite/1.0, permanently; explicit declaration of the default is legal and exactly equivalent to absence — in both documents or, via normalization, in one. A declared (id, version) pair outside the verifier's table is refused at OPEN with unsupported_profile: a limitation of the verifier, never a defect of the capsule (expected.profile.status='unsupported', formatVersion.suite nulled — the suite fact would be false for a capsule governed by rules this verifier did not apply). Normalized manifest/envelope declarations that disagree are refused with profile_mismatch BEFORE any table lookup (a capsule defect: verdict 'invalid', never a verdict_reason). A present declaration violating the closed object shape or the identifier grammar is a MALFORMED document (invalid_manifest_shape), never 'unsupported'. The version gate runs FIRST: an unknown-version capsule carries the version diagnosis as its only error, with the profile declaration reported status 'unevaluated'. Every negative fixture is internally coherent under default rules except for the declaration under test — the declaration sits inside manifest_hash and the signed envelope payload — so a lane that skips the gate verifies it ok=true and fails this registry: each negative vector doubles as the anti-silent-downgrade pin.",
+    "description": "Language-neutral expected verifier outcomes for the profile declaration policy (spec/profiles.md). ABSENCE of a declaration in a 0.6/0.7 capsule means the default profile v0.6-suite/1.0, permanently; explicit declaration of the default is legal and exactly equivalent to absence — in both documents or, via normalization, in one. Manifest-side `params` are profile-defined freight, sealed by manifest_hash and uninterpreted by non-implementing readers: they never change the outcome, and the envelope copy never carries them. A declared (id, version) pair outside the verifier's table is refused at OPEN with unsupported_profile: a limitation of the verifier, never a defect of the capsule (expected.profile.status='unsupported', formatVersion.suite nulled — the suite fact would be false for a capsule governed by rules this verifier did not apply). Normalized manifest/envelope declarations that disagree are refused with profile_mismatch BEFORE any table lookup (a capsule defect: verdict 'invalid', never a verdict_reason). A present declaration violating the closed object shape or the identifier grammar is a MALFORMED document (invalid_manifest_shape), never 'unsupported'. The version gate runs FIRST: an unknown-version capsule carries the version diagnosis as its only error, with the profile declaration reported status 'unevaluated'. Every negative fixture is internally coherent under default rules except for the declaration under test — the declaration sits inside manifest_hash and the signed envelope payload — so a lane that skips the gate verifies it ok=true and fails this registry: each negative vector doubles as the anti-silent-downgrade pin.",
     "generator": "sdk-js/tools/generate-profile-declaration-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
@@ -53,6 +53,25 @@
         "profile": { "declared": true, "status": "default" }
       },
       "note": "Manifest declares the default, envelope silent. Pins the NORMALIZATION rule: absence means the default, so both readings agree and the capsule verifies — a truthful statement in one document is not a mismatch."
+    },
+    {
+      "name": "default-profile-with-params",
+      "capsule_file": "output/default-profile-with-params.capsule",
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "verdict_reason": null,
+        "profile": {
+          "observed": "v0.6-suite",
+          "observed_version": "1.0",
+          "declared": true,
+          "effective": "v0.6-suite",
+          "effective_version": "1.0",
+          "supported": true,
+          "status": "default"
+        }
+      },
+      "note": "The malleability escape hatch, pinned positive: manifest.format.profile carries params — an issuer URL plus deeply nested vendor freight under an x- key — while envelope.profile stays the bare { id, version } pair. Params are profile-DEFINED and uninterpreted by non-implementing readers, so a verifier that does not implement the profile still verifies the capsule: the equality rule compares (id, version) only, and params ride sealed inside manifest_hash rather than being parsed. Without this vector a lane could regress to rejecting or deep-comparing params and the registry would stay green."
     },
     {
       "name": "unsupported-vendor-profile",

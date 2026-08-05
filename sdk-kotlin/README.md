@@ -106,6 +106,33 @@ println("Signers: ${v.signers.map { "${it.role} trusted=${it.trusted}" }}")
 println("Program:\n${parsed.programMd}")
 ```
 
+Every result also carries the normalized verdict surface of
+[spec/results.md](../spec/results.md): `v.verdict`
+(`valid | invalid | unsupported`, with `ok == (verdict == "valid")`),
+`v.verdictReason` (non-null only for `unsupported` — an unknown format
+version, a declared profile this verifier does not implement, or an
+encrypted capsule this lane cannot process: a limitation of the
+verifier, never a claim the capsule is corrupt), and `v.qualifiers` —
+the weaker claims a *valid* capsule made honestly (unbound signer set,
+unbound actor set, unwalked empty chain, no allowlist consulted, and
+so on). **If you render a verdict, render the qualifiers beside it:**
+showing a bare "verified" for a capsule that carries qualifiers is the
+report lying by omission, and results.md names it non-conforming.
+
+```kotlin
+when (v.verdict) {
+    "valid" -> render("verified", qualifiers = v.qualifiers)
+    "unsupported" -> render("cannot verify here: ${v.verdictReason}")
+    else -> render("verification failed")
+}
+```
+
+`v.profile` reports the declared verification profile
+([spec/profiles.md](../spec/profiles.md)) — `status` `default` for the
+capsules every mainstream reader verifies, `effective` naming the rule
+set actually applied. `CapsuleVerifier.verify` also accepts the
+report-only host policies `acceptVersions` and `acceptProfiles`.
+
 ## Quick start — drop in "+ Capsule" UI
 
 ```kotlin

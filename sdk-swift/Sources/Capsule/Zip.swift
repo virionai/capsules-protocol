@@ -361,11 +361,22 @@ public enum CapsuleError: Error, CustomStringConvertible {
     /// corrupt". `observed` is the capsule's declared version; `status`
     /// is "unknown_newer" or "unknown_older".
     case unsupportedVersion(observed: String?, status: String, message: String)
+    /// The open-stage profile gate refused (spec/profiles.md). Carries
+    /// the whole classification so a fail-closed verify result can
+    /// populate its profile channel from the error alone. `status` is
+    /// "unsupported" (a limitation of the verifier), "mismatched" (the
+    /// two documents disagree about which rules bind the capsule), or
+    /// "invalid" (a present declaration violating the closed shape or
+    /// the identifier grammar — a malformed document, whose message is
+    /// field-path prefixed like every other shape refusal).
+    case profileRefused(status: String, observed: String?, observedVersion: String?,
+                        declared: Bool, message: String)
     public var description: String {
         switch self {
         case .malformed(let m): return "Capsule malformed: \(m)"
         case .verification(let m): return "Capsule verification failed: \(m)"
         case .unsupportedVersion(_, _, let m): return m
+        case .profileRefused(_, _, _, _, let m): return m
         }
     }
 }

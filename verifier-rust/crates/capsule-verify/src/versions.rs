@@ -64,8 +64,10 @@ impl VersionStatus {
     }
 }
 
-/// Parse `<major>.<minor>` (decimal, no leading zeros).
-fn parse_version(v: &str) -> Option<(u64, u64)> {
+/// Parse `<major>.<minor>` (decimal, no leading zeros). Shared with
+/// `profiles.rs`: spec/profiles.md gives profile versions the SAME grammar
+/// and parser as format versions, so there is one implementation of it.
+pub(crate) fn parse_version(v: &str) -> Option<(u64, u64)> {
     let (major, minor) = v.split_once('.')?;
     fn component(s: &str) -> Option<u64> {
         if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {

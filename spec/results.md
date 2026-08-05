@@ -246,14 +246,21 @@ Result: UNSUPPORTED (unsupported_version_newer: declared version 9.9 is newer th
 ```
 
 **Exit codes (both CLIs):** `0` = VALID and every requested policy
-satisfied; `1` = INVALID, UNSUPPORTED, or any requested-policy failure
-(a `--predecessor` linkage failure is a requested-policy failure,
-following the `--allowlist` pattern); `2` = usage/I-O/input-class
-errors only. There is no exit 3. Unknown-version capsules exit `1`
-(UNSUPPORTED), never `2` — an unknown era is a verdict about the
-capsule-verifier pair, not an operator error. (This corrects the Node
-CLI's historical exit-2 behavior; the change is observable by CI and
-noted in the CHANGELOG.)
+satisfied; `1` = INVALID, UNSUPPORTED, or any requested-policy failure;
+`2` = usage/I-O/input-class errors only. A policy is REQUESTED when the
+operator names it on the command line — `--allowlist` that matched no
+signer, `--accept-versions` that excludes the declared version, a
+`--predecessor` whose linkage was not established — and every one of
+them exits `1` beside a verdict that stays `valid`. This is not the
+verifier deciding trust: the result still reports per-signer `valid`
+and never `trusted` (`spec/trust.md`); the policy layer is the CLI,
+where the host is the operator who typed the flag. Rendering a failed
+policy and then exiting `0` is the failure mode this rule exists to
+prevent, and it MUST be identical in both CLIs. There is no exit 3.
+Unknown-version capsules exit `1` (UNSUPPORTED), never `2` — an unknown
+era is a verdict about the capsule-verifier pair, not an operator
+error. (This corrects the Node CLI's historical exit-2 behavior; the
+change is observable by CI and noted in the CHANGELOG.)
 
 ## Era treatment
 

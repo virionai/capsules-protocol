@@ -17,6 +17,10 @@
 //     identifier grammar is a MALFORMED document (invalid_manifest_shape).
 //   - The version gate runs first: an unknown-version capsule reports
 //     its declaration with profile status `unevaluated`.
+//   - `params` is optional, profile-defined, and UNINTERPRETED by
+//     non-implementing readers: arbitrary vendor freight in the manifest
+//     declaration never changes the outcome (it is sealed by
+//     `manifest_hash`, not parsed). The envelope copy carries none.
 //   - Only the reserved members have force: an `x-` manifest member
 //     with a profile-ish name is inert.
 //   - Declarations are sealed bytes: stripping one post-seal is tamper.
@@ -187,6 +191,20 @@ async function main() {
     ["absent-profile-is-default.capsule", await build({})],
     ["explicit-default-equivalent.capsule", explicitDefault],
     ["explicit-default-one-document.capsule", await build({ manifestProfile: DEFAULT_DECL })],
+    [
+      "default-profile-with-params.capsule",
+      await build({
+        manifestProfile: {
+          id: "v0.6-suite",
+          version: "1.0",
+          params: {
+            issuer: "https://capsules.test.example",
+            "x-acme-freight": { nested: { depth: 3, list: [1, "two", null, true] }, empty: {} },
+          },
+        },
+        envelopeProfile: DEFAULT_DECL,
+      }),
+    ],
     [
       "unsupported-vendor-profile.capsule",
       await build({ manifestProfile: VENDOR_DECL, envelopeProfile: VENDOR_DECL }),

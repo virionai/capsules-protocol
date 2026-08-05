@@ -53,11 +53,15 @@ incompatible wire changes ship as a new format version, as `0.7` did).
   implements the gate (`src/profiles.js`, reader open-stage gate,
   `acceptProfiles` report-only policy); reference builders emit absence
   and expose no profile parameter. Conformance:
-  `spec/vectors/profile-declaration/` (16 vectors, generator
+  `spec/vectors/profile-declaration/` (17 vectors, generator
   `generate-profile-declaration-fixtures.mjs`, `--check` in the
   harness) — every negative fixture is internally coherent under
   default rules except the declaration under test, so a lane that
-  skips the gate verifies it `ok: true` and fails the suite. No domain
+  skips the gate verifies it `ok: true` and fails the suite, and
+  `default-profile-with-params` pins the positive direction: manifest
+  `params` carrying nested vendor freight are sealed, uninterpreted,
+  and never change the outcome for a reader that does not implement
+  the profile. No domain
   strings added or changed; capsules already sealed verify
   byte-identically forever.
 
@@ -85,15 +89,16 @@ incompatible wire changes ship as a new format version, as `0.7` did).
   satisfied, a result *lacking* the member vocabulary-unaware rather
   than unqualified. results.md also fixes the canonical note strings
   (closing the Python `trusted=False` wording drift and the
-  three-lane-missing "matched no signer" advisory as lane ports land),
-  the renderer minimum substrings (a conforming renderer MUST NOT
+  three-lane-missing "matched no signer" advisory — both repaired in
+  this release, see Fixed), the renderer minimum substrings (a conforming renderer MUST NOT
   present a valid verdict without every qualifier rendered beside it),
   and the CLI contract: verdict-first Result block, exit codes 0 =
   valid + policies satisfied / 1 = invalid, unsupported, or any
   requested-policy failure / 2 = usage-I/O only — **which makes the
   Node CLI's unknown-version exit code 2 → 1 a documented breaking
-  change for CI when its renderer port lands** (the Rust CLI already
-  exits 1). sdk-js derives the surface in `verifier.js`. Conformance:
+  change for CI** (the Rust CLI already exited 1; the renderer port
+  ships in this release, see Changed). sdk-js derives the surface in
+  `verifier.js`. Conformance:
   `spec/vectors/result-vocabulary/` (8 vectors incl. both
   unsupported-version directions and the inner-L3-drops-
   `encrypted_outer_only` assertion; generator
@@ -106,9 +111,241 @@ incompatible wire changes ship as a new format version, as `0.7` did).
   `expected.verdict_reason` / `expected.qualifiers` (exact array,
   `x-` stripped) / `expected.profile.*` / `expected.suite` /
   per-vector `accept_versions` (ignore-if-absent for consumers that
-  predate them). The four non-JS lanes' ports are tracked as explicit
-  per-collection exemptions in `spec/vectors/registry.json` — never a
-  silent omission.
+  predate them). All five lanes consume both new collections, so the
+  per-collection registry exemptions the reference lane landed with are
+  replaced by named consumers; the one obligation no fixture can reach
+  (a writer MUST NOT seal a profile it does not implement — reference
+  builders expose no profile parameter, so the guard is unexpressible
+  rather than unimplemented) is recorded as an explicit consumer note in
+  `spec/vectors/registry.json`, never a silent omission.
+
+- **sdk-py implements both surfaces.** `capsule/profiles.py` mirrors
+  the reference lane (`SUPPORTED_PROFILES`/`DEFAULT_PROFILE`, the
+  identifier grammar, `classify_profile`, the cross-lane refusal
+  wording, and typed `ProfileError` subclasses that are `ValueError`s
+  like every other reader refusal, so callers keep one failure path);
+  `CapsuleReader.from_files` runs the open-stage gate after both
+  version-gate checks and `decrypt()` re-runs it for the L3 inner;
+  `verify_capsule` reports the `profile` channel on every result
+  (peek-populated on an open refusal, `unevaluated` under a version
+  refusal), applies refusal exclusivity and suite nulling, accepts the
+  report-only `accept_profiles` policy, and derives
+  `verdict`/`verdict_reason`/`qualifiers` on every result including
+  every fail-closed early return. Two parity repairs land with it: the
+  no-allowlist advisory's `trusted=False` wording becomes the canonical
+  `trusted=false` (P4), and the missing
+  `allowlist provided but matched no signer` advisory is emitted (P3) —
+  an unmatched allowlist must never get LESS warning than no policy at
+  all. `tests/test_spec_registry.py` consumes both new collections
+  (replacing this lane's registry exemptions) and asserts the surface
+  invariants on every vector of every collection it already read;
+  `tests/test_profile_declaration.py` and
+  `tests/test_result_vocabulary.py` mirror the reference lane's tests.
+
+- **sdk-kotlin implements both surfaces, and its plain-only refusal
+  becomes a reported capability limit.** `core/Profiles.kt` mirrors the
+  reference lane (`SUPPORTED`/`DEFAULT`, the identifier grammar,
+  `classify`, the cross-lane refusal wording, and typed
+  `ProfileException` subclasses that extend `CapsuleException`, so
+  callers keep one failure path); `CapsuleReader.parse` runs the
+  open-stage gate after both version-gate checks and BEFORE the cipher
+  refusal, so an alternate-profile capsule is refused for its profile
+  instead of being reported as unknown-cipher tamper noise;
+  `CapsuleVerifier.verify` reports the `profile` channel on every
+  result (peek-populated on an open refusal, `unevaluated` under a
+  version refusal), applies refusal exclusivity and suite nulling,
+  accepts the report-only `acceptProfiles` policy, and derives
+  `verdict`/`verdictReason`/`qualifiers` on every result including the
+  fail-closed early return. **This lane's refusal of encrypted capsules
+  is now `verdict: "unsupported"` with `verdict_reason:
+  "unsupported_capability"`** — it parses the container but has no
+  X25519/ChaCha20 path, and another conforming lane verifies the same
+  bytes, so the refusal is a limitation of the verifier and never a
+  claim that the capsule is corrupt; the conformance registry keeps its
+  `requires: ["encryption"]` gating (the registry gates what the lane
+  RUNS, the verdict is what its API reports). The missing
+  `allowlist provided but matched no signer` advisory is emitted (P3).
+  `SpecRegistryTest.kt` consumes both new collections (replacing this
+  lane's registry exemptions) and asserts the verdict surface and
+  profile channel on every vector of every collection it already read;
+  `ProfileGateTest.kt` and `ResultVocabularyTest.kt` pin the machinery
+  the fixtures cannot reach from a plain-only lane.
+
+- **sdk-swift implements both surfaces, including the L3 inner gate.**
+  `Sources/Capsule/Profiles.swift` mirrors the reference lane
+  (`supportedProfiles`/`defaultProfile`, the identifier grammar with
+  its `x-<vendor>-` fence, `classify` over the declaration dyad, the
+  cross-lane refusal wording, and a typed `CapsuleError.profileRefused`
+  carrying the whole classification, so a fail-closed result can
+  populate its channel from the error alone); `CapsuleReader.parse`
+  runs the open-stage gate after both version-gate checks, and because
+  `openInner` re-parses the decrypted inner package, an encrypted
+  capsule's inner declaration is gated independently at L3 — this lane
+  has the encryption path, and there is no inner/outer equality rule.
+  `CapsuleVerifier` reports the `profile` channel on every result
+  including open refusals, where the observed version and the
+  declaration are now both read best-effort from the STORED manifest
+  rather than only from the error, so an unsupported-profile refusal
+  reports the declaration it refused with the suite fact nulled.
+  Refusal exclusivity, the report-only `acceptProfiles` policy, and the
+  derived `verdict`/`verdictReason`/`qualifiers` land with it; this
+  lane's L3 aggregate derives its qualifiers from the facts it reports
+  — the outer's declarations, the inner walk's empty-chain fact (with
+  its canonical note carried along so note and qualifier cannot
+  disagree), and never `encrypted_outer_only`, since that result read
+  the content. The missing `allowlist provided but matched no signer`
+  advisory is emitted (P3). `SpecRegistryTests.swift` consumes both new
+  collections (replacing this lane's registry exemptions) and asserts
+  the `ok == (verdict == "valid")` invariant plus the verdict, profile
+  and suite expectations on every vector of every collection it already
+  read; `ProfileDeclarationTests.swift` and
+  `ResultVocabularyTests.swift` mirror the reference lane's unit pins.
+  The lane's own renderer follows: `CapsuleResults` carries the
+  renderer floor (one line per qualifier, each containing its normative
+  minimum substring; unknown entries surfaced verbatim), and
+  `CapsuleUI.VerifyBadge` renders the VERDICT — an `unsupported`
+  capsule no longer reads as a failure, and a valid verdict is no
+  longer shown as a bare "verified" with its qualifiers dropped.
+
+- **verifier-rust implements both surfaces (verify-only lane).**
+  `crates/capsule-verify/src/profiles.rs` mirrors the reference lane
+  (`SUPPORTED_PROFILES`/`DEFAULT_PROFILE`, the identifier grammar with
+  its `x-<vendor>-` fence — sharing versions.rs's `<major>.<minor>`
+  parser, since profile versions have the same grammar by definition —
+  the total `classify_profile` over the declaration dyad, and the
+  cross-lane refusal wording). `verify_capsule` runs the gate right
+  after the version gate, reading `format.profile` from the PRESERVED
+  manifest tree (the typed `FormatBlock` ignores unknown members, so
+  the declaration is only visible there), and refuses with a new
+  `TopErrorCategory::Profile` error: refusal exclusivity is total in
+  this lane because the gate returns before every recompute, and the
+  reported `format_version.suite` nulls with it. `VerifyResult` gains
+  `profile: ProfileCheck` — reported on every result, peek-populated on
+  the early-return paths and `unevaluated` under a version refusal —
+  plus the derived `verdict: Verdict` / `verdict_reason` /
+  `qualifiers`, all `#[serde(default)]` so archived pre-v0.7.1 result
+  JSON still deserializes into the fail-closed shape. `l3.rs` gates the
+  decrypted inner capsule independently after the inner version gate
+  (no inner/outer equality rule). `tests/spec_registry.rs` consumes
+  both new collections (replacing this lane's registry exemptions) and
+  asserts `expected.verdict`/`verdict_reason`/`qualifiers` (exact array
+  after stripping `x-` entries), `expected.profile.*` and
+  `expected.suite` on every vector of every collection it already read,
+  including the frozen v0.6 fixture and the per-vector `allowlist` /
+  `accept_versions` host configurations.
+
+### Changed
+
+- **BREAKING (CI-observable): the Node CLI's `capsule verify` renders
+  the normative Result block, and a capsule it cannot open now exits 1
+  instead of 2.** `verify` no longer pre-opens the reader and turns an
+  open refusal into an operator error; it feeds the bytes to the total
+  `verifyCapsule()` and renders the fail-closed result — which is what
+  the Rust `capsule-verify-cli` has always done. An unknown format
+  version, an unsupported declared profile, or a malformed container is
+  a verdict about the capsule/verifier pair (`Result: UNSUPPORTED
+  (<reason>: <diagnosis>)` / `Result: INVALID`, exit 1), never exit 2,
+  which now means only "this invocation was wrong or the file could not
+  be read" (parity bug P7 — the two CLIs disagreed on exactly the
+  diagnosis `spec/versioning.md` works hardest to keep distinct from
+  tamper). The Result line is verdict-first
+  (`VALID` / `INVALID` / `UNSUPPORTED`) and enumerates every qualifier
+  with the renderer minimum substrings of `spec/results.md`, replacing
+  the ad hoc `Result: PASS (…)` line that surfaced the unbound signer
+  set but silently dropped the unbound actor set, the unwalked empty
+  chain, and the encrypted-outer scope (P2); an unqualified pass states
+  its trust basis explicitly (`Result: VALID (no qualifiers; N distinct
+  trusted signers)`). Requested policies that went unmet print their
+  own line under the verdict, so exit 1 beside a `VALID` verdict always
+  says which demand failed. `--json` gains top-level `verdict`,
+  `verdict_reason`, `qualifiers`, the `profile` channel, and a
+  `version_policy` block; `format_version` and `profile` now use the
+  Rust CLI's member names (`accepted_by_policy`, `observed_version`,
+  `effective_version`) instead of the SDK's camelCase — a rename only
+  reachable now that a CLI flag can set the field at all. `ok` still
+  means integrity AND every requested policy, and still matches the
+  exit code.
+
+- **The Node CLI can express a version policy: `--accept-versions`
+  (repeatable).** `formatVersion.acceptedByPolicy` was implemented in
+  all five lanes and reachable from neither CLI — the only fact
+  `spec/versioning.md` mandates ("MUST NOT be silent") with no
+  reference renderer and no way for a vector to exercise it (parity bug
+  P1). The Node CLI now accepts `--accept-versions <major.minor>`,
+  passes it as the SDK's report-only policy, renders the
+  `version_not_accepted_by_policy` qualifier with the
+  `not in the declared accepted set` needle, and — following the
+  `--allowlist` precedent, since the CLI is the policy layer — fails
+  the run with exit 1 when the operator's declared set excludes the
+  capsule's version. Integrity is unaffected: `integrity_ok`/`verdict`
+  stay `true`/`valid`. `capsule inspect` additionally surfaces a raw
+  profile declaration when one is present.
+
+- **The Rust `capsule-verify-cli` renders the normative Result block and
+  gains `--accept-versions`.** `Result: PASS` / `Result: FAIL` become
+  the verdict-first block of `spec/results.md`: `Result: VALID` with
+  every qualifier enumerated in plain language beneath it (each
+  carrying its required minimum substring), `Result: VALID (no
+  qualifiers; N distinct trusted signers)` when there is nothing to
+  qualify, `Result: INVALID`, or `Result: UNSUPPORTED (<reason>:
+  <diagnosis>)`. Output additionally gains a `Profile:` header line
+  beside the level, and a `profile` check line when the gate refused.
+  `--accept-versions <major.minor>...` makes the host version policy
+  reachable in this CLI too (parity bug P1): reported, never decided —
+  integrity is unaffected and the verdict stays `valid` — but because
+  the policy was requested on the command line, an unmet one exits 1
+  (`0` still means VALID and every requested policy satisfied).
+  **Also CI-observable in this lane: `--allowlist` is a requested
+  policy too.** A run whose allowlist matched no signer printed
+  `allowlist matched no signer; trusted=false for all signers` and
+  then exited 0 — the operator's demand rendered and discarded, and a
+  silent disagreement with the Node CLI, which has failed that run
+  since F04. Both reference CLIs now apply the one rule
+  spec/results.md fixes: exit 0 iff VALID and every requested policy
+  satisfied. The verify RESULT is unchanged and still reports
+  per-signer `valid`, never `trusted` (spec/trust.md) — the policy
+  layer is the CLI, where the host is the operator who typed the flag.
+  Unknown-version capsules already exited 1, never 2, in this lane.
+  Anything grepping `Result: PASS` in this lane's output must move to
+  `Result: VALID`.
+
+### Fixed
+
+- **The five-lane reporting-parity ledger the results.md audit produced
+  — P1 through P7 — is closed.** Every one was a place where the same
+  capsule and the same host configuration produced a different report
+  depending on which lane read it, which is the failure mode
+  `spec/results.md` exists to end. **P1**: `accepted_by_policy` was
+  implemented in all five lanes and reachable from neither CLI — both
+  now take `--accept-versions`. **P2**: the Node CLI's Result line
+  surfaced the unbound signer set and dropped the unbound actor set,
+  the unwalked empty chain and the encrypted-outer scope, and the Rust
+  CLI's was a bare PASS/FAIL — both now render the normative
+  verdict-first block with every qualifier's required substring.
+  **P3**: the `allowlist provided but matched no signer` advisory
+  existed in only two of five lanes; sdk-py, sdk-swift and sdk-kotlin
+  emit it now, and `result-vocabulary/allowlist-no-match` pins it.
+  **P4**: sdk-py's no-allowlist advisory said `trusted=False` where the
+  other four said `trusted=false`; the canonical strings are fixed in
+  results.md and pinned by `notes_includes`. **P5**: the empty-chain
+  fact had three encodings across five lanes and no shared typed
+  surface — it is the `empty_chain_not_walked` qualifier now, pinned as
+  an exact array entry. **P6** was re-examined and needs no fix: the
+  *notes* were already byte-identical; only the per-lane `checks[]`
+  detail strings differ, and those are rendering, not vocabulary.
+  **P7**: the two CLIs disagreed on unknown-version capsules (exit 2
+  vs exit 1) — the diagnosis versioning.md works hardest to keep
+  distinct from tamper; both exit 1 now. Cross-lane evidence:
+  `spec/vectors/result-vocabulary/` and
+  `spec/vectors/profile-declaration/` are consumed by all five lanes
+  with `expected.qualifiers` compared as an exact array, so this class
+  of drift now fails CI rather than accumulating.
+  **P8 is deliberately not fixed here**: sdk-swift and sdk-kotlin still
+  expose a flat `checks[]` where sdk-js, sdk-py and verifier-rust
+  expose structured areas. The three new members are the first fully
+  shared typed surface; unifying the area structs is a field-NAME
+  change and is deferred to v0.8 planning with the rest of the legacy
+  naming (see ROADMAP, "Verifier result vocabulary").
 
 ## v0.7.0 — 2026-08-04
 

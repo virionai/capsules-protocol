@@ -23,11 +23,29 @@ from .manifest import (
     manifest_hash,
     signer_commitment_problems,
 )
+from .profiles import (
+    DEFAULT_PROFILE,
+    ProfileError,
+    classify_capsule_profile,
+    profile_mismatch_message,
+    unsupported_profile_message,
+)
 from .reader import CapsuleReader
-from .versions import SUITES, classify_version, unsupported_version_message
+from .versions import (
+    SUITES,
+    UnsupportedCapsuleVersionError,
+    classify_version,
+    unsupported_version_message,
+)
 from .zip_io import unpack_zip
 
 _SKILL_PATH_RE = re.compile(r"^skills/([^/]+)/(skill\.json|SKILL\.md)$")
+
+# Canonical cross-lane note strings (spec/results.md) that back the
+# qualifier derivations below. The chain-note markers double as the
+# derivational facts for empty_chain_not_walked / encrypted_outer_only.
+_EMPTY_CHAIN_NOTE = "empty chain: no events to walk; envelope anchors checked to be null instead"
+_DEFERRED_CHAIN_NOTE = "deferred to L3 (encrypted outer)"
 
 
 class _ContentIndexResult(TypedDict):
@@ -58,6 +76,30 @@ class _FormatVersionResult(TypedDict):
     accepted_by_policy: bool | None
 
 
+class _ProfileResult(TypedDict):
+    """The profile declaration channel (spec/profiles.md).
+
+    ``observed``/``observed_version`` report the declaration as read —
+    even on refusal (an unauthenticated observation, which is what lets
+    an auditor route the capsule to a capable verifier instead of
+    declaring it corrupt). ``effective``/``effective_version`` name the
+    profile actually applied (``v0.6-suite``/``1.0`` on every successful
+    default path — the absence rule made machine-visible); both are None
+    whenever no profile's rules were applied. ``status`` is the closed
+    vocabulary ``default | supported | unsupported | mismatched |
+    invalid | unevaluated | unread``.
+    """
+
+    observed: str | None
+    observed_version: str | None
+    declared: bool
+    effective: str | None
+    effective_version: str | None
+    supported: bool
+    status: str
+    accepted_by_policy: bool | None
+
+
 class _SkillTrustResult(TypedDict):
     """Derived skill classification (spec/trust.md "Skill trust").
 
@@ -77,6 +119,9 @@ class _SkillTrustResult(TypedDict):
 
 class VerifyResult(TypedDict):
     ok: bool
+    verdict: str
+    verdict_reason: str | None
+    qualifiers: list[str]
     level: str
     errors: list[str]
     chain: dict
@@ -85,6 +130,7 @@ class VerifyResult(TypedDict):
     signer_set: _SignerSetResult
     actor_set: _ActorSetResult
     format_version: _FormatVersionResult
+    profile: _ProfileResult
     skill_trust: _SkillTrustResult
     trusted_signer_count: int
     notes: list[str]
@@ -101,6 +147,20 @@ def _unread_format_version() -> _FormatVersionResult:
     }
 
 
+def _unread_profile() -> _ProfileResult:
+    """The unread (fail-closed) profile channel (spec/profiles.md)."""
+    return {
+        "observed": None,
+        "observed_version": None,
+        "declared": False,
+        "effective": None,
+        "effective_version": None,
+        "supported": False,
+        "status": "unread",
+        "accepted_by_policy": None,
+    }
+
+
 def _fail_closed(message: str, level: str) -> VerifyResult:
     """The documented fail-closed result: every channel present, nothing trusted."""
     return {
@@ -113,10 +173,77 @@ def _fail_closed(message: str, level: str) -> VerifyResult:
         "signer_set": {"bound": False, "ok": False, "errors": []},
         "actor_set": {"bound": False},
         "format_version": _unread_format_version(),
+        "profile": _unread_profile(),
         "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
         "notes": [],
     }
+
+
+def _derive_verdict(
+    result: VerifyResult,
+    *,
+    version_refusal: str | None = None,
+    allowlist_size: int | None = None,
+) -> VerifyResult:
+    """Derive the normalized verdict surface (spec/results.md).
+
+    ``verdict``, ``verdict_reason`` and ``qualifiers`` are report-only:
+    every member restates facts the result already carries, and
+    ``ok == (verdict == "valid")`` is an invariant. Mutates and returns
+    ``result``.
+
+    ``version_refusal`` is ``unknown_newer``/``unknown_older`` when the
+    refusal was an unsupported-version refusal the format_version channel
+    alone cannot show (the envelope-side refusal: the manifest's observed
+    version can be known while envelope.version is not).
+    ``allowlist_size`` is the effective (well-formed) allowlist entry
+    count, for the two host-relative trust qualifiers; only results that
+    can reach verdict "valid" need it.
+    """
+    version_status = version_refusal or result["format_version"]["status"]
+    reason: str | None = None
+    if version_status in ("unknown_newer", "unknown_older"):
+        # Refused because the verifier cannot understand what the capsule
+        # DECLARES — a different verifier may verify it. Not corruption.
+        verdict = "unsupported"
+        reason = (
+            "unsupported_version_older"
+            if version_status == "unknown_older"
+            else "unsupported_version_newer"
+        )
+    elif result["profile"]["status"] == "unsupported":
+        verdict = "unsupported"
+        reason = "unsupported_profile"
+    elif result["ok"] is True:
+        verdict = "valid"
+    else:
+        verdict = "invalid"
+
+    qualifiers: list[str] = []
+    if verdict == "valid":
+        # Spec-defined emission order (spec/results.md). Each entry is a
+        # pure restatement of one already-reported fact.
+        if result["signer_set"]["bound"] is False:
+            qualifiers.append("signer_set_unbound")
+        if result["actor_set"]["bound"] is False:
+            qualifiers.append("actor_set_unbound")
+        if result["chain"].get("note") == _EMPTY_CHAIN_NOTE:
+            qualifiers.append("empty_chain_not_walked")
+        if result["level"] == "L2" and result["chain"].get("note") == _DEFERRED_CHAIN_NOTE:
+            qualifiers.append("encrypted_outer_only")
+        if result["format_version"]["accepted_by_policy"] is False:
+            qualifiers.append("version_not_accepted_by_policy")
+        # Mutually exclusive by construction: no allowlist vs an allowlist
+        # that matched no distinct signer key.
+        if allowlist_size == 0:
+            qualifiers.append("trust_not_evaluated")
+        elif allowlist_size and result["trusted_signer_count"] == 0:
+            qualifiers.append("no_trusted_signer")
+    result["verdict"] = verdict
+    result["verdict_reason"] = reason
+    result["qualifiers"] = qualifiers
+    return result
 
 
 def _peek_format_version(files: dict) -> _FormatVersionResult:
@@ -144,12 +271,82 @@ def _peek_format_version(files: dict) -> _FormatVersionResult:
         return _unread_format_version()
 
 
+def _peek_profile(files: dict, err: Exception) -> _ProfileResult:
+    """Best-effort profile channel for a capsule the reader refused.
+
+    The observed declaration is a reported fact even on refusal
+    (spec/profiles.md obligation 8) — it is what lets an auditor route
+    the capsule to a capable verifier instead of declaring it corrupt.
+
+    A typed ProfileError carries its own classification. A version-gate
+    refusal reports the declaration with status "unevaluated" (read but
+    not classified: profile semantics are era-scoped, so an unknown era
+    means the declaration cannot be classified). Any other open failure
+    never reached the gate either: the channel stays at the fail-closed
+    "unread" default, with the declaration surfaced best-effort when the
+    documents parse.
+    """
+    if isinstance(err, ProfileError):
+        cls = err.classification
+        return {
+            "observed": cls["observed"],
+            "observed_version": cls["observed_version"],
+            "declared": cls["declared"],
+            "effective": None,
+            "effective_version": None,
+            "supported": False,
+            "status": cls["status"],
+            "accepted_by_policy": None,
+        }
+    import json as _json
+
+    observed: str | None = None
+    observed_version: str | None = None
+    declared = False
+    try:
+        manifest = _json.loads(files["manifest.json"])
+        fmt = manifest.get("format") if isinstance(manifest, dict) else None
+        decl = fmt.get("profile") if isinstance(fmt, dict) else None
+        declared = isinstance(fmt, dict) and "profile" in fmt
+        if isinstance(decl, dict):
+            observed = decl.get("id") if isinstance(decl.get("id"), str) else None
+            observed_version = (
+                decl.get("version") if isinstance(decl.get("version"), str) else None
+            )
+        if not declared:
+            try:
+                envelope = _json.loads(files["provenance/envelope.json"])
+                if isinstance(envelope, dict) and "profile" in envelope:
+                    declared = True
+                    e = envelope["profile"]
+                    if isinstance(e, dict):
+                        observed = e.get("id") if isinstance(e.get("id"), str) else None
+                        observed_version = (
+                            e.get("version") if isinstance(e.get("version"), str) else None
+                        )
+            except Exception:
+                pass  # envelope unreadable: the manifest-side observation stands
+    except Exception:
+        return _unread_profile()
+    return {
+        "observed": observed,
+        "observed_version": observed_version,
+        "declared": declared,
+        "effective": None,
+        "effective_version": None,
+        "supported": False,
+        "status": "unevaluated" if isinstance(err, UnsupportedCapsuleVersionError) else "unread",
+        "accepted_by_policy": None,
+    }
+
+
 def verify_capsule(
     reader,
     *,
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
     accept_versions: list | None = None,
+    accept_profiles: list | None = None,
 ) -> VerifyResult:
     """Verify a capsule.
 
@@ -163,20 +360,36 @@ def verify_capsule(
     with the underlying message in ``errors``.
 
     ``allowlist`` entries may be hex strings (any case) or 32 raw bytes.
+    ``accept_versions`` / ``accept_profiles`` are host policy: reported
+    in ``format_version.accepted_by_policy`` / ``profile
+    .accepted_by_policy``, never decided here.
+
+    The result also carries the normalized verdict surface
+    (spec/results.md): ``verdict`` (``valid``/``invalid``/
+    ``unsupported``, with ``ok == (verdict == "valid")`` an invariant),
+    ``verdict_reason`` (non-null iff ``unsupported`` — a limitation of
+    THIS verifier, not a defect of the capsule), and ``qualifiers`` (the
+    weaker-claim facts a renderer must not hide), all DERIVED from the
+    facts below.
     """
     level = "L3" if outer_envelope is not None else "L2"
     try:
-        return _verify_capsule_impl(
+        result = _verify_capsule_impl(
             reader,
             allowlist=allowlist,
             outer_envelope=outer_envelope,
             accept_versions=accept_versions,
+            accept_profiles=accept_profiles,
         )
     except Exception as e:
         # The docstring promises callers a result, not an exception, for
         # every input. Anything that escapes the checks below is a capsule
         # we could not fully evaluate, which is a verification failure.
-        return _fail_closed(f"verification failed: {type(e).__name__}: {e}", level)
+        result = _fail_closed(f"verification failed: {type(e).__name__}: {e}", level)
+    # Paths with refusal context (unsupported version/profile, the valid
+    # path with its allowlist) derive the verdict surface themselves;
+    # everything else is an ordinary failure.
+    return result if "verdict" in result else _derive_verdict(result)
 
 
 def _verify_capsule_impl(
@@ -185,6 +398,7 @@ def _verify_capsule_impl(
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
     accept_versions: list | None = None,
+    accept_profiles: list | None = None,
 ) -> VerifyResult:
     if isinstance(reader, (bytes, bytearray, memoryview)):
         try:
@@ -194,12 +408,26 @@ def _verify_capsule_impl(
         try:
             reader = CapsuleReader.from_files(files)
         except (ValueError, BadZipFile) as e:
-            # Report the observed version even when open is refused: an
-            # unknown-version refusal must stay distinguishable from
-            # tamper (spec/versioning.md).
+            # Report the observed version and profile declaration even
+            # when open is refused: an unknown-version or
+            # unsupported-profile refusal must stay distinguishable from
+            # tamper (spec/versioning.md, spec/profiles.md).
             failed = _fail_closed(f"capsule cannot be opened: {e}", "L2")
             failed["format_version"] = _peek_format_version(files)
-            return failed
+            failed["profile"] = _peek_profile(files, e)
+            if isinstance(e, ProfileError):
+                # Suite honesty (spec/profiles.md obligation 6): the suite
+                # fact is a statement about the rules governing THIS
+                # capsule; after a profile-gate refusal none is known.
+                failed["format_version"]["suite"] = None
+            return _derive_verdict(
+                failed,
+                # The envelope-side version refusal: the manifest's
+                # observed version can be known while envelope.version is
+                # not, so the format_version channel alone cannot carry
+                # the refusal class.
+                version_refusal=e.status if isinstance(e, UnsupportedCapsuleVersionError) else None,
+            )
     errors: list[str] = []
     notes: list[str] = []
     allow: set[str] = set()
@@ -220,6 +448,7 @@ def _verify_capsule_impl(
         "signer_set": {"bound": False, "ok": True, "errors": []},
         "actor_set": {"bound": False},
         "format_version": _unread_format_version(),
+        "profile": _unread_profile(),
         "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
         "notes": notes,
@@ -227,6 +456,23 @@ def _verify_capsule_impl(
 
     manifest = reader.manifest()
     envelope = reader.envelope()
+
+    # The observed profile declaration is a reported fact from here on.
+    # Until BOTH documents pass the version gate the declaration cannot be
+    # classified (the absence rule is era-keyed), so the channel starts
+    # "unevaluated" and the version-gate early returns below carry it
+    # as-is — the version diagnosis stays the only error.
+    observed_profile = classify_capsule_profile(manifest, envelope)
+    result["profile"] = {
+        "observed": observed_profile["observed"],
+        "observed_version": observed_profile["observed_version"],
+        "declared": observed_profile["declared"],
+        "effective": None,
+        "effective_version": None,
+        "supported": False,
+        "status": "unevaluated",
+        "accepted_by_policy": None,
+    }
 
     # Actor-set binding: like signer_commitment, PRESENCE BINDS, ABSENCE
     # REPORTS. A non-empty manifest.participants[] binds every chain event
@@ -300,7 +546,14 @@ def _verify_capsule_impl(
                     "envelope.version", envelope.get("version"), env_version_class["status"]
                 )
             )
-        return result
+        # The format_version channel reports the MANIFEST's observed
+        # version (possibly known); the refusal class rides explicitly.
+        return _derive_verdict(
+            result,
+            version_refusal=(
+                None if env_version_class["status"] == "invalid" else env_version_class["status"]
+            ),
+        )
     if envelope.get("version") != capsule_version:
         # Two KNOWN versions that disagree: the capsule is ambiguous
         # about which era's rules bind it. Fail closed before applying
@@ -310,6 +563,63 @@ def _verify_capsule_impl(
             f"manifest.format.version {capsule_version!r}"
         )
         return result
+
+    # Profile gate (spec/profiles.md): version gate first, profile gate
+    # second, nothing else until both pass. CapsuleReader enforces this at
+    # open; re-deriving it here keeps verification total over
+    # hand-constructed readers and pins refusal exclusivity — after a
+    # profile refusal the profile diagnosis is the only error carried and
+    # every other channel holds its fail-closed default.
+    profile_class = classify_capsule_profile(manifest, envelope)
+    result["profile"] = {
+        "observed": profile_class["observed"],
+        "observed_version": profile_class["observed_version"],
+        "declared": profile_class["declared"],
+        "effective": profile_class["effective"],
+        "effective_version": profile_class["effective_version"],
+        "supported": profile_class["supported"],
+        "status": profile_class["status"],
+        "accepted_by_policy": None,
+    }
+    if profile_class["status"] not in ("default", "supported"):
+        if profile_class["status"] == "invalid":
+            errors.extend(profile_class["problems"])
+        elif profile_class["status"] == "mismatched":
+            errors.append(
+                profile_mismatch_message(
+                    profile_class["normalized"]["manifest"],
+                    profile_class["normalized"]["envelope"],
+                )
+            )
+        else:
+            errors.append(
+                unsupported_profile_message(
+                    profile_class["observed"], profile_class["observed_version"]
+                )
+            )
+        # Suite honesty: the suite fact is a statement about the rules
+        # governing THIS capsule; after a profile-gate refusal none is
+        # known.
+        result["format_version"]["suite"] = None
+        return _derive_verdict(result)
+    if (
+        profile_class["effective"] != DEFAULT_PROFILE["id"]
+        or profile_class["effective_version"] != DEFAULT_PROFILE["version"]
+    ):
+        # Unreachable while the reference table holds one row; kept so a
+        # grown table cannot report the default suite under alternate
+        # rules.
+        result["format_version"]["suite"] = None
+    # Host policy: DECLARED accepted profiles. Reported, never decided —
+    # same shape as accept_versions and signer allowlists.
+    if accept_profiles is not None:
+        result["profile"]["accepted_by_policy"] = profile_class["effective"] in accept_profiles
+        if not result["profile"]["accepted_by_policy"]:
+            notes.append(
+                f"host policy: effective profile {profile_class['effective']}/"
+                f"{profile_class['effective_version']} is not in the declared accepted set "
+                f"{sorted(accept_profiles)!r}"
+            )
     # Host policy: DECLARED accepted versions. Reported, never decided —
     # integrity ok is unaffected, exactly as with signer allowlists.
     if accept_versions is not None:
@@ -504,12 +814,8 @@ def _verify_capsule_impl(
             # all three anchor claims MUST be null. Claiming an anchor
             # over an empty chain is the capsule lying about its own
             # bytes — rejected fail-closed (spec/chain.md "Empty chains").
-            empty_note = (
-                "empty chain: no events to walk; "
-                "envelope anchors checked to be null instead"
-            )
-            result["chain"] = {"ok": True, "errors": [], "note": empty_note}
-            notes.append(empty_note)
+            result["chain"] = {"ok": True, "errors": [], "note": _EMPTY_CHAIN_NOTE}
+            notes.append(_EMPTY_CHAIN_NOTE)
             if envelope.get("first_event_hash") is not None:
                 errors.append(
                     "envelope.first_event_hash must be null when the chain has no "
@@ -545,11 +851,7 @@ def _verify_capsule_impl(
                 )
     else:
         # Encrypted outer — chain verification deferred to L3.
-        result["chain"] = {
-            "ok": True,
-            "errors": [],
-            "note": "deferred to L3 (encrypted outer)",
-        }
+        result["chain"] = {"ok": True, "errors": [], "note": _DEFERRED_CHAIN_NOTE}
 
     # Envelope signatures
     env_result = verify_envelope_signatures(envelope)
@@ -669,10 +971,15 @@ def _verify_capsule_impl(
             "has no valid envelope signature with role 'originator'"
         )
 
+    # Advisory notes: a PASS with trusted=false is never silent about why.
+    # The unmatched case must never get LESS warning than the no-policy
+    # case (canonical wording, spec/results.md).
     if not allow:
         notes.append(
-            "no allowlist provided; trusted=False for all signers regardless of signature validity"
+            "no allowlist provided; trusted=false for all signers regardless of signature validity"
         )
+    elif result["trusted_signer_count"] == 0:
+        notes.append("allowlist provided but matched no signer; trusted=false for all signers")
 
     # L3: cross-check inner envelope against the supplied outer envelope.
     if outer_envelope is not None:
@@ -725,4 +1032,7 @@ def _verify_capsule_impl(
             else "unsigned"
         )
     result["skill_trust"] = {"capsule_signed": capsule_signed, "skills": skill_map}
-    return result
+
+    # Normalized verdict surface (spec/results.md): derived last, from the
+    # facts above — the only path that can reach verdict "valid".
+    return _derive_verdict(result, allowlist_size=len(allow))

@@ -85,6 +85,38 @@ print("Signers: \(v.signers.map { "\($0.role) trusted=\($0.trusted)" })")
 print("Program:\n\(parsed.programMd)")
 ```
 
+## The verdict surface: what a report must not hide
+
+Every result also carries the normalized vocabulary of
+[../spec/results.md](../spec/results.md), derived from the facts above:
+
+```swift
+v.verdict        // "valid" | "invalid" | "unsupported"
+v.verdictReason  // non-nil iff "unsupported": unsupported_version_newer,
+                 // unsupported_version_older, unsupported_profile,
+                 // unsupported_capability
+v.qualifiers     // e.g. ["signer_set_unbound", "trust_not_evaluated"]
+```
+
+`v.ok == (v.verdict == "valid")` is an invariant. `"unsupported"` names a
+limitation of *this verifier* — an unknown era, or a profile it does not
+implement — never corruption: route the capsule to an implementation
+that has the rules. `qualifiers` names the weaker claims a `valid`
+verdict rests on (an unbound signer set, an unwalked empty chain, an
+unread encrypted body, no allowlist consulted); show every one of them
+beside the verdict, so "verified" never means more to a reader than the
+capsule actually claimed.
+
+`v.profile` is the profile declaration channel
+([../spec/profiles.md](../spec/profiles.md)): `observed` /
+`observedVersion` (the declaration as read, reported even when the
+capsule was refused), `declared`, `effective` / `effectiveVersion` (the
+profile actually applied — absence means `v0.6-suite`/`1.0`,
+permanently), `supported`, `status`, and `acceptedByPolicy`. Host policy
+is reported and never decided: `CapsuleVerifier.verify(bytes,
+acceptVersions: [...], acceptProfiles: [...])` fills in the two
+accepted-by-policy facts without changing `ok`.
+
 ## Quick start — seal + open an encrypted capsule
 
 ```swift
@@ -202,9 +234,13 @@ shared protocol keeps those adapters thin.
 - `Capsule`: JCS, Crypto (CryptoKit) — SHA-256, Ed25519, `X25519KeyPair`,
   `HKDF`, `ChaCha20Poly1305`, `Random` — Zip (deterministic STORED),
   Chain, Manifest, Envelope, Builder (plain + multi-recipient encrypted
-  `seal(recipients:)`), Reader (`parse` + `openInner`), Verifier (L2
-  outer-only + L3 decrypted-content), JCSValue value type with
-  literal-syntax sugar (`jobj`, `jarr`).
+  `seal(recipients:)`), Reader (`parse` + `openInner`), Profiles (the
+  supported-profile table + the open-stage profile gate, run again for
+  the decrypted inner package), Verifier (L2 outer-only + L3
+  decrypted-content, with the verdict/qualifier surface and the profile
+  channel), `CapsuleResults` (the renderer floor: one line per
+  qualifier, each carrying its normative minimum substring), JCSValue
+  value type with literal-syntax sugar (`jobj`, `jarr`).
 - `CapsuleSkills`: `CapsuleSkill` model, `ParsedCapsule.skills()`
   extension, trust-tier semantics.
 - `CapsuleLLM`: `CapsuleLocalLLM` + `CapsuleSkillRuntime` protocols,

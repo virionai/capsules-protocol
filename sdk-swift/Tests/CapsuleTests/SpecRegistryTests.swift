@@ -16,6 +16,13 @@
 //   - version-compat/vectors.json     (version gates: known opens and
 //                                      reports; unknown fails closed with
 //                                      a non-tamper diagnosis)
+//   - profile-declaration/vectors.json (the profile gate: absence means
+//                                      the era default, mismatch and
+//                                      unsupported and malformed stay
+//                                      three distinguishable facts)
+//   - result-vocabulary/vectors.json  (the normalized verdict surface:
+//                                      verdict / verdict_reason /
+//                                      qualifiers)
 //   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
@@ -79,8 +86,10 @@ final class SpecRegistryTests: XCTestCase {
         case "invalid_manifest_shape":
             // Every manifest shape error from CapsuleReader's validation is
             // prefixed with the offending field path (or names manifest.json
-            // itself), mirroring the JS reference's validateManifestShape.
-            return ["manifest."]
+            // itself), mirroring the JS reference's validateManifestShape —
+            // as is every profile-declaration shape error, which can name
+            // either document (spec/profiles.md: the closed profile object).
+            return ["manifest.", "envelope."]
         case "duplicate_entry":
             return ["duplicate entry"]
         case "unsafe_path":
@@ -100,6 +109,14 @@ final class SpecRegistryTests: XCTestCase {
             return ["newer than this verifier supports"]
         case "unsupported_version_older":
             return ["older than any version this verifier supports"]
+        // spec/profiles.md: a declared profile outside this verifier's
+        // table is a LIMITATION OF THE VERIFIER (never corruption);
+        // disagreeing manifest/envelope declarations are a capsule
+        // defect, diagnosed before any table lookup.
+        case "unsupported_profile":
+            return ["is not supported by this verifier"]
+        case "profile_mismatch":
+            return ["envelope.profile does not match manifest.format.profile"]
         default:
             XCTFail("unknown open-stage reason \(reason)")
             return []
@@ -131,6 +148,79 @@ final class SpecRegistryTests: XCTestCase {
         v.checks.map { "\($0.name) \($0.detail)" }.joined(separator: " ")
     }
 
+    /// The NORMALIZED result surface (spec/results.md) and the profile
+    /// channel (spec/profiles.md). Asserted on verify-stage results and,
+    /// for open-stage vectors, on the fail-closed verify result: the
+    /// observed facts and the derived verdict survive a refusal, which
+    /// is what keeps "this verifier is too old / lacks that profile"
+    /// distinguishable from "this capsule is corrupt" by machine.
+    ///
+    /// Every key is read with `keys.contains` rather than an optional
+    /// cast, because JSON `null` and an absent key are different
+    /// assertions here (`verdict_reason: null` pins that no reason is
+    /// carried; an absent key pins nothing).
+    private func assertResultVocabulary(_ name: String,
+                                        _ expected: [String: Any],
+                                        _ v: CapsuleVerification) {
+        if let want = expected["verdict"] as? String {
+            XCTAssertEqual(v.verdict, want, "\(name): expected verdict=\(want)")
+        }
+        if expected.keys.contains("verdict_reason") {
+            let want = expected["verdict_reason"] as? String
+            XCTAssertEqual(v.verdictReason, want,
+                           "\(name): expected verdict_reason=\(want ?? "null")")
+        }
+        // EXACT array in the spec-defined order, compared after
+        // stripping x- vendor entries: cross-lane emission cannot drift
+        // by omission or by invention.
+        if let want = expected["qualifiers"] as? [String] {
+            XCTAssertEqual(v.qualifiers.filter { !$0.hasPrefix("x-") }, want,
+                           "\(name): expected qualifiers=\(want), got \(v.qualifiers)")
+        }
+        if expected.keys.contains("observed_profile") {
+            XCTAssertEqual(v.profile.observed, expected["observed_profile"] as? String,
+                           "\(name): expected profile.observed")
+        }
+        if expected.keys.contains("observed_profile_version") {
+            XCTAssertEqual(v.profile.observedVersion,
+                           expected["observed_profile_version"] as? String,
+                           "\(name): expected profile.observedVersion")
+        }
+        // The suite fact nulls under any non-default effective profile —
+        // reporting v0.6 about rules this verifier did not apply would
+        // be a false fact on the result.
+        if expected.keys.contains("suite") {
+            XCTAssertEqual(v.formatVersion.suite, expected["suite"] as? String,
+                           "\(name): expected formatVersion.suite")
+        }
+        guard let want = expected["profile"] as? [String: Any] else { return }
+        if want.keys.contains("observed") {
+            XCTAssertEqual(v.profile.observed, want["observed"] as? String,
+                           "\(name): expected profile.observed")
+        }
+        if want.keys.contains("observed_version") {
+            XCTAssertEqual(v.profile.observedVersion, want["observed_version"] as? String,
+                           "\(name): expected profile.observed_version")
+        }
+        if let declared = want["declared"] as? Bool {
+            XCTAssertEqual(v.profile.declared, declared, "\(name): expected profile.declared")
+        }
+        if want.keys.contains("effective") {
+            XCTAssertEqual(v.profile.effective, want["effective"] as? String,
+                           "\(name): expected profile.effective")
+        }
+        if want.keys.contains("effective_version") {
+            XCTAssertEqual(v.profile.effectiveVersion, want["effective_version"] as? String,
+                           "\(name): expected profile.effective_version")
+        }
+        if let supported = want["supported"] as? Bool {
+            XCTAssertEqual(v.profile.supported, supported, "\(name): expected profile.supported")
+        }
+        if let status = want["status"] as? String {
+            XCTAssertEqual(v.profile.status, status, "\(name): expected profile.status")
+        }
+    }
+
     private func assertVerifyOutcome(_ name: String,
                                      _ expected: [String: Any],
                                      _ v: CapsuleVerification) {
@@ -140,6 +230,12 @@ final class SpecRegistryTests: XCTestCase {
             "\(name): expected ok=\(expectedOk); failing checks: " +
             v.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" }.joined(separator: ", ")
         )
+        // spec/results.md: ok and the derived verdict are the same fact
+        // under two names, in every lane, on every result.
+        XCTAssertEqual(v.ok, v.verdict == "valid",
+                       "\(name): ok == (verdict == 'valid') is an invariant; got "
+                       + "ok=\(v.ok), verdict=\(v.verdict)")
+        assertResultVocabulary(name, expected, v)
         for area in (expected["failing"] as? [String]) ?? [] {
             guard let checkName = Self.areaCheck[area] else {
                 XCTFail("\(name): unknown failing area \(area)")
@@ -463,6 +559,11 @@ final class SpecRegistryTests: XCTestCase {
                     "\(name): expected reason \(reason) (any of \(needles)); got \(err)"
                 )
                 XCTAssertFalse(v.ok, "\(name): open-stage fixture must not verify")
+                // The refusal still carries a derived verdict: an
+                // unknown era is "unsupported" (a limitation of this
+                // verifier), a grammar violation is "invalid" (a defect
+                // of the capsule).
+                assertResultVocabulary(name, expected, v)
             } else {
                 assertVerifyOutcome(name, expected, v)
             }
@@ -475,6 +576,140 @@ final class SpecRegistryTests: XCTestCase {
                     "\(name): expected formatVersion.observed=\(observed)"
                 )
             }
+        }
+    }
+
+    // MARK: - profile-declaration/vectors.json
+
+    /// spec/profiles.md. ABSENCE of a declaration in a 0.6/0.7 capsule
+    /// means the default profile v0.6-suite/1.0, permanently; declaring
+    /// the default explicitly is legal and exactly equivalent. A
+    /// declared (id, version) outside this verifier's table is refused
+    /// at OPEN as a LIMITATION OF THE VERIFIER (`unsupported_profile`,
+    /// verdict "unsupported"), disagreeing declarations as a capsule
+    /// defect (`profile_mismatch`, verdict "invalid", never a
+    /// verdict_reason), a shape or grammar violation as a malformed
+    /// document — three facts, three remediations, kept distinguishable.
+    ///
+    /// Every negative fixture is internally coherent under default rules
+    /// EXCEPT the declaration under test (which is inside manifest_hash
+    /// and the signed envelope payload), so a lane that skips the gate
+    /// verifies it ok=true and fails here: each negative vector doubles
+    /// as the anti-silent-downgrade pin.
+    func testProfileDeclarationRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("profile-declaration/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "profile-declaration registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            let v = CapsuleVerifier.verify(bytes, allowlist: keys)
+
+            if (expected["stage"] as? String) == "open" {
+                let reason = try XCTUnwrap(expected["reason"] as? String, "\(name): reason")
+                var thrown: Error?
+                do { _ = try CapsuleReader.parse(bytes) } catch { thrown = error }
+                let err = try XCTUnwrap(thrown, "\(name): reader must refuse this capsule")
+                let needles = openReasonNeedles(reason)
+                XCTAssertTrue(
+                    needles.contains(where: { "\(err)".contains($0) }),
+                    "\(name): expected reason \(reason) (any of \(needles)); got \(err)"
+                )
+                XCTAssertFalse(v.ok, "\(name): open-stage fixture must not verify")
+                assertResultVocabulary(name, expected, v)
+            } else {
+                assertVerifyOutcome(name, expected, v)
+            }
+            if let observed = expected["observed_version"] as? String {
+                XCTAssertEqual(v.formatVersion.observed, observed,
+                               "\(name): expected formatVersion.observed=\(observed)")
+            }
+        }
+    }
+
+    // MARK: - result-vocabulary/vectors.json
+
+    /// spec/results.md. The derived verdict, its reason channel, and the
+    /// qualifier vocabulary — the weaker-claim facts that MUST reach a
+    /// renderer beside a valid verdict. Several vectors verify the SAME
+    /// capsule bytes under different host configurations (per-vector
+    /// allowlist, accept_versions): the host-relative qualifiers are
+    /// facts about THIS verification, which is exactly why they can
+    /// never be capsule members.
+    func testResultVocabularyRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("result-vocabulary/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keysDoc = try loadJSON(
+            base.appendingPathComponent(try XCTUnwrap(doc["keys_file"] as? String))
+                .standardizedFileURL
+        )
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "result-vocabulary registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            for req in (vector["requires"] as? [String]) ?? [] {
+                XCTAssertTrue(Self.knownRequirements.contains(req),
+                              "\(name): unknown requirement \(req)")
+            }
+            var keys: Set<String> = []
+            for keyName in (vector["allowlist"] as? [String]) ?? [] {
+                let pk = (keysDoc[keyName] as? [String: Any])?["publicKey"] as? String
+                keys.insert(try XCTUnwrap(pk, "\(name): allowlist entry \(keyName) not in keys_file"))
+            }
+            let acceptVersions = (vector["accept_versions"] as? [String]).map { Set($0) }
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            let v = CapsuleVerifier.verify(bytes, allowlist: keys, acceptVersions: acceptVersions)
+
+            if (expected["stage"] as? String) == "open" {
+                let reason = try XCTUnwrap(expected["reason"] as? String, "\(name): reason")
+                var thrown: Error?
+                do { _ = try CapsuleReader.parse(bytes) } catch { thrown = error }
+                let err = try XCTUnwrap(thrown, "\(name): reader must refuse this capsule")
+                let needles = openReasonNeedles(reason)
+                XCTAssertTrue(
+                    needles.contains(where: { "\(err)".contains($0) }),
+                    "\(name): expected reason \(reason) (any of \(needles)); got \(err)"
+                )
+                XCTAssertFalse(v.ok, "\(name): open-stage fixture must not verify")
+                assertResultVocabulary(name, expected, v)
+            } else {
+                assertVerifyOutcome(name, expected, v)
+            }
+            if let observed = expected["observed_version"] as? String {
+                XCTAssertEqual(v.formatVersion.observed, observed,
+                               "\(name): expected formatVersion.observed=\(observed)")
+            }
+
+            // encrypted_outer_only is PER-RESULT, not per-capsule: this
+            // lane's L3 surface is the aggregate over the outer plus the
+            // decrypted inner, and it read the content — so the
+            // qualifier must be gone from it.
+            guard let keyName = expected["decryptable_with"] as? String else { continue }
+            let pair = try XCTUnwrap(keysDoc[keyName] as? [String: Any],
+                                     "\(name): keys_file has no keypair \(keyName)")
+            let l3 = CapsuleVerifier.verify(
+                bytes,
+                recipientPrivateKey: Bytes.fromHex(try XCTUnwrap(pair["privateKey"] as? String)),
+                recipientPublicKey: Bytes.fromHex(try XCTUnwrap(pair["publicKey"] as? String)),
+                allowlist: keys
+            )
+            XCTAssertTrue(
+                l3.ok,
+                "\(name): L3 verification must succeed; failing: "
+                + l3.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" }.joined(separator: ", ")
+            )
+            XCTAssertFalse(
+                l3.qualifiers.contains("encrypted_outer_only"),
+                "\(name): the L3 result must not carry encrypted_outer_only; got \(l3.qualifiers)"
+            )
         }
     }
 

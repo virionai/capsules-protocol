@@ -72,23 +72,46 @@ public struct AddCapsuleButton: View {
 }
 
 /// Compact verification badge a host can place beside an opened capsule.
+///
+/// The badge renders the VERDICT, not just `ok` (spec/results.md): an
+/// `unsupported` capsule is a limitation of this verifier — another
+/// implementation may verify the same bytes — so it never reads as a
+/// failure. And a valid verdict is never presented without every
+/// qualifier beside it: a weaker claim the author made honestly must
+/// not become a stronger claim the tooling makes falsely.
 public struct VerifyBadge: View {
     public let verification: CapsuleVerification
     public init(verification: CapsuleVerification) { self.verification = verification }
-    public var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: verification.ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(verification.ok ? Color.green : Color.red)
-            Text(verification.ok
-                 ? (verification.trustedSignerCount > 0 ? "verified · trusted" : "verified")
-                 : "verification failed")
-                .font(.caption.bold())
+
+    private var tint: Color {
+        switch verification.verdict {
+        case "valid": return .green
+        case "unsupported": return .orange
+        default: return .red
         }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(
-            Capsule().fill(
-                (verification.ok ? Color.green : Color.red).opacity(0.12)
-            )
-        )
+    }
+
+    private var symbol: String {
+        switch verification.verdict {
+        case "valid": return "checkmark.seal.fill"
+        case "unsupported": return "questionmark.circle.fill"
+        default: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).foregroundStyle(tint)
+                Text(CapsuleResults.headline(verification)).font(.caption.bold())
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            ForEach(verification.qualifiers, id: \.self) { qualifier in
+                Text("· " + CapsuleResults.rendering(of: qualifier))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }

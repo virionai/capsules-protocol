@@ -19,6 +19,11 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
                                      pith_normalized_fields marker verify)
   - version-compat/vectors.json     (version gates: known opens, unknown fails
                                      closed with a non-tamper diagnosis)
+  - profile-declaration/vectors.json (the profile gate: absence means the
+                                     default profile, declared alternates
+                                     fail closed as a verifier limitation)
+  - result-vocabulary/vectors.json  (the normalized verdict surface:
+                                     verdict / verdict_reason / qualifiers)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -61,6 +66,8 @@ IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
 PITH_AUTHORING = VECTORS / "pith-authoring" / "vectors.json"
 VERSION_COMPAT = VECTORS / "version-compat" / "vectors.json"
+PROFILE_DECLARATION = VECTORS / "profile-declaration" / "vectors.json"
+RESULT_VOCABULARY = VECTORS / "result-vocabulary" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
 IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate", "duplicate_member"}
@@ -72,8 +79,10 @@ OPEN_REASON_PATTERNS = {
     "missing_required_file": r"missing (manifest\.json|provenance/envelope\.json)",
     "invalid_json": r"parse",
     # Every manifest shape error from reader._validate_manifest_shape is
-    # prefixed with the offending field path.
-    "invalid_manifest_shape": r"^manifest\.",
+    # prefixed with the offending field path — as is every profile
+    # declaration shape error, which can name either document
+    # (spec/profiles.md: the closed profile object).
+    "invalid_manifest_shape": r"^(manifest|envelope)\.",
     "duplicate_entry": r"duplicate entry",
     "unsafe_path": r"(parent traversal|absolute)",
     "unsupported_compression": r"only STORED",
@@ -84,7 +93,26 @@ OPEN_REASON_PATTERNS = {
     # DISTINCT from malformation or tampering.
     "unsupported_version_newer": r"newer than this verifier supports",
     "unsupported_version_older": r"older than any version this verifier supports",
+    # spec/profiles.md: a declared profile outside the verifier's table is
+    # a LIMITATION OF THE VERIFIER (never corruption); disagreeing
+    # manifest/envelope declarations are a capsule defect, diagnosed
+    # before any table lookup.
+    "unsupported_profile": r"is not supported by this verifier",
+    "profile_mismatch": r"envelope\.profile does not match manifest\.format\.profile",
 }
+
+# expected.profile sub-assertion keys (spec/profiles.md). This lane's
+# profile channel is snake_case throughout, so the registry's wire names
+# ARE the member names.
+PROFILE_EXPECTED_KEYS = (
+    "observed",
+    "observed_version",
+    "declared",
+    "effective",
+    "effective_version",
+    "supported",
+    "status",
+)
 
 # Per-lane mapping of the registry's normative verify-stage reason
 # categories (semantic-binding/vectors.json) onto this SDK's error strings.
@@ -125,6 +153,25 @@ def _allowlist(doc: dict, base: pathlib.Path) -> list[str]:
     return []
 
 
+def _vector_allowlist(doc: dict, vector: dict, base: pathlib.Path) -> list[str]:
+    """The trust configuration for ONE vector.
+
+    A vector may pin its own: ``allowlist`` names keypairs in the
+    collection's keys_file (``[]`` = verify with no allowlist). The
+    host-relative facts (skill trust, the two trust qualifiers) are facts
+    about THIS verification, so the same capsule bytes appear under
+    several configurations — which a doc-level allowlist cannot express.
+    """
+    if not isinstance(vector.get("allowlist"), list):
+        return _allowlist(doc, base)
+    keys = _load((base / doc["keys_file"]).resolve())
+    out = []
+    for name in vector["allowlist"]:
+        assert name in keys, f"{vector['name']}: allowlist entry {name!r} not in keys_file"
+        out.append(keys[name]["publicKey"])
+    return out
+
+
 def _collection_params(path: pathlib.Path):
     """Load an outcome collection, failing LOUDLY on absence or emptiness.
 
@@ -149,8 +196,101 @@ def _error_haystack(result: dict) -> str:
     return " ".join(parts)
 
 
+def _assert_result_vocabulary(name: str, expected: dict, result: dict) -> None:
+    """The normalized verdict surface + profile channel on ANY result.
+
+    spec/results.md: ``verdict``/``verdict_reason``/``qualifiers`` are
+    derived from facts the result already carries, so their invariants
+    hold on every vector in every collection and are asserted
+    unconditionally; the per-vector pins (exact qualifier array after
+    stripping ``x-`` vendor entries, profile channel members, the suite
+    fact) are asserted when the vector declares them.
+    """
+    assert result["verdict"] in ("valid", "invalid", "unsupported"), (
+        f"{name}: verdict {result['verdict']!r} outside the closed vocabulary"
+    )
+    assert (result["verdict"] == "valid") is result["ok"], (
+        f"{name}: ok == (verdict == 'valid') is an invariant; got ok={result['ok']}, "
+        f"verdict={result['verdict']!r}"
+    )
+    assert (result["verdict_reason"] is not None) == (result["verdict"] == "unsupported"), (
+        f"{name}: verdict_reason is non-null iff verdict is 'unsupported'; got "
+        f"verdict={result['verdict']!r}, verdict_reason={result['verdict_reason']!r}"
+    )
+    assert result["verdict"] == "valid" or result["qualifiers"] == [], (
+        f"{name}: qualifiers only ever qualify a VALID verdict; got {result['qualifiers']!r}"
+    )
+
+    if "verdict" in expected:
+        assert result["verdict"] == expected["verdict"], (
+            f"{name}: expected verdict={expected['verdict']!r}, got {result['verdict']!r}"
+        )
+    if "verdict_reason" in expected:
+        assert result["verdict_reason"] == expected["verdict_reason"], (
+            f"{name}: expected verdict_reason={expected['verdict_reason']!r}, "
+            f"got {result['verdict_reason']!r}"
+        )
+    if isinstance(expected.get("qualifiers"), list):
+        # Exact array in the spec-defined order, compared after stripping
+        # x- vendor entries: emission cannot drift by omission OR by
+        # invention (this lane emits no x- entries).
+        got = [q for q in result["qualifiers"] if not q.startswith("x-")]
+        assert got == expected["qualifiers"], (
+            f"{name}: expected qualifiers={expected['qualifiers']!r}, got {got!r}"
+        )
+    if "observed_profile" in expected:
+        assert result["profile"]["observed"] == expected["observed_profile"], (
+            f"{name}: expected profile.observed={expected['observed_profile']!r}, "
+            f"got {result['profile']!r}"
+        )
+    if "observed_profile_version" in expected:
+        assert result["profile"]["observed_version"] == expected["observed_profile_version"], (
+            f"{name}: expected profile.observed_version="
+            f"{expected['observed_profile_version']!r}, got {result['profile']!r}"
+        )
+    for key, want in (expected.get("profile") or {}).items():
+        assert key in PROFILE_EXPECTED_KEYS, f"{name}: unknown expected profile member {key!r}"
+        assert result["profile"][key] == want, (
+            f"{name}: expected profile.{key}={want!r}, got {result['profile'][key]!r}"
+        )
+    if "suite" in expected:
+        # Suite honesty (spec/profiles.md): the suite fact nulls whenever
+        # the effective profile is not the era default — including on
+        # every profile-gate refusal.
+        assert result["format_version"]["suite"] == expected["suite"], (
+            f"{name}: expected format_version.suite={expected['suite']!r}, "
+            f"got {result['format_version']!r}"
+        )
+
+
+def _assert_decryptable(
+    name: str, doc: dict, base: pathlib.Path, reader, expected: dict, allowlist: list[str]
+) -> None:
+    """L3 pin: decrypt with the named keypair; the inner must verify.
+
+    The metadata is resolved through manifest.encryption.metadata_path,
+    never a hardcoded path. spec/results.md: ``encrypted_outer_only`` is
+    PER-RESULT — the inner L3 result is a plain-capsule verification and
+    never carries it.
+    """
+    keys = _load((base / doc["keys_file"]).resolve())
+    pair = keys[expected["decryptable_with"]]
+    inner = reader.decrypt(
+        recipient_public_key=pair["publicKey"], recipient_private_key=pair["privateKey"]
+    )
+    inner_result = verify_capsule(inner, allowlist=allowlist, outer_envelope=reader.envelope())
+    assert inner_result["ok"] is True, (
+        f"{name}: inner capsule must verify; got {inner_result['errors']}"
+    )
+    assert "encrypted_outer_only" not in inner_result["qualifiers"], (
+        f"{name}: inner L3 result must not carry the encrypted_outer_only qualifier; "
+        f"got {inner_result['qualifiers']!r}"
+    )
+
+
 def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
     assert result["ok"] is expected["ok"], f"{name}: expected ok={expected['ok']}, got {result}"
+    _assert_result_vocabulary(name, expected, result)
     for area in expected.get("failing", []):
         pred = AREA_PREDICATES.get(area)
         assert pred is not None, f"{name}: unknown failing area {area!r}"
@@ -290,28 +430,26 @@ def test_skill_trust_registry_outcomes(doc: dict, vector: dict, base: pathlib.Pa
     to a host LLM as trusted instructions — that is the defect (A01)
     this collection exists to keep closed.
     """
-    keys = _load((base / doc["keys_file"]).resolve())
-    allowlist = []
-    for key_name in vector.get("allowlist", []):
-        assert key_name in keys, f"{vector['name']}: allowlist entry {key_name!r} not in keys_file"
-        allowlist.append(keys[key_name]["publicKey"])
     data = (base / vector["capsule_file"]).read_bytes()
     reader = CapsuleReader.from_bytes(data)
-    result = verify_capsule(reader, allowlist=allowlist)
+    result = verify_capsule(reader, allowlist=_vector_allowlist(doc, vector, base))
     _assert_verify_outcome(vector["name"], vector["expected"], result)
 
 
 def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None:
     """Open-stage vectors must be refused by the reader; the rest verify."""
+    for req in vector.get("requires", []):
+        assert req in KNOWN_REQUIREMENTS, f"{vector['name']}: unknown requirement {req!r}"
     data = (base / vector["capsule_file"]).read_bytes()
     expected = vector["expected"]
+    allowlist = _vector_allowlist(doc, vector, base)
     if expected.get("stage") == "open":
         pattern = OPEN_REASON_PATTERNS.get(expected["reason"])
         assert pattern is not None, f"unknown open-stage reason {expected['reason']!r}"
         with pytest.raises(ValueError, match=pattern):
             CapsuleReader.from_bytes(data)
         # verify_capsule is total: the same bytes must fail closed, not raise.
-        result = verify_capsule(data, allowlist=_allowlist(doc, base))
+        result = verify_capsule(data, allowlist=allowlist)
         assert result["ok"] is False, f"{vector['name']}: expected a fail-closed result"
         if expected.get("observed_version"):
             # spec/versioning.md: even when open is refused, the observed
@@ -321,10 +459,20 @@ def _assert_registry_vector(doc: dict, vector: dict, base: pathlib.Path) -> None
                 f"{vector['name']}: expected format_version.observed="
                 f"{expected['observed_version']!r}, got {result['format_version']!r}"
             )
+        # The observed profile declaration and the normalized verdict
+        # surface are reported facts on the SAME fail-closed result
+        # (spec/profiles.md obligation 8, spec/results.md).
+        _assert_result_vocabulary(vector["name"], expected, result)
         return
     reader = CapsuleReader.from_bytes(data)
-    result = verify_capsule(reader, allowlist=_allowlist(doc, base))
+    options = {"allowlist": allowlist}
+    if isinstance(vector.get("accept_versions"), list):
+        # Host policy, reported and never decided (spec/versioning.md).
+        options["accept_versions"] = vector["accept_versions"]
+    result = verify_capsule(reader, **options)
     _assert_verify_outcome(vector["name"], expected, result)
+    if expected.get("decryptable_with"):
+        _assert_decryptable(vector["name"], doc, base, reader, expected, allowlist)
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(UNICODE_BOUNDARY))
@@ -365,6 +513,44 @@ def test_version_compat_registry_outcomes(doc: dict, vector: dict, base: pathlib
     gap. The unknown-version fixtures are internally coherent under
     their declared version's domain strings, so only the version gate
     refuses them.
+    """
+    _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(PROFILE_DECLARATION))
+def test_profile_declaration_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """spec/profiles.md: absence means the default profile; declarations gate.
+
+    ABSENCE of a declaration in a 0.6/0.7 capsule means profile
+    v0.6-suite/1.0, permanently, and the result SAYS so (effective) —
+    explicit declaration of the default is legal and exactly equivalent,
+    in both documents or (via normalization) in one. A declared
+    (id, version) outside this verifier's table is refused at open with
+    unsupported_profile — a limitation of the verifier, never a defect of
+    the capsule, with the suite fact nulled because no suite governs a
+    capsule whose rules were refused. Disagreeing normalized declarations
+    are refused BEFORE any table lookup (profile_mismatch, a capsule
+    defect: verdict "invalid"), and shape/grammar violations are
+    malformed documents, never "unsupported". Every negative fixture is
+    internally coherent under default rules except the declaration under
+    test, so a lane that skips the gate verifies it ok=true and fails
+    here.
+    """
+    _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(RESULT_VOCABULARY))
+def test_result_vocabulary_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """spec/results.md: the derived verdict surface, pinned exactly.
+
+    verdict / verdict_reason / qualifiers restate facts this verifier
+    already computes: ok == (verdict == "valid"), "unsupported" names a
+    limitation of THIS verifier (never corruption), and the qualifier
+    array is exact and ordered — the weaker-claim facts a renderer must
+    not hide. Several vectors verify the SAME capsule bytes under
+    different host configurations (per-vector allowlist, accept_versions)
+    because the host-relative qualifiers are facts about THIS
+    verification, which is exactly why they can never be capsule members.
     """
     _assert_registry_vector(doc, vector, base)
 
@@ -439,21 +625,7 @@ def test_semantic_binding_registry_outcomes(doc: dict, vector: dict, base: pathl
         )
 
     if expected.get("decryptable_with"):
-        # L3 pin: decrypt with the named keypair — resolving the metadata
-        # through manifest.encryption.metadata_path, never a hardcoded
-        # path — and the inner capsule must verify against the outer.
-        keys = _load((base / doc["keys_file"]).resolve())
-        pair = keys[expected["decryptable_with"]]
-        inner = reader.decrypt(
-            recipient_public_key=pair["publicKey"],
-            recipient_private_key=pair["privateKey"],
-        )
-        inner_result = verify_capsule(
-            inner, allowlist=_allowlist(doc, base), outer_envelope=reader.envelope()
-        )
-        assert inner_result["ok"] is True, (
-            f"{name}: inner capsule must verify; got {inner_result['errors']}"
-        )
+        _assert_decryptable(name, doc, base, reader, expected, _allowlist(doc, base))
 
 
 def test_signing_input_pins():

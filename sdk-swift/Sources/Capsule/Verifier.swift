@@ -15,6 +15,25 @@ public struct CapsuleVerification {
         public let trusted: Bool
     }
     public let ok: Bool
+    /// Normalized verdict (spec/results.md): "valid" | "invalid" |
+    /// "unsupported", DERIVED from the facts below —
+    /// `ok == (verdict == "valid")` is an invariant, and "unsupported"
+    /// partitions today's failures into "a limitation of this verifier,
+    /// not a defect of the capsule" (unknown version, unsupported
+    /// profile).
+    public let verdict: String
+    /// Machine-readable cause of an "unsupported" verdict; non-nil IFF
+    /// verdict == "unsupported" (`unsupported_version_newer`,
+    /// `unsupported_version_older`, `unsupported_profile`,
+    /// `unsupported_capability`). An invalid capsule's causes live in
+    /// the checks, which have their own vocabulary.
+    public let verdictReason: String?
+    /// The weaker-claim facts that qualify a VALID verdict
+    /// (spec/results.md), in the spec-defined order. Non-empty only
+    /// when verdict == "valid"; each entry restates exactly one fact
+    /// already reported below. A renderer MUST NOT present a valid
+    /// verdict without them.
+    public let qualifiers: [String]
     /// "L2" for outer-only verification, "L3" when the inner package was
     /// also decrypted and verified.
     public let level: String
@@ -46,6 +65,13 @@ public struct CapsuleVerification {
     /// suite, and the host's declared-acceptance verdict (nil when no
     /// acceptVersions policy was declared). Reported, never decided.
     public let formatVersion: FormatVersionReport
+    /// Profile declaration facts (spec/profiles.md): the declaration as
+    /// OBSERVED (reported even when the capsule was refused — it is
+    /// what lets an auditor route the capsule to a capable verifier
+    /// instead of declaring it corrupt), the profile actually applied
+    /// (the absence rule made machine-visible), and the closed status
+    /// vocabulary. Reported, never decided.
+    public let profile: ProfileReport
     /// Derived skill-trust classification (spec/trust.md "Skill trust").
     /// The tier is host-relative — it depends on the allowlist THIS
     /// verification ran with — so it derives from the verify result and
@@ -70,6 +96,29 @@ public struct CapsuleVerification {
         /// declaration could be read.
         public static let unread = FormatVersionReport(
             observed: nil, supported: false, status: "unread", suite: nil, acceptedByPolicy: nil
+        )
+    }
+
+    /// The profile channel (spec/profiles.md "Reporting"), parallel to
+    /// `FormatVersionReport`. `status` is the closed vocabulary
+    /// default | supported | unsupported | mismatched | invalid |
+    /// unevaluated | unread; `effective` is nil whenever no profile's
+    /// rules were applied (any refusal, invalid, unread).
+    public struct ProfileReport {
+        public let observed: String?
+        public let observedVersion: String?
+        public let declared: Bool
+        public let effective: String?
+        public let effectiveVersion: String?
+        public let supported: Bool
+        public let status: String
+        public let acceptedByPolicy: Bool?
+
+        /// The fail-closed "unread" shape: the declaration could not be
+        /// read at all.
+        public static let unread = ProfileReport(
+            observed: nil, observedVersion: nil, declared: false, effective: nil,
+            effectiveVersion: nil, supported: false, status: "unread", acceptedByPolicy: nil
         )
     }
 
@@ -99,42 +148,198 @@ public enum CapsuleVerifier {
     /// trusted; the verifier never returns trusted=true on its own.
     public static func verify(_ bytes: Data,
                               allowlist: Set<String> = [],
-                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                              acceptVersions: Set<String>? = nil,
+                              acceptProfiles: Set<String>? = nil) -> CapsuleVerification
     {
         let parsed: ParsedCapsule
         do { parsed = try CapsuleReader.parse(bytes) }
         catch {
-            var initialNotes: [String] = []
-            if allowlist.isEmpty {
-                initialNotes.append("no allowlist provided; trusted=false for all signers regardless of signature validity")
-            }
-            return CapsuleVerification(
-                ok: false, level: "L2",
-                checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
-                signers: [], trustedSignerCount: 0, signerSetBound: false,
-                actorSetBound: false,
-                formatVersion: formatVersionOnOpenRefusal(error),
-                skillTrust: .failClosed,
-                notes: initialNotes
-            )
+            return openRefusal(bytes, error, level: "L2", allowlist: allowlist)
         }
         return verifyParsed(parsed, level: "L2", allowlist: allowlist,
-                            acceptVersions: acceptVersions)
+                            acceptVersions: acceptVersions, acceptProfiles: acceptProfiles)
+    }
+
+    /// The fail-closed result for a capsule the reader refused to open.
+    /// Every channel holds its fail-closed default and the refusal is
+    /// the only error carried (spec/versioning.md and spec/profiles.md
+    /// refusal exclusivity) — but the observed version and profile
+    /// declaration are still REPORTED, which is what lets an auditor
+    /// tell "this verifier is too old / lacks that profile" apart from
+    /// "this capsule is corrupt".
+    private static func openRefusal(_ bytes: Data, _ error: Error, level: String,
+                                    allowlist: Set<String>) -> CapsuleVerification
+    {
+        var initialNotes: [String] = []
+        if allowlist.isEmpty {
+            initialNotes.append("no allowlist provided; trusted=false for all signers regardless of signature validity")
+        }
+        var files: [String: Data] = [:]
+        if let entries = try? CapsuleZip.unpack(bytes) {
+            for (path, data) in entries { files[path] = data }
+        }
+        let formatVersion = formatVersionOnOpenRefusal(files, error)
+        let profile = profileOnOpenRefusal(files, error)
+        // The manifest's observed version can be KNOWN while the
+        // refusal came from the envelope's, so the refusal class rides
+        // on the error rather than being re-read from the channel.
+        var versionStatus = formatVersion.status
+        if case CapsuleError.unsupportedVersion(_, let status, _) = error { versionStatus = status }
+        let surface = deriveVerdict(ok: false, versionStatus: versionStatus,
+                                    profileStatus: profile.status)
+        return CapsuleVerification(
+            ok: false, verdict: surface.verdict, verdictReason: surface.reason,
+            qualifiers: surface.qualifiers, level: level,
+            checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
+            signers: [], trustedSignerCount: 0, signerSetBound: false,
+            actorSetBound: false,
+            formatVersion: formatVersion,
+            profile: profile,
+            skillTrust: .failClosed,
+            notes: initialNotes
+        )
     }
 
     /// spec/versioning.md: the observed version stays a REPORTED fact
     /// even when open is refused — an unknown-version refusal must be
-    /// distinguishable from tamper by machine, not just by prose.
-    private static func formatVersionOnOpenRefusal(_ error: Error)
+    /// distinguishable from tamper by machine, not just by prose. Read
+    /// best-effort from the stored manifest, like the profile
+    /// declaration beside it, so the fact survives refusals that never
+    /// reached the version gate at all.
+    private static func formatVersionOnOpenRefusal(_ files: [String: Data], _ error: Error)
         -> CapsuleVerification.FormatVersionReport
     {
-        if case CapsuleError.unsupportedVersion(let observed, let status, _) = error {
-            return CapsuleVerification.FormatVersionReport(
-                observed: observed, supported: false, status: status,
-                suite: nil, acceptedByPolicy: nil
+        guard let bytes = files["manifest.json"],
+              let manifest = try? CapsuleReader.parseJSON(bytes)
+        else { return .unread }
+        let observed = lookupString(manifest, ["format", "version"])
+        let status = CapsuleVersions.classify(observed)
+        var suite = status == .known ? observed.flatMap { CapsuleVersions.suite(for: $0) } : nil
+        // Suite honesty (spec/profiles.md obligation 6): after a
+        // profile-gate refusal no suite fact is known — reporting the
+        // era's suite about rules this verifier refused to apply would
+        // be a false fact on the result.
+        if case CapsuleError.profileRefused = error { suite = nil }
+        return CapsuleVerification.FormatVersionReport(
+            observed: observed, supported: status == .known, status: status.rawValue,
+            suite: suite, acceptedByPolicy: nil
+        )
+    }
+
+    /// spec/profiles.md obligation 8: the observed declaration is a
+    /// reported fact on every result, including open refusals.
+    ///
+    /// A typed profile refusal carries its own classification. A
+    /// version-gate refusal reports the declaration with status
+    /// "unevaluated" — read but not classified, because profile
+    /// semantics are era-scoped and an unknown era means the
+    /// declaration cannot be classified at all. Any other open failure
+    /// never reached the gate either: the declaration is surfaced
+    /// best-effort with the fail-closed "unread" status.
+    ///
+    /// This is an UNAUTHENTICATED observation. Nothing else may be
+    /// concluded from it — not integrity, not signature validity, not
+    /// authorship.
+    private static func profileOnOpenRefusal(_ files: [String: Data], _ error: Error)
+        -> CapsuleVerification.ProfileReport
+    {
+        if case CapsuleError.profileRefused(let status, let observed, let observedVersion,
+                                            let declared, _) = error
+        {
+            return CapsuleVerification.ProfileReport(
+                observed: observed, observedVersion: observedVersion, declared: declared,
+                effective: nil, effectiveVersion: nil, supported: false,
+                status: status, acceptedByPolicy: nil
             )
         }
-        return .unread
+        guard let manifestBytes = files["manifest.json"],
+              let manifest = try? CapsuleReader.parseJSON(manifestBytes)
+        else { return .unread }
+        var declaration = CapsuleProfiles.member(manifest, "format", "profile")
+        if declaration == nil, let envelopeBytes = files["provenance/envelope.json"],
+           let envelope = try? CapsuleReader.parseJSON(envelopeBytes)
+        {
+            declaration = CapsuleProfiles.member(envelope, "profile")
+        }
+        var observed: String? = nil
+        var observedVersion: String? = nil
+        if case .object(let pairs)? = declaration {
+            if case .string(let id)? = pairs.first(where: { $0.0 == "id" })?.1 { observed = id }
+            if case .string(let v)? = pairs.first(where: { $0.0 == "version" })?.1 { observedVersion = v }
+        }
+        var isUnsupportedVersion = false
+        if case CapsuleError.unsupportedVersion = error { isUnsupportedVersion = true }
+        return CapsuleVerification.ProfileReport(
+            observed: observed, observedVersion: observedVersion,
+            declared: declaration != nil, effective: nil, effectiveVersion: nil,
+            supported: false, status: isUnsupportedVersion ? "unevaluated" : "unread",
+            acceptedByPolicy: nil
+        )
+    }
+
+    /// Derive the normalized verdict surface (spec/results.md) from
+    /// facts the result already carries. Report-only: no rule here can
+    /// change whether a capsule verifies, and `ok == (verdict ==
+    /// "valid")` holds by construction.
+    private static func deriveVerdict(ok: Bool, versionStatus: String, profileStatus: String,
+                                      qualifiers: [String] = [])
+        -> (verdict: String, reason: String?, qualifiers: [String])
+    {
+        // Refused because the verifier cannot understand what the
+        // capsule DECLARES — a different verifier may verify it. Not
+        // corruption. The version gate runs before the profile gate, so
+        // its diagnosis wins here too.
+        if versionStatus == "unknown_newer" {
+            return ("unsupported", "unsupported_version_newer", [])
+        }
+        if versionStatus == "unknown_older" {
+            return ("unsupported", "unsupported_version_older", [])
+        }
+        if profileStatus == "unsupported" {
+            return ("unsupported", "unsupported_profile", [])
+        }
+        if ok { return ("valid", nil, qualifiers) }
+        // Everything else — tamper, malformation (including a profile
+        // declaration that violates the shape or contradicts itself
+        // across documents), canonicalization refusals, unread.
+        return ("invalid", nil, [])
+    }
+
+    /// The version/profile refusal classes an error carries, in the
+    /// shape `deriveVerdict` reads. Anything that is not a declaration
+    /// the verifier cannot understand classifies as an ordinary failure.
+    private static func refusalStatuses(_ error: Error) -> (version: String, profile: String) {
+        if case CapsuleError.unsupportedVersion(_, let status, _) = error {
+            return (status, "unread")
+        }
+        if case CapsuleError.profileRefused(let status, _, _, _, _) = error {
+            return ("known", status)
+        }
+        return ("known", "default")
+    }
+
+    /// The qualifier list for a VALID verdict, in the spec-defined
+    /// order (spec/results.md). Each entry is a pure restatement of one
+    /// already-reported fact.
+    private static func qualifiers(signerSetBound: Bool,
+                                   actorSetBound: Bool,
+                                   emptyChainNotWalked: Bool,
+                                   encryptedOuterOnly: Bool,
+                                   versionAcceptedByPolicy: Bool?,
+                                   allowlist: Set<String>,
+                                   trustedSignerCount: Int) -> [String]
+    {
+        var out: [String] = []
+        if !signerSetBound { out.append("signer_set_unbound") }
+        if !actorSetBound { out.append("actor_set_unbound") }
+        if emptyChainNotWalked { out.append("empty_chain_not_walked") }
+        if encryptedOuterOnly { out.append("encrypted_outer_only") }
+        if versionAcceptedByPolicy == false { out.append("version_not_accepted_by_policy") }
+        // Mutually exclusive by construction: no allowlist vs an
+        // allowlist that matched no distinct signer key.
+        if allowlist.isEmpty { out.append("trust_not_evaluated") }
+        else if trustedSignerCount == 0 { out.append("no_trusted_signer") }
+        return out
     }
 
     /// Verify a sealed capsule at L3 (decrypted-content). For plain
@@ -151,36 +356,30 @@ public enum CapsuleVerifier {
                               recipientPrivateKey: Data,
                               recipientPublicKey: Data,
                               allowlist: Set<String> = [],
-                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                              acceptVersions: Set<String>? = nil,
+                              acceptProfiles: Set<String>? = nil) -> CapsuleVerification
     {
         let outerParsed: ParsedCapsule
         do { outerParsed = try CapsuleReader.parse(bytes) }
         catch {
-            var initialNotes: [String] = []
-            if allowlist.isEmpty {
-                initialNotes.append("no allowlist provided; trusted=false for all signers regardless of signature validity")
-            }
-            return CapsuleVerification(
-                ok: false, level: "L3",
-                checks: [VerifyCheck(name: "parse", ok: false, detail: "\(error)")],
-                signers: [], trustedSignerCount: 0, signerSetBound: false,
-                actorSetBound: false,
-                formatVersion: formatVersionOnOpenRefusal(error),
-                skillTrust: .failClosed,
-                notes: initialNotes
-            )
+            return openRefusal(bytes, error, level: "L3", allowlist: allowlist)
         }
         if !outerParsed.isEncrypted {
             // Plain capsule — L3 is the same surface as L2.
             return verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
-                                acceptVersions: acceptVersions)
+                                acceptVersions: acceptVersions, acceptProfiles: acceptProfiles)
         }
         let outer = verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
-                                 acceptVersions: acceptVersions)
+                                 acceptVersions: acceptVersions, acceptProfiles: acceptProfiles)
         var checks = outer.checks
 
         let inner: ParsedCapsule
         do {
+            // The inner package is a fully-formed capsule: CapsuleReader
+            // re-runs the version and profile gates over its own
+            // documents, so its declaration is checked independently at
+            // L3 (spec/profiles.md obligation 11 — no inner/outer
+            // equality rule).
             inner = try CapsuleReader.openInner(
                 outerParsed,
                 recipientPrivateKey: recipientPrivateKey,
@@ -188,13 +387,25 @@ public enum CapsuleVerifier {
             )
         } catch {
             checks.append(VerifyCheck(name: "decrypt", ok: false, detail: "\(error)"))
+            // An inner-layer refusal (an unknown version or a profile
+            // this verifier does not implement, inside the ciphertext)
+            // is a limitation of this verifier, not corruption: it
+            // derives the same non-tamper verdict the outer gate would.
+            // The profile channel keeps describing the OUTER
+            // declaration — the layer the caller handed in — while the
+            // decrypt check detail names the inner refusal.
+            let refusal = refusalStatuses(error)
+            let surface = deriveVerdict(ok: false, versionStatus: refusal.version,
+                                        profileStatus: refusal.profile)
             return CapsuleVerification(
-                ok: false, level: "L3", checks: checks,
+                ok: false, verdict: surface.verdict, verdictReason: surface.reason,
+                qualifiers: surface.qualifiers, level: "L3", checks: checks,
                 signers: outer.signers,
                 trustedSignerCount: outer.trustedSignerCount,
                 signerSetBound: outer.signerSetBound,
                 actorSetBound: outer.actorSetBound,
                 formatVersion: outer.formatVersion,
+                profile: outer.profile,
                 skillTrust: .failClosed,
                 notes: outer.notes
             )
@@ -240,25 +451,50 @@ public enum CapsuleVerifier {
             ))
         }
         let ok = checks.allSatisfy { $0.ok }
+        // The aggregate describes the OUTER capsule's declarations —
+        // the same composition signerSetBound / actorSetBound / notes
+        // already use — with one exception: the chain lives inside the
+        // ciphertext, so the empty-chain fact is the INNER walk's, and
+        // its canonical note rides along so note and qualifier cannot
+        // disagree. `encrypted_outer_only` is never carried here: the
+        // content was read.
+        let innerEmptyChain = innerResult.qualifiers.contains("empty_chain_not_walked")
+        var notes = outer.notes
+        if innerEmptyChain, let note = innerResult.notes.first(where: { $0.hasPrefix("empty chain:") }) {
+            notes.append(note)
+        }
+        let trustedSignerCount = outer.trustedSignerCount + innerResult.trustedSignerCount
+        let surface = deriveVerdict(
+            ok: ok, versionStatus: outer.formatVersion.status,
+            profileStatus: outer.profile.status,
+            qualifiers: qualifiers(
+                signerSetBound: outer.signerSetBound, actorSetBound: outer.actorSetBound,
+                emptyChainNotWalked: innerEmptyChain, encryptedOuterOnly: false,
+                versionAcceptedByPolicy: outer.formatVersion.acceptedByPolicy,
+                allowlist: allowlist, trustedSignerCount: trustedSignerCount
+            )
+        )
         return CapsuleVerification(
-            ok: ok, level: "L3", checks: checks,
+            ok: ok, verdict: surface.verdict, verdictReason: surface.reason,
+            qualifiers: surface.qualifiers, level: "L3", checks: checks,
             signers: allSigners,
             // Distinct-key counting applies PER ENVELOPE (it exists to stop
             // one key inflating a single envelope's quorum by repetition);
             // the L3 aggregate is the sum of the outer and inner envelopes'
             // distinct counts — the same composition the Rust verifier
             // documents for its separate outer/inner counts.
-            trustedSignerCount: outer.trustedSignerCount + innerResult.trustedSignerCount,
+            trustedSignerCount: trustedSignerCount,
             signerSetBound: outer.signerSetBound,
             actorSetBound: outer.actorSetBound,
             formatVersion: outer.formatVersion,
+            profile: outer.profile,
             // Skills live inside the ciphertext: the inner verification's
             // derived classification is the one that describes them —
             // gated on the OVERALL L3 verdict (spec/trust.md): if any
             // outer or cross-check fails, the composite result is a
             // failing verification and must not classify anything signed.
             skillTrust: ok ? innerResult.skillTrust : .failClosed,
-            notes: outer.notes
+            notes: notes
         )
     }
 
@@ -266,7 +502,8 @@ public enum CapsuleVerifier {
     private static func verifyParsed(_ parsed: ParsedCapsule,
                                      level: String,
                                      allowlist: Set<String>,
-                                     acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                                     acceptVersions: Set<String>? = nil,
+                                     acceptProfiles: Set<String>? = nil) -> CapsuleVerification
     {
         var checks: [VerifyCheck] = []
         func record(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -285,6 +522,69 @@ public enum CapsuleVerifier {
         // deployment accepts it is host policy — reported, never decided.
         let declaredVersion = lookupString(parsed.manifest, ["format", "version"])
             ?? CapsuleVersions.current
+
+        // Profile gate (spec/profiles.md): version gate first, profile
+        // gate second, nothing else until both pass. CapsuleReader.parse
+        // enforces this at open; re-deriving it here keeps verification
+        // total over a hand-constructed ParsedCapsule and pins refusal
+        // exclusivity — after a profile refusal the profile diagnosis is
+        // the only error carried and every other channel holds its
+        // fail-closed default.
+        let profileClass = CapsuleProfiles.classify(
+            manifestDeclaration: CapsuleProfiles.member(parsed.manifest, "format", "profile"),
+            envelopeDeclaration: CapsuleProfiles.member(parsed.envelope, "profile")
+        )
+        if let message = CapsuleProfiles.refusalMessage(for: profileClass) {
+            let profile = CapsuleVerification.ProfileReport(
+                observed: profileClass.observed, observedVersion: profileClass.observedVersion,
+                declared: profileClass.declared, effective: nil, effectiveVersion: nil,
+                supported: false, status: profileClass.status.rawValue, acceptedByPolicy: nil
+            )
+            let surface = deriveVerdict(ok: false, versionStatus: "known",
+                                        profileStatus: profile.status)
+            return CapsuleVerification(
+                ok: false, verdict: surface.verdict, verdictReason: surface.reason,
+                qualifiers: surface.qualifiers, level: level,
+                checks: [VerifyCheck(name: "profile", ok: false, detail: message)],
+                signers: [], trustedSignerCount: 0, signerSetBound: false, actorSetBound: false,
+                // Suite honesty (spec/profiles.md obligation 6): the
+                // suite fact is a statement about the rules governing
+                // THIS capsule; after a profile-gate refusal none is
+                // known.
+                formatVersion: CapsuleVerification.FormatVersionReport(
+                    observed: declaredVersion, supported: true, status: "known",
+                    suite: nil, acceptedByPolicy: nil
+                ),
+                profile: profile,
+                skillTrust: .failClosed,
+                notes: notes
+            )
+        }
+        var profileAcceptedByPolicy: Bool? = nil
+        if let acceptProfiles, let effective = profileClass.effective {
+            // Host policy: DECLARED accepted profile ids. Reported,
+            // never decided — the same shape as acceptVersions.
+            profileAcceptedByPolicy = acceptProfiles.contains(effective)
+            if profileAcceptedByPolicy == false {
+                notes.append(
+                    "host policy: effective profile \(effective)/\(profileClass.effectiveVersion ?? "") "
+                    + "is not in the declared accepted set \(acceptProfiles.sorted())"
+                )
+            }
+        }
+        let profile = CapsuleVerification.ProfileReport(
+            observed: profileClass.observed, observedVersion: profileClass.observedVersion,
+            declared: profileClass.declared, effective: profileClass.effective,
+            effectiveVersion: profileClass.effectiveVersion, supported: profileClass.supported,
+            status: profileClass.status.rawValue, acceptedByPolicy: profileAcceptedByPolicy
+        )
+        // Suite honesty: the reported suite is the era's only while the
+        // effective profile IS the era default. Unreachable while the
+        // table holds one row; kept so a grown table cannot report the
+        // v0.6 suite under alternate rules.
+        let effectiveIsDefault = profileClass.effective == CapsuleProfiles.defaultProfile.id
+            && profileClass.effectiveVersion == CapsuleProfiles.defaultProfile.version
+
         var acceptedByPolicy: Bool? = nil
         if let acceptVersions {
             acceptedByPolicy = acceptVersions.contains(declaredVersion)
@@ -299,7 +599,7 @@ public enum CapsuleVerifier {
             observed: declaredVersion,
             supported: true,
             status: "known",
-            suite: CapsuleVersions.suite(for: declaredVersion),
+            suite: effectiveIsDefault ? CapsuleVersions.suite(for: declaredVersion) : nil,
             acceptedByPolicy: acceptedByPolicy
         )
         // manifest.format.version and envelope.version MUST be equal
@@ -445,6 +745,11 @@ public enum CapsuleVerifier {
             record("content_index_hash", false, "\(error)")
         }
 
+        // Weaker-claim scope facts backing the qualifiers below
+        // (spec/results.md): a zero-event chain whose null anchors were
+        // checked instead of walked, and an outer-only L2 result whose
+        // content was never read.
+        var emptyChainNotWalked = false
         if parsed.isEncrypted {
             // Encrypted-outer specific checks: encrypted_blob_hash matches
             // SHA-256(content.enc), and cipher agreement across surfaces.
@@ -481,6 +786,7 @@ public enum CapsuleVerifier {
                 let emptyNote = "empty chain: no events to walk; envelope anchors checked to be null instead"
                 record("chain", true, emptyNote)
                 notes.append(emptyNote)
+                emptyChainNotWalked = true
                 func isNullAnchor(_ v: JCSValue?) -> Bool { v == nil || v == .null }
                 let envFirst = lookupValue(parsed.envelope, ["first_event_hash"])
                 record("first_event_hash", isNullAnchor(envFirst),
@@ -686,6 +992,13 @@ public enum CapsuleVerifier {
         let trustedCount = Set(
             signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
         ).count
+        // An allowlist that matched nothing is a PASS the host must not
+        // read as trust (spec/envelope.md step 8, spec/results.md): the
+        // signatures verify, every signer is trusted=false, and the
+        // report says why.
+        if !allowlist.isEmpty && trustedCount == 0 {
+            notes.append("allowlist provided but matched no signer; trusted=false for all signers")
+        }
 
         // Skill trust: DERIVED from this verification, never read from the
         // capsule (spec/trust.md "Skill trust"). Any skill_trust manifest
@@ -709,13 +1022,31 @@ public enum CapsuleVerifier {
                 ? "signed" : "unsigned"
         }
 
+        // Normalized verdict surface (spec/results.md), derived last:
+        // this is the only path that can reach verdict "valid".
+        let surface = deriveVerdict(
+            ok: ok, versionStatus: formatVersion.status, profileStatus: profile.status,
+            qualifiers: qualifiers(
+                signerSetBound: signerSetBound, actorSetBound: actorSetBound,
+                emptyChainNotWalked: emptyChainNotWalked,
+                // Per-result, never per-capsule: an outer L2 result of
+                // an encrypted capsule verified the seal and left the
+                // content unread; the L3 result of the decrypted inner
+                // read it and never carries this.
+                encryptedOuterOnly: parsed.isEncrypted && level == "L2",
+                versionAcceptedByPolicy: formatVersion.acceptedByPolicy,
+                allowlist: allowlist, trustedSignerCount: trustedCount
+            )
+        )
         return CapsuleVerification(
-            ok: ok, level: level, checks: checks,
+            ok: ok, verdict: surface.verdict, verdictReason: surface.reason,
+            qualifiers: surface.qualifiers, level: level, checks: checks,
             signers: signers,
             trustedSignerCount: trustedCount,
             signerSetBound: signerSetBound,
             actorSetBound: actorSetBound,
             formatVersion: formatVersion,
+            profile: profile,
             skillTrust: .init(capsuleSigned: capsuleSigned, skills: skillTiers),
             notes: notes
         )

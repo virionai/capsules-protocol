@@ -4,10 +4,10 @@
 //! prints the result either as a human-readable plain-text report or as
 //! pretty-printed JSON.
 //!
-//! Exit codes:
-//!   0  PASS (the capsule verified cleanly)
-//!   1  FAIL (verification ran but rejected the capsule)
-//!   2  I/O / argument error (file not found, permission denied, etc.)
+//! Exit codes (spec/results.md "CLI reference renderer"):
+//!   0  VALID and every requested policy satisfied
+//!   1  INVALID, UNSUPPORTED, or a requested policy failed
+//!   2  usage / I-O error (file not found, permission denied, bad flag value)
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +15,8 @@ use std::process::ExitCode;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD;
 use base64::Engine;
 use capsule_verify::{
-    verify_capsule, EnvelopeCheck, SignerOutcome, TopErrorCategory, VerifyOptions, VerifyResult,
+    verify_capsule, EnvelopeCheck, SignerOutcome, TopErrorCategory, Verdict, VerifyOptions,
+    VerifyResult,
 };
 use clap::{Parser, Subcommand};
 
@@ -40,7 +41,9 @@ enum Command {
         /// Trusted Ed25519 public keys (lowercase hex, 64 chars). May be
         /// repeated, or passed as a space-separated list. A signer is
         /// marked `trusted` only when its key appears here AND its
-        /// signature verifies.
+        /// signature verifies. Supplying the flag REQUESTS a trust
+        /// policy: a run whose allowlist matched no signer keeps its
+        /// `valid` verdict — the math is unaffected — but exits 1.
         #[arg(long = "allowlist", num_args = 1.., value_delimiter = ' ')]
         allowlist: Vec<String>,
         /// Recipient's X25519 private key for L3 (decrypted-content)
@@ -52,6 +55,14 @@ enum Command {
         /// capsule, the flag is silently ignored.
         #[arg(long = "decryption-key", value_name = "KEY")]
         decryption_key: Option<String>,
+        /// Format versions this deployment ACCEPTS (spec/versioning.md
+        /// "Host policy"). May be repeated, or passed as a
+        /// space-separated list. Reported, never decided: a capsule
+        /// outside the set still verifies — its verdict carries the
+        /// `version_not_accepted_by_policy` qualifier — but because the
+        /// policy was REQUESTED on this command line, failing it exits 1.
+        #[arg(long = "accept-versions", num_args = 1.., value_delimiter = ' ')]
+        accept_versions: Vec<String>,
         /// Emit the full VerifyResult as pretty-printed JSON instead of
         /// the plain-text report. Hashes appear in full hex form in JSON
         /// mode.
@@ -67,24 +78,34 @@ fn main() -> ExitCode {
             file,
             allowlist,
             decryption_key,
+            accept_versions,
             json,
-        } => run_verify(&file, allowlist, decryption_key, json),
+        } => ExitCode::from(run_verify(
+            &file,
+            allowlist,
+            decryption_key,
+            accept_versions,
+            json,
+        )),
     }
 }
 
 /// Read `path` and run [`verify_capsule`] over its contents. Print either
 /// JSON or a plain-text report and return the appropriate exit code.
+/// Returns the raw code rather than an `ExitCode` so the whole path —
+/// flag handling included — is assertable from a unit test.
 fn run_verify(
     path: &Path,
     allowlist: Vec<String>,
     decryption_key: Option<String>,
+    accept_versions: Vec<String>,
     json: bool,
-) -> ExitCode {
+) -> u8 {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("error: cannot read {}: {}", path.display(), e);
-            return ExitCode::from(2);
+            return 2;
         }
     };
 
@@ -94,8 +115,9 @@ fn run_verify(
     // buried in the result to explain why.
     if let Err(msg) = validate_allowlist(&allowlist) {
         eprintln!("{msg}");
-        return ExitCode::from(2);
+        return 2;
     }
+    let allowlist_requested = !allowlist.is_empty();
 
     // Resolve --decryption-key (if given) into a 32-byte X25519 private key.
     // Any parse / length failure exits 2 with a clear stderr message;
@@ -106,7 +128,7 @@ fn run_verify(
             Ok(k) => Some(k),
             Err(msg) => {
                 eprintln!("{msg}");
-                return ExitCode::from(2);
+                return 2;
             }
         },
     };
@@ -116,7 +138,9 @@ fn run_verify(
         &VerifyOptions {
             allowlist,
             recipient_private_key,
-            accept_versions: None,
+            // Absent flag = no policy declared, which is not the same as
+            // an empty accepted set.
+            accept_versions: (!accept_versions.is_empty()).then_some(accept_versions),
         },
     );
 
@@ -125,17 +149,38 @@ fn run_verify(
             Ok(s) => println!("{s}"),
             Err(e) => {
                 eprintln!("error: failed to serialize VerifyResult to JSON: {e}");
-                return ExitCode::from(2);
+                return 2;
             }
         }
     } else {
         print_plain(path, bytes.len(), &result);
     }
 
-    if result.ok {
-        ExitCode::SUCCESS
+    verify_exit_code(&result, allowlist_requested)
+}
+
+/// Exit code for a completed verification (spec/results.md "CLI reference
+/// renderer"): `0` iff the verdict is VALID and every policy this
+/// invocation REQUESTED is satisfied, `1` otherwise.
+///
+/// A failed policy is not corruption — the verdict stays `valid` and the
+/// qualifier says why the exit code does not — but a demand the operator
+/// typed on THIS command line and the capsule did not meet must fail the
+/// run, identically in both reference CLIs (the Node CLI computes the
+/// same two policies in `cli/src/commands/verify.mjs`). The report-never-
+/// decide rule of spec/trust.md governs the verify RESULT, which still
+/// reports per-signer `valid` and never `trusted`; the requested-policy
+/// layer lives here, in the CLI.
+///
+/// `trusted_signer_count` counts DISTINCT keys that are both valid and
+/// allowlisted, so duplicate signer rows cannot satisfy `--allowlist`.
+fn verify_exit_code(r: &VerifyResult, allowlist_requested: bool) -> u8 {
+    let version_policy_ok = r.format_version.accepted_by_policy != Some(false);
+    let trust_policy_ok = !allowlist_requested || r.trusted_signer_count > 0;
+    if r.verdict == Verdict::Valid && version_policy_ok && trust_policy_ok {
+        0
     } else {
-        ExitCode::from(1)
+        1
     }
 }
 
@@ -166,6 +211,13 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         println!("Sealed at:              {}", r.signed_at);
     }
     println!("Level:                  {}", r.level);
+    // The observed profile declaration is a reported fact on every result
+    // (spec/profiles.md obligation 8) — including refusals, where it is
+    // what lets an operator route the capsule to a capable verifier
+    // instead of concluding it is corrupt.
+    if let Some(line) = profile_line(r) {
+        println!("Profile:                {line}");
+    }
     println!();
 
     println!("Checks:");
@@ -178,6 +230,15 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
 
     let format_msgs = strings_of(errors_for(r, TopErrorCategory::FormatVersion));
     print_check("format / version", format_msgs.is_empty(), format_msgs);
+
+    // Profile-gate refusals get their own line, carrying the cross-lane
+    // refusal wording verbatim. Rendered only when present: a capsule that
+    // declares nothing makes no claim for this line to report on, and the
+    // `Profile:` header above already states what governed verification.
+    let profile_msgs = strings_of(errors_for(r, TopErrorCategory::Profile));
+    if !profile_msgs.is_empty() {
+        print_check("profile", false, profile_msgs);
+    }
 
     // capsule_id and manifest_hash share a single "identity" line,
     // matching the previous CLI behavior.
@@ -300,11 +361,124 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         println!();
     }
 
-    if r.ok {
-        println!("Result: PASS");
-    } else {
-        println!("Result: FAIL");
+    for line in result_block(r) {
+        println!("{line}");
     }
+}
+
+/// The `Profile:` header line (spec/profiles.md "Reporting"): what
+/// governed this verification, or what was declared and refused. `None`
+/// only when nothing was read at all — a container this verifier could not
+/// open declares nothing to report.
+fn profile_line(r: &VerifyResult) -> Option<String> {
+    let observed = || match (r.profile.observed.as_deref(), r.profile.observed_version.as_deref()) {
+        (Some(id), Some(version)) => format!("{id} {version}"),
+        (Some(id), None) => id.to_string(),
+        _ => "(unreadable declaration)".to_string(),
+    };
+    let line = match r.profile.status.as_str() {
+        "default" if r.profile.declared => format!(
+            "{} (default, declared)",
+            r.profile.effective.as_deref().unwrap_or("v0.6-suite")
+        ),
+        "default" => format!(
+            "{} (default, undeclared)",
+            r.profile.effective.as_deref().unwrap_or("v0.6-suite")
+        ),
+        "supported" => format!("{} (declared)", observed()),
+        "unsupported" => format!("{} (not supported by this verifier)", observed()),
+        "mismatched" => format!(
+            "{} (manifest and envelope declarations disagree)",
+            observed()
+        ),
+        "invalid" => "(declaration malformed)".to_string(),
+        "unevaluated" if r.profile.declared => {
+            format!("{} (not evaluated: the version gate refused first)", observed())
+        }
+        "unevaluated" => "(not evaluated: the version gate refused first)".to_string(),
+        _ if r.profile.declared => format!("{} (unread)", observed()),
+        _ => return None,
+    };
+    Some(line)
+}
+
+/// The verdict-first Result block (spec/results.md "CLI reference
+/// renderer"). A conforming renderer MUST NOT present a valid verdict
+/// without rendering every qualifier beside it — an unsurfaced qualifier
+/// turns an honest weaker claim by the author into a false stronger claim
+/// by the tooling. Returned as lines so the wording is unit-testable.
+fn result_block(r: &VerifyResult) -> Vec<String> {
+    match r.verdict {
+        Verdict::Valid if r.qualifiers.is_empty() => {
+            let n = r.trusted_signer_count;
+            vec![format!(
+                "Result: VALID (no qualifiers; {n} distinct trusted signer{})",
+                if n == 1 { "" } else { "s" }
+            )]
+        }
+        Verdict::Valid => {
+            let mut lines = vec!["Result: VALID".to_string(), "  qualifiers:".to_string()];
+            lines.extend(r.qualifiers.iter().map(|q| format!("    - {}", qualifier_line(q, r))));
+            lines
+        }
+        Verdict::Invalid => vec!["Result: INVALID".to_string()],
+        Verdict::Unsupported => {
+            let reason = r.verdict_reason.as_deref().unwrap_or("unsupported");
+            match refusal_message(r) {
+                Some(message) => vec![format!("Result: UNSUPPORTED ({reason}: {message})")],
+                None => vec![format!("Result: UNSUPPORTED ({reason})")],
+            }
+        }
+    }
+}
+
+/// Human rendering for one qualifier. Each carries the minimum substring
+/// spec/results.md requires of any conforming renderer. A qualifier this
+/// renderer does not know — a later spec revision's name, or a vendor
+/// `x-` entry — is surfaced VERBATIM and never silently dropped.
+fn qualifier_line(qualifier: &str, r: &VerifyResult) -> String {
+    match qualifier {
+        "signer_set_unbound" => {
+            "signer set is not bound by the seal (manifest.signer_commitment absent)".to_string()
+        }
+        "actor_set_unbound" => {
+            "actors are not bound to a declared participant set (manifest.participants empty)"
+                .to_string()
+        }
+        "empty_chain_not_walked" => {
+            "empty chain: no events to walk; anchors checked null".to_string()
+        }
+        "encrypted_outer_only" => {
+            "content is encrypted and was not read (L2 outer only; chain deferred to L3)"
+                .to_string()
+        }
+        "version_not_accepted_by_policy" => format!(
+            "format version {} is not in the declared accepted set of this host",
+            r.format_version.observed.as_deref().unwrap_or("(unread)")
+        ),
+        "trust_not_evaluated" => "trust not evaluated: no allowlist supplied".to_string(),
+        "no_trusted_signer" => {
+            "allowlist matched no signer; trusted=false for all signers".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+/// The diagnosis behind an `unsupported` verdict: the version- or
+/// profile-gate refusal message, which carries the cross-lane needles
+/// ("newer than this verifier supports", "is not supported by this
+/// verifier"). Both categories are exclusive diagnoses, so the first
+/// message is the whole story.
+fn refusal_message(r: &VerifyResult) -> Option<String> {
+    r.errors
+        .iter()
+        .find(|e| {
+            matches!(
+                e.category,
+                TopErrorCategory::FormatVersion | TopErrorCategory::Profile
+            )
+        })
+        .map(|e| e.message.clone())
 }
 
 /// Print a single `[✓]` or `[✗]` check line, indenting any error
@@ -531,6 +705,255 @@ fn decode_hex_32(s: &str) -> Result<[u8; 32], hex::FromHexError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn vectors_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../spec/vectors")
+    }
+
+    /// Verify a checked-in conformance fixture through the same entry
+    /// point the binary uses.
+    fn verify_vector(relative: &str, options: VerifyOptions) -> VerifyResult {
+        let path = vectors_dir().join(relative);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        verify_capsule(&bytes, &options)
+    }
+
+    /// The public key a collection's fixtures are signed with, read from
+    /// its keys_file — never hardcoded, so a regenerated collection cannot
+    /// leave a test asserting against a stale key.
+    fn fixture_public_key(collection: &str) -> String {
+        let path = vectors_dir().join(collection).join("output/keys.json");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let keys: serde_json::Value = serde_json::from_slice(&bytes).expect("keys.json parses");
+        keys.pointer("/originator/publicKey")
+            .and_then(|k| k.as_str())
+            .expect("keys.json carries originator.publicKey")
+            .to_string()
+    }
+
+    /// spec/results.md: a renderer MUST NOT present a valid verdict
+    /// without rendering every qualifier beside it, each carrying its
+    /// required minimum substring.
+    #[test]
+    fn result_block_renders_every_qualifier_with_its_required_substring() {
+        let r = verify_vector(
+            "chain-binding/output/empty-chain-null-anchors.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        let block = result_block(&r).join("\n");
+        assert!(block.starts_with("Result: VALID\n  qualifiers:"), "{block}");
+        for (qualifier, needle) in [
+            ("empty_chain_not_walked", "no events to walk"),
+            ("trust_not_evaluated", "no allowlist"),
+        ] {
+            assert!(
+                r.qualifiers.iter().any(|q| q == qualifier),
+                "{qualifier} must be derived; got {:?}",
+                r.qualifiers
+            );
+            assert!(block.contains(needle), "{needle:?} missing from {block:?}");
+        }
+    }
+
+    /// An unqualified valid verdict states its trust basis explicitly —
+    /// "VALID" alone would be the report lying by omission about how much
+    /// was actually checked.
+    #[test]
+    fn unqualified_valid_states_its_trust_basis() {
+        let r = verify_vector(
+            "result-vocabulary/output/unqualified-valid.capsule",
+            VerifyOptions {
+                allowlist: vec![fixture_public_key("result-vocabulary")],
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert!(r.qualifiers.is_empty(), "got {:?}", r.qualifiers);
+        assert_eq!(
+            result_block(&r),
+            vec!["Result: VALID (no qualifiers; 1 distinct trusted signer)".to_string()]
+        );
+    }
+
+    /// The same bytes under an allowlist that matches nothing: valid math,
+    /// zero trusted signers — a PASS that must never be silent about why.
+    #[test]
+    fn allowlist_that_matched_nothing_says_so() {
+        let r = verify_vector(
+            "result-vocabulary/output/unqualified-valid.capsule",
+            VerifyOptions {
+                allowlist: vec!["11".repeat(32)],
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert_eq!(r.qualifiers, vec!["no_trusted_signer".to_string()]);
+        assert!(result_block(&r).join("\n").contains("matched no signer"));
+    }
+
+    /// Drive the whole `verify` path — flag handling included — the way
+    /// the binary does, so the exit code is asserted and not merely the
+    /// text printed above it.
+    fn exit_code_for(relative: &str, allowlist: Vec<String>, accept_versions: Vec<String>) -> u8 {
+        run_verify(
+            &vectors_dir().join(relative),
+            allowlist,
+            None,
+            accept_versions,
+            false,
+        )
+    }
+
+    /// spec/results.md exit contract: `0` = VALID and every REQUESTED
+    /// policy satisfied. Both policies are demands the operator typed on
+    /// this command line, so an unmet one fails the run beside a verdict
+    /// that stays `valid` — the same rule the Node CLI pins in
+    /// `cli/test/smoke.mjs` ("unmatched allowlist exits 1"). Rendering the
+    /// failed policy and then exiting 0 is how the two reference CLIs came
+    /// to disagree about `--allowlist`.
+    #[test]
+    fn requested_policies_decide_the_exit_code() {
+        const CAPSULE: &str = "result-vocabulary/output/unqualified-valid.capsule";
+        let signer = fixture_public_key("result-vocabulary");
+
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![], vec![]),
+            0,
+            "no flag, no demand: an unallowlisted run is qualified, not failed"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![signer], vec![]),
+            0,
+            "the allowlisted signer satisfies the requested trust policy"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec!["11".repeat(32)], vec![]),
+            1,
+            "allowlist matched no signer: the operator's demand went unmet"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![], vec!["0.6".to_string()]),
+            1,
+            "the declared accepted set excludes this capsule's version"
+        );
+        assert_eq!(
+            exit_code_for(
+                "profile-declaration/output/unsupported-vendor-profile.capsule",
+                vec![],
+                vec![]
+            ),
+            1,
+            "UNSUPPORTED is a verdict about the capsule-verifier pair, never exit 2"
+        );
+        assert_eq!(
+            exit_code_for("tamper-detection/output/tampered-payload.capsule", vec![], vec![]),
+            1,
+            "INVALID"
+        );
+        assert_eq!(
+            exit_code_for("result-vocabulary/output/no-such-fixture.capsule", vec![], vec![]),
+            2,
+            "an unreadable file is an operator error, not a verdict"
+        );
+    }
+
+    /// spec/profiles.md: the refusal is a limitation of the VERIFIER, and
+    /// both the verdict line and the header line have to say so — the
+    /// operator's remediation is "verify it with an implementation of that
+    /// profile", not "this file is corrupt".
+    #[test]
+    fn unsupported_profile_renders_the_cross_lane_needles() {
+        let r = verify_vector(
+            "profile-declaration/output/unsupported-vendor-profile.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Unsupported);
+        let block = result_block(&r).join("\n");
+        assert!(block.starts_with("Result: UNSUPPORTED (unsupported_profile:"), "{block}");
+        assert!(block.contains("is not supported by this verifier"), "{block}");
+        assert!(
+            block.contains("not corruption of the capsule"),
+            "the remediation must be visible: {block}"
+        );
+        assert_eq!(
+            profile_line(&r).as_deref(),
+            Some("x-test-kms-1 1.0 (not supported by this verifier)")
+        );
+    }
+
+    /// A profile mismatch is a capsule SELF-CONTRADICTION — a defect —
+    /// so it renders INVALID with no verdict_reason, never "unsupported"
+    /// (which would hand the operator a false remediation).
+    #[test]
+    fn profile_mismatch_renders_invalid() {
+        let r = verify_vector(
+            "profile-declaration/output/profile-mismatch-value.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Invalid);
+        assert_eq!(r.verdict_reason, None);
+        assert_eq!(result_block(&r), vec!["Result: INVALID".to_string()]);
+    }
+
+    /// The absence rule made visible: an undeclared capsule reports the
+    /// default profile as what actually governed verification.
+    #[test]
+    fn undeclared_capsule_reports_the_default_profile() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(
+            profile_line(&r).as_deref(),
+            Some("v0.6-suite (default, undeclared)")
+        );
+    }
+
+    /// --accept-versions is a REQUESTED policy: the capsule still verifies
+    /// (the SDK reports, the host decides), and the qualifier says why the
+    /// exit code will not be 0.
+    #[test]
+    fn declared_version_policy_is_reported_as_a_qualifier() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions {
+                accept_versions: Some(vec!["0.6".to_string()]),
+                ..VerifyOptions::default()
+            },
+        );
+        assert!(r.ok, "host policy never decides integrity");
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert!(
+            r.qualifiers
+                .iter()
+                .any(|q| q == "version_not_accepted_by_policy"),
+            "got {:?}",
+            r.qualifiers
+        );
+        assert!(result_block(&r)
+            .join("\n")
+            .contains("not in the declared accepted set"));
+        assert_eq!(r.format_version.accepted_by_policy, Some(false));
+    }
+
+    /// A qualifier this renderer does not know — a later spec revision's
+    /// name, or a vendor `x-` entry — is surfaced VERBATIM. Treating an
+    /// unknown qualifier as ignorable is the one consumer behavior
+    /// spec/results.md forbids outright.
+    #[test]
+    fn unknown_qualifiers_are_surfaced_verbatim() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(qualifier_line("x-acme-policy-stale", &r), "x-acme-policy-stale");
+        assert_eq!(
+            qualifier_line("lineage_declared_unverified", &r),
+            "lineage_declared_unverified"
+        );
+    }
 
     /// The originator key shape from the fixture registries: 64 hex chars.
     #[test]
