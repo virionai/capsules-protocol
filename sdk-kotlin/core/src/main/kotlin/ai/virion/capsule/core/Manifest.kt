@@ -62,7 +62,20 @@ object Manifest {
     }
 
     data class Originator(val publicKeyHex: String, val label: String)
-    data class Participant(val actorId: String, val role: String, val label: String)
+
+    /**
+     * One declared participants[] entry. [actorId] is the ONE member the
+     * spec interprets (closed namespace grammar); [role] and [label] are
+     * OPTIONAL advisory attribution text — never verification inputs
+     * (spec/manifest.md field rules; conformance vector
+     * chain-rules/participant-only-actor-id). When null the member is
+     * omitted from the sealed manifest, matching the JS reference.
+     */
+    data class Participant(
+        val actorId: String,
+        val role: String? = null,
+        val label: String? = null,
+    )
 
     /**
      * One member of `manifest.signer_commitment`: the exact seal-time
@@ -132,12 +145,15 @@ object Manifest {
                 "public_key" to JCSValue.Str(originator.publicKeyHex),
                 "label" to JCSValue.Str(originator.label),
             )),
-            "participants" to JCSValue.Arr(participants.map {
-                JCSValue.Obj(listOf(
-                    "actor_id" to JCSValue.Str(it.actorId),
-                    "role" to JCSValue.Str(it.role),
-                    "label" to JCSValue.Str(it.label),
-                ))
+            "participants" to JCSValue.Arr(participants.map { p ->
+                // Advisory members are emitted only when declared: an
+                // absent role/label is a weaker claim made honestly, not
+                // a hole to backfill (spec/manifest.md field rules).
+                JCSValue.Obj(buildList {
+                    add("actor_id" to JCSValue.Str(p.actorId))
+                    p.role?.let { add("role" to JCSValue.Str(it)) }
+                    p.label?.let { add("label" to JCSValue.Str(it)) }
+                })
             }),
             "first_event_hash" to JCSValue.Str(firstEventHash),
             "content_index" to JCSValue.Obj(listOf(

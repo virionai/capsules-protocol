@@ -68,8 +68,10 @@ here.
   by verifiers at every profile — a manifest naming an originator who
   never signed is the capsule asserting something false about itself.
   Conformance vector: `spec/vectors/signer-set/` (`originator-not-a-signer`).
-- `originator.label`: free-text, advisory only. Auditors verify the
-  public key, not the label.
+- `originator.label`: free-text, advisory only, and OPTIONAL — it MAY
+  be absent, and it is never a verification input. Auditors verify the
+  public key, not the label. Conformance vector:
+  `spec/vectors/chain-rules/` (`absent-advisory-manifest-members`).
 - `participants`: an ARRAY of participant objects when present. The
   member may be ABSENT, and the array may be EMPTY — both are the same
   weaker claim made honestly (no assertion about who acted; verifiers
@@ -81,6 +83,18 @@ here.
   vectors: `spec/vectors/malformed-shape/` (`participants-not-array`,
   `participants-string`); `spec/vectors/chain-rules/`
   (`absent-participants`, `unbound-actors`).
+- `participants[]` entry shape: each entry is a participant object, and
+  `actor_id` is the ONE member of it this spec interprets. A bare
+  actor-id STRING is an accepted equivalent shorthand for
+  `{ "actor_id": <string> }` — writers MAY emit either shape, and
+  verifiers MUST interpret both identically: grammar-checked (below)
+  and binding the actor set. An entry of any other shape, or an entry
+  whose `actor_id` is missing or not a string, is a DECLARED
+  participant no reader can bind: malformed, rejected fail-closed with
+  the same `participants[i].actor_id` diagnosis in every lane — never a
+  lane-specific parse failure that makes a spec-valid capsule look
+  corrupt. Conformance vectors: `spec/vectors/chain-rules/`
+  (`participant-bare-string`, `participant-missing-actor-id`).
 - `participants[].actor_id`: must match one of the patterns
   `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>` — the
   namespace set is CLOSED and `<id>` is any non-empty string
@@ -93,6 +107,17 @@ here.
   who acted. Not cryptographically bound to a key by default — only
   `originator` is. Conformance vector: `spec/vectors/chain-rules/`
   (`invalid-actor-namespace`).
+- `participants[].role`, `participants[].label`: OPTIONAL advisory
+  attribution/display text, like `originator.label`. They are NEVER
+  verification inputs: verifiers MUST NOT gate any outcome on their
+  presence, absence, or type, and a typed reader MUST NOT refuse to
+  open a capsule over them — the values sit under `manifest_hash`
+  either way, so tampering is still sealed out. A participant declared
+  with only an `actor_id` is a weaker claim made honestly: who is
+  involved, without asserting what function each served. Auditors
+  verify keys and the actor binding, not display text. Conformance
+  vectors: `spec/vectors/chain-rules/` (`participant-only-actor-id`,
+  `advisory-members-any-type`).
 - `first_event_hash`: 32 bytes of SHA-256, lowercase hex; equals the
   hash of the first event in `chain/events.jsonl`. When the chain has
   ZERO events (see [chain.md](chain.md) "Empty chains") this member
@@ -171,8 +196,10 @@ here.
   ```json
   { "metadata_path": "skills/decryption/decryption.json", "cipher": "ChaCha20-Poly1305" }
   ```
-- `created_at`: ISO 8601 UTC; advisory only. Authoritative time-binding
-  is the envelope's `signed_at`.
+- `created_at`: ISO 8601 UTC; advisory only, and OPTIONAL — it MAY be
+  absent and is never a verification input. Authoritative time-binding
+  is the envelope's `signed_at`. Conformance vector:
+  `spec/vectors/chain-rules/` (`absent-advisory-manifest-members`).
 
 ## Unknown members
 

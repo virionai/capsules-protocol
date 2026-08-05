@@ -18,11 +18,15 @@ public final class CapsuleBuilder {
         }
     }
 
+    /// Builder-side participant declaration. `role` and `label` are
+    /// OPTIONAL advisory attribution text (spec/manifest.md field rules):
+    /// a participant declared with only an actor id is a weaker claim
+    /// made honestly, and the sealed manifest omits the absent members.
     public struct Participant {
         public let actorId: String
-        public let role: String
-        public let label: String
-        public init(actorId: String, role: String, label: String) {
+        public let role: String?
+        public let label: String?
+        public init(actorId: String, role: String? = nil, label: String? = nil) {
             self.actorId = actorId; self.role = role; self.label = label
         }
     }

@@ -46,8 +46,29 @@
 //!   tripping through `Value` is fine for that — the JCS canonicalizer
 //!   re-sorts keys at hash time anyway.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+
+/// Lenient projection for ADVISORY string members (spec/manifest.md,
+/// spec/chain.md field rules): `Some(s)` when the stored value is a JSON
+/// string, `None` when it is absent or any other type. Advisory members
+/// are never verification inputs — verifiers gate nothing on their
+/// presence, absence, or type — so the typed VIEW must not refuse to
+/// parse a spec-valid document over them (conformance vectors:
+/// chain-rules `advisory-members-any-type`,
+/// `absent-advisory-manifest-members`, `minimal-event-fields`). The
+/// preserved `serde_json::Value` tree keeps the stored value verbatim for
+/// hashing either way.
+fn advisory_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::String(s) => Some(s),
+        _ => None,
+    })
+}
 
 /// The `format` block at the top of every manifest. All four fields are
 /// fixed-vocabulary strings (`"0.6"`/`"0.7"`, `"zip"`, `"JCS-RFC8785"`,
@@ -65,30 +86,77 @@ pub struct FormatBlock {
 
 /// Originator block: the entity that *created* the capsule.
 ///
-/// `public_key` is 64 lowercase hex chars (32 raw bytes); `label` is a free-
-/// form display name. Both are required.
+/// `public_key` is 64 lowercase hex chars (32 raw bytes) and required —
+/// the originator-binding invariant reads it. `label` is a free-form
+/// display name: ADVISORY and optional (spec/manifest.md field rules), so
+/// the lenient projection never refuses a capsule over it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Originator {
     pub public_key: String,
-    pub label: String,
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub label: Option<String>,
 }
 
-/// Participant entry: a non-originator party whose role is recorded in the
-/// manifest for trust and audit purposes.
+/// One declared `manifest.participants[]` entry, as this lane interprets
+/// it (spec/manifest.md field rules).
 ///
-/// `label` is advisory display text and OPTIONAL on the wire: the base spec
-/// (manifest.md field rules) requires only the `actor_id` pattern. This lane
-/// used to demand `label` in the typed view, refusing a spec-valid capsule
-/// that every other lane verified (addendum A12); conformance vector
-/// `chain-rules/participant-without-label` pins the fix. This struct is a
-/// VIEW, never a hashing input, so `skip_serializing_if` cannot change any
-/// hashed bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `actor_id` is the ONE member the spec interprets: `None` here means
+/// the entry declared no interpretable actor id — a malformed declaration
+/// the VERIFIER flags with the cross-lane `participants[i].actor_id`
+/// diagnosis (conformance vector chain-rules/participant-missing-actor-id)
+/// — never a parse refusal, which would present a spec-invalid entry as a
+/// corrupt container. `role` and `label` are advisory attribution text:
+/// optional, any-typed on the wire, never verification inputs (vectors
+/// participant-without-label, participant-only-actor-id,
+/// advisory-members-any-type).
+///
+/// The custom `Deserialize` also accepts the bare actor-id STRING entry —
+/// the spec's shorthand for `{actor_id}` (vector participant-bare-string)
+/// — and never fails: every entry shape projects onto this view, and the
+/// verifier decides. This struct is a VIEW, never a hashing input, so
+/// `skip_serializing_if` cannot change any hashed bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Participant {
-    pub actor_id: String,
-    pub role: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Participant {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let string_of = |v: Option<&serde_json::Value>| -> Option<String> {
+            v.and_then(|x| x.as_str()).map(str::to_string)
+        };
+        Ok(match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(s) => Participant {
+                actor_id: Some(s),
+                role: None,
+                label: None,
+            },
+            serde_json::Value::Object(m) => Participant {
+                actor_id: string_of(m.get("actor_id")),
+                role: string_of(m.get("role")),
+                label: string_of(m.get("label")),
+            },
+            // Any other entry shape declares nothing bindable; the
+            // verifier flags it (same diagnosis as a missing actor_id).
+            _ => Participant {
+                actor_id: None,
+                role: None,
+                label: None,
+            },
+        })
+    }
 }
 
 /// One row of the content index: a path inside the capsule and the SHA-256
@@ -156,7 +224,16 @@ pub struct Manifest {
     pub first_event_hash: Option<String>,
     pub content_index: ContentIndex,
     pub encryption: Option<Encryption>,
-    pub created_at: String,
+    /// Advisory only (spec/manifest.md field rules): MAY be absent, and
+    /// never a verification input — authoritative time-binding is the
+    /// envelope's `signed_at`. Conformance vector:
+    /// chain-rules/absent-advisory-manifest-members.
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_commitment: Option<Vec<SignerCommitmentEntry>>,
 }
@@ -215,12 +292,49 @@ pub struct Envelope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainEvent {
     pub seq: u64,
-    pub event_id: String,
-    pub actor: String,
+    /// Advisory (spec/chain.md field rules) — as are `action`, `target`,
+    /// `timestamp`, and `payload` below. The event hash commits to the
+    /// stored line, so an absent (or non-string) advisory member is a
+    /// weaker claim made honestly, never a parse refusal: the members
+    /// verification rules read are `seq`, `kind`, `prev_hash`, `hash`,
+    /// and (only when the manifest binds an actor set) `actor`.
+    /// Conformance vector: chain-rules/minimal-event-fields.
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub event_id: Option<String>,
+    /// `None` when absent or non-string. Read ONLY by the conditional
+    /// step-6 membership rule: with a bound actor set, `None` fails that
+    /// rule (rendered `null`, mirroring the JS reference); with an
+    /// unbound set it binds nothing.
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub actor: Option<String>,
     pub kind: String,
-    pub action: String,
-    pub target: String,
-    pub timestamp: String,
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub action: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub target: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "advisory_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub payload: serde_json::Value,
     #[serde(default)]
     pub untrusted_payload_fields: Vec<String>,
@@ -522,7 +636,83 @@ mod tests {
         );
         // The typed view still parses the known fields alongside.
         assert_eq!(events[0].event.seq, 1);
-        assert_eq!(events[0].event.actor, "human:alice");
+        assert_eq!(events[0].event.actor.as_deref(), Some("human:alice"));
+    }
+
+    /// spec/chain.md field rules: `event_id`, `actor`, `action`, `target`,
+    /// `timestamp`, and `payload` are advisory — an event omitting all of
+    /// them still parses into the typed view (chain-rules
+    /// minimal-event-fields pins the full-pipeline outcome).
+    #[test]
+    fn chain_event_parses_without_advisory_members() {
+        let line = concat!(
+            r#"{"seq":1,"kind":"decision","#,
+            r#""prev_hash":"0000000000000000000000000000000000000000000000000000000000000000","#,
+            r#""hash":"0000000000000000000000000000000000000000000000000000000000000001"}"#,
+            "\n",
+        );
+        let events = parse_chain_jsonl(line.as_bytes())
+            .expect("advisory members are optional in the typed view");
+        assert_eq!(events.len(), 1);
+        let e = &events[0].event;
+        assert_eq!(e.seq, 1);
+        assert_eq!(e.kind, "decision");
+        assert!(e.event_id.is_none() && e.actor.is_none() && e.action.is_none());
+        assert!(e.target.is_none() && e.timestamp.is_none());
+        assert!(e.payload.is_null());
+        // The preserved tree must NOT invent members: the hash preimage is
+        // the stored line.
+        assert!(events[0].raw.get("payload").is_none());
+        assert!(events[0].raw.get("event_id").is_none());
+    }
+
+    /// spec/manifest.md field rules: every participants[] entry shape
+    /// projects onto the typed view without a parse refusal — the bare
+    /// actor-id string binds like `{actor_id}`, advisory members of any
+    /// type project to `None`, and an uninterpretable entry yields
+    /// `actor_id: None` for the VERIFIER to flag (never a parse error
+    /// presenting a spec-invalid entry as a corrupt container).
+    #[test]
+    fn participant_entries_project_leniently() {
+        let parsed: Vec<Participant> = serde_json::from_str(
+            r#"["human:origin",
+                {"actor_id":"ai:helper"},
+                {"actor_id":"human:a","role":42,"label":{"x":1}},
+                {"role":"advisor"},
+                42]"#,
+        )
+        .expect("every entry shape must project, never refuse");
+        assert_eq!(parsed[0].actor_id.as_deref(), Some("human:origin"));
+        assert_eq!(parsed[1].actor_id.as_deref(), Some("ai:helper"));
+        assert!(parsed[1].role.is_none() && parsed[1].label.is_none());
+        // Advisory members of a non-string type are simply not display
+        // text this view can show — never a refusal.
+        assert_eq!(parsed[2].actor_id.as_deref(), Some("human:a"));
+        assert!(parsed[2].role.is_none() && parsed[2].label.is_none());
+        // Unbindable declarations: the verifier's grammar check flags
+        // these; the view just reports there is no actor_id.
+        assert!(parsed[3].actor_id.is_none());
+        assert!(parsed[4].actor_id.is_none());
+    }
+
+    /// spec/manifest.md field rules: originator.label and created_at are
+    /// advisory — a manifest omitting both still parses (chain-rules
+    /// absent-advisory-manifest-members pins the full-pipeline outcome).
+    #[test]
+    fn manifest_parses_without_advisory_members() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).expect("unzip");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(map.get("manifest.json").expect("manifest")).unwrap();
+        value["originator"]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        value.as_object_mut().unwrap().remove("created_at");
+        let manifest: Manifest = serde_json::from_value(value)
+            .expect("advisory manifest members are optional in the typed view");
+        assert!(manifest.originator.label.is_none());
+        assert!(manifest.created_at.is_none());
     }
 
     #[test]

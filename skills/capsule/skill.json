@@ -104,12 +104,12 @@
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "c92b3f3a905f1ed6b846b075be8a39cafc4cd4856367675fad92c70f3b95a267"
+        "sha256": "7067c6991794e72ab7b6e9245146ba4bb63ae54777085cafbb51d81e88a34712"
       },
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "ec0af3be81bd41a46ac85a0f3d26cff19a08dcc443c9802db061c90bcdc2e9b0"
+        "sha256": "27f0190dd5da8efeff04ae552f71adc0089d164036d2944ca57111f2c2f75e4b"
       },
       {
         "path": "spec/envelope.md",

@@ -77,11 +77,17 @@ public enum Manifest {
         }
     }
 
+    /// One declared participants[] entry. `actorId` is the ONE member the
+    /// spec interprets (closed namespace grammar); `role` and `label` are
+    /// OPTIONAL advisory attribution text — never verification inputs
+    /// (spec/manifest.md field rules; conformance vector
+    /// chain-rules/participant-only-actor-id). When nil the member is
+    /// omitted from the sealed manifest, matching the JS reference.
     public struct Participant {
         public let actorId: String
-        public let role: String
-        public let label: String
-        public init(actorId: String, role: String, label: String) {
+        public let role: String?
+        public let label: String?
+        public init(actorId: String, role: String? = nil, label: String? = nil) {
             self.actorId = actorId; self.role = role; self.label = label
         }
     }
@@ -183,11 +189,13 @@ public enum Manifest {
                 ("label", .string(originator.label)),
             ])),
             ("participants", .array(participants.map { p in
-                .object([
-                    ("actor_id", .string(p.actorId)),
-                    ("role", .string(p.role)),
-                    ("label", .string(p.label)),
-                ])
+                // Advisory members are emitted only when declared: an
+                // absent role/label is a weaker claim made honestly, not
+                // a hole to backfill (spec/manifest.md field rules).
+                var fields: [(String, JCSValue)] = [("actor_id", .string(p.actorId))]
+                if let role = p.role { fields.append(("role", .string(role))) }
+                if let label = p.label { fields.append(("label", .string(label))) }
+                return .object(fields)
             })),
             ("first_event_hash", .string(firstEventHash)),
             ("content_index", .object([
