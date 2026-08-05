@@ -28,6 +28,8 @@ import {
   unpackZip,
 } from "../src/index.js";
 import { eventsToJsonl, firstAndEntryHash } from "../src/chain.js";
+import { bytesToHex, concatBytes, jcs, sha256 } from "../src/canonical.js";
+import { ed25519Sign } from "../src/crypto.js";
 
 const TS = "2026-05-07T12:00:00Z";
 const LATER = "2026-05-07T13:00:00Z";
@@ -58,6 +60,72 @@ async function sealedPred(ed, events = 2) {
     signers: [{ role: "originator", publicKey: ed.publicKey, privateKey: ed.privateKey }],
     signedAt: TS,
   }));
+}
+
+/**
+ * Seal a capsule under an EARLIER era carrying an arbitrary
+ * `predecessors` value. Byte-coherent under that era: identity from
+ * `capsule-id-v<era>\0` and the signature over
+ * `capsule-provenance-v<era>:originator\0`, the domain strings that
+ * era's verifier reconstructs — so the ONLY thing under test is whether
+ * a v0.7.1 reader interprets a member that era's rules do not define.
+ */
+async function sealAtEraWithPredecessors(ed, era, predecessorsValue) {
+  const events = buildChainEvents([{
+    actor: "human:alice",
+    kind: "observation",
+    action: "noted",
+    target: "capsule",
+    timestamp: TS,
+    payload: {},
+  }]);
+  const { firstEventHash, entryHash } = firstAndEntryHash(events);
+  const files = new Map();
+  files.set("program.md", Buffer.from("# Program\n", "utf8"));
+  files.set("chain/events.jsonl", eventsToJsonl(events));
+  const contentIndex = buildContentIndex(files);
+  const manifest = buildManifest({
+    originator: { public_key: ed.publicKeyHex, label: "Alice" },
+    participants: [{ actor_id: "human:alice", role: "originator" }],
+    contentIndex,
+    firstEventHash,
+    encryption: null,
+    createdAt: TS,
+    signerCommitment: buildSignerCommitment([
+      { role: "originator", public_key: ed.publicKeyHex },
+    ]),
+  });
+  manifest.format.version = era;
+  manifest.predecessors = predecessorsValue;
+  manifest.id = bytesToHex(sha256(concatBytes(
+    Buffer.from(`capsule-id-v${era}\x00`, "utf8"),
+    ed.publicKey,
+    hexToBytes(firstEventHash),
+  )));
+  const envelope = buildEnvelope({
+    capsuleId: manifest.id,
+    firstEventHash,
+    entryHash,
+    manifestHash: manifestHash(manifest),
+    contentIndexHash: contentIndex.index_hash,
+    encryptedBlobHash: null,
+    cipher: "none",
+    signedAt: TS,
+  });
+  envelope.version = era;
+  const { signers: _drop, ...payload } = envelope;
+  envelope.signers.push({
+    role: "originator",
+    public_key: ed.publicKeyHex,
+    signature: bytesToHex(ed25519Sign(ed.privateKey, concatBytes(
+      Buffer.from(`capsule-provenance-v${era}:originator\x00`, "utf8"),
+      jcs(payload),
+    ))),
+  });
+  const all = new Map(files);
+  all.set("manifest.json", manifestBytes(manifest));
+  all.set("provenance/envelope.json", Buffer.from(JSON.stringify(envelope, null, 2), "utf8"));
+  return Buffer.from(await packZip(all));
 }
 
 /** Seal a minimal capsule with an arbitrary (possibly malformed) predecessors value. */
@@ -524,6 +592,71 @@ test("x- vendor members inside entries are preserved and legal", () => {
     "x-acme-relation": "fork",
   }]);
   assert.deepEqual(problems, []);
+});
+
+test("pre-lineage era: a predecessors member is inert, not shape-checked", async () => {
+  const alice = generateEd25519();
+  // The SAME value that fails a 0.7 capsule closed.
+  const malformed = [];
+  const v07 = await verifyCapsule(await sealWithPredecessors(alice, malformed));
+  assert.equal(v07.ok, false);
+  assert.ok(v07.errors.some((e) => e.startsWith("manifest.predecessors")));
+
+  const v06 = await verifyCapsule(await sealAtEraWithPredecessors(alice, "0.6", malformed));
+  assert.equal(v06.ok, true, v06.errors.join("; "));
+  assert.equal(v06.formatVersion.observed, "0.6");
+  assert.deepEqual(v06.lineage, { declared: false, ok: true, verifiedDepth: 0, entries: [] });
+  assert.deepEqual(v06.qualifiers, []);
+  assert.ok(v06.notes.some((n) => n.includes("unknown member under that era")));
+});
+
+test("pre-lineage era: a well-formed declaration is equally uninterpreted", async () => {
+  const alice = generateEd25519();
+  const bob = generateEd25519();
+  const predBytes = await sealedPred(alice);
+  const { bytes } = await rewrapCapsule(predBytes, {
+    originator: { ...bob, label: "Bob" },
+    createdAt: LATER,
+    signedAt: LATER,
+  });
+  const entry = (await CapsuleReader.fromBytes(bytes)).manifest().predecessors[0];
+  const result = await verifyCapsule(
+    await sealAtEraWithPredecessors(bob, "0.6", [entry]),
+    { predecessors: [predBytes] },
+  );
+  // Even with the predecessor bytes in hand: no era rules, no claim.
+  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.equal(result.lineage.declared, false);
+  assert.equal(result.lineage.entries.length, 0);
+});
+
+test("L3 inner/outer equality runs on the documented recipe, with no extra option", async () => {
+  const alice = generateEd25519();
+  const bob = generateEd25519();
+  const recipient = generateX25519();
+  const { bytes } = await rewrapCapsule(await sealedPred(alice), {
+    originator: { ...bob, label: "Bob" },
+    createdAt: LATER,
+    signedAt: LATER,
+    recipients: [{ publicKey: recipient.publicKey }],
+    lineagePlacement: "both",
+  });
+  // A capsule asserting one origin to the world and another to its
+  // recipients: rewrite the OUTER declaration only.
+  const files = await unpackZip(bytes);
+  const outerManifest = JSON.parse(Buffer.from(files.get("manifest.json")).toString("utf8"));
+  outerManifest.predecessors = [
+    { ...outerManifest.predecessors[0], manifest_hash: "e".repeat(64) },
+  ];
+  files.set("manifest.json", Buffer.from(JSON.stringify(outerManifest), "utf8"));
+  const outer = await CapsuleReader.fromBytes(Buffer.from(await packZip(files)));
+  const inner = await outer.decrypt(recipient);
+  // The reader carries the layer it came out of, so the fail-closed
+  // MUST is not opt-in.
+  assert.equal(inner.outerManifest(), outer.manifest());
+  const result = await verifyCapsule(inner, { outerEnvelope: outer.envelope() });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes("predecessors differs between the inner and outer")));
 });
 
 test("encrypted successor: inner/outer lineage equality at L3 (both-present rule)", async () => {

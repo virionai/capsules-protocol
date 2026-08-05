@@ -23,6 +23,31 @@ v0.3 the verifier covers both L2 (envelope-only) and L3 (decrypted
 inner chain) — pass `--decryption-key` to promote an encrypted capsule
 from L2 to L3.
 
+## What's new in v0.7.1
+
+- **Lineage (`spec/lineage.md`, `manifest.predecessors`):** the verify
+  side, in full. `VerifyResult.lineage` reports
+  `{declared, ok, verified_depth, entries}`; the standalone shape /
+  null-coherence / era-keyed identity-coherence checks fail closed under
+  the new `TopErrorCategory::Lineage`; the supplied-bytes linkage walk
+  (`VerifyOptions::predecessors`, CLI `--predecessor`, repeatable) is
+  REPORT-ONLY — it can falsify `lineage.ok` but never the capsule's own
+  `ok`, so a host handing the verifier the wrong file cannot brand an
+  honest successor a forgery. Each supplied artifact is verified under
+  ITS declared version's rules and matched on RECOMPUTED values only;
+  a verified hop's own declaration joins the walk (`verified_depth`).
+- **Verdict qualifiers:** `VerifyResult.qualifiers` carries the three
+  emitted lineage names (`lineage_declared_unverified`,
+  `lineage_mismatch`, `lineage_predecessor_invalid`) — bare strings on a
+  VALID verdict, "custody claim not clean". Payload-carrying facts stay
+  in the `lineage` channel.
+- **CLI custody policy:** `--predecessor` sets a policy the way
+  `--allowlist` does. Without it, declared lineage never affects the
+  exit code; with it, exit 1 unless every supplied artifact matched a
+  declared entry and verified. Declared entries left unsupplied are
+  reported, never a policy failure — an operator may hold one branch of
+  a merge.
+
 ## What's new in v0.6
 
 - **Structural polish:** L3 logic extracted to its own `l3.rs` module so
@@ -129,6 +154,12 @@ the recipient's X25519 private key is supplied:
 - Encryption-state check: cipher whitelist (`none`,
   `ChaCha20-Poly1305`); for encrypted outers, `content.enc` SHA-256
   recomputed and compared against `envelope.encrypted_blob_hash`.
+- Lineage (`manifest.predecessors`): the standalone shape,
+  null-coherence and era-keyed identity-coherence checks fail closed on
+  a present declaration; with `--predecessor` artifacts supplied, each
+  is verified under its own era and matched against the declaration on
+  recomputed values, reported in `result.lineage` — report-only, so the
+  pool never changes the capsule's own verdict.
 - L3 (with `--decryption-key`): `content.enc` is decrypted via
   ChaCha20-Poly1305 with the AEAD key derived through X25519 ECDH +
   HKDF-SHA256, the inner ZIP is unpacked, the inner chain is walked
@@ -146,7 +177,11 @@ the recipient's X25519 private key is supplied:
 
 ## What it does *not* do (yet)
 
-- **No capsule building or signing.** Verifier only.
+- **No capsule building or signing.** Verifier only. That includes
+  **rewrap**: this lane verifies a successor's `manifest.predecessors`
+  declaration but cannot write one, so a Rust-only operator can check a
+  custody claim and not perform a hand-off (`spec/lineage.md` writer
+  obligations live in the builder lanes).
 - **No FFI.** No WASM, no C ABI, no Python bindings. Yet.
 
 ## Build and test
@@ -154,7 +189,7 @@ the recipient's X25519 private key is supplied:
 ```sh
 cd verifier-rust
 cargo build --workspace
-cargo test --workspace          # 104 tests, all pass
+cargo test --workspace          # 188 tests, all pass
 cargo run -p capsule-verify-cli -- verify <FILE.capsule>
 ```
 
@@ -182,9 +217,21 @@ verify <FILE>
                                 inner ZIP and walks the inner chain). On
                                 plain capsules, the flag is silently
                                 ignored.
+  --predecessor <FILE>          Candidate predecessor artifact for lineage
+                                linkage (spec/lineage.md). Repeatable.
+                                Inside the library the pool is REPORT-ONLY
+                                — it can never flip the capsule's own
+                                verdict — but supplying it here sets a
+                                POLICY, exactly as --allowlist does: every
+                                supplied file must match a declared entry
+                                and verify under its own era, or the run
+                                exits 1. Declared entries left unsupplied
+                                are reported, never a policy failure.
 ```
 
-Exit codes: `0` PASS, `1` FAIL, `2` I/O or argument error.
+Exit codes: `0` PASS and every requested policy satisfied, `1` FAIL (the
+capsule was rejected) or a requested policy — e.g. a `--predecessor`
+custody check — did not hold, `2` I/O or argument error.
 
 ## Layout
 
@@ -200,12 +247,14 @@ verifier-rust/
 │   │       ├── schemas.rs      Manifest / Envelope / ChainEvent
 │   │       ├── manifest.rs     capsule_id, content_index, manifest_hash
 │   │       ├── chain.rs        chain walk + per-event hash recompute
+│       ├── lineage.rs      manifest.predecessors checks + linkage walk
 │   │       ├── envelope.rs     canonical payload, signing input, sig verify
 │   │       ├── decrypt.rs      L3: ChaCha20-Poly1305 + X25519 + HKDF-SHA256
 │   │       ├── verifier.rs     top-level orchestrator (L2 + L3 promotion)
 │   │       └── lib.rs          re-exports
 │   └── capsule-verify-cli/     binary
-│       └── src/main.rs         clap CLI: verify <FILE> [--json] [--allowlist ...] [--decryption-key ...]
+│       └── src/main.rs         clap CLI: verify <FILE> [--json] [--allowlist ...]
+│                               [--decryption-key ...] [--predecessor ...]
 └── tests/
     └── parity_against_js_sdk.rs    integration test vs tamper-detection fixtures
 ```

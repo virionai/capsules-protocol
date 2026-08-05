@@ -178,6 +178,18 @@ handing the verifier the wrong file. Absent `predecessors`: no claim,
 nothing checked, `declared=false` reported. Presence binds, absence
 reports.
 
+Both groups have one precondition: **the capsule's OWN observed
+`format.version` must name an era whose rule set defines lineage** (era
+0.7 onward). `predecessors` is a claim member, not a rule selector, so
+in any earlier era it is an unknown member — preserved, hashed, never
+shape-checked ([versioning.md](versioning.md) "In-era tightening and
+cross-era force"). A verifier MUST apply this gate to the capsule in
+front of it exactly as it applies it to a predecessor hop reached
+through the walk: one artifact, one rule set, whether it is the subject
+or a hop. The area then reports the not-declared shape
+(`declared=false`, `ok=true`) and the capsule's verdict is untouched.
+Conformance vector: `predecessors-in-v06-capsule-is-inert`.
+
 All obligations produce identical outcomes in every lane, with the
 malformation diagnoses as shared strings (`predecessors`,
 `predecessors[i].<member>`), never a lane-specific parse crash: typed
@@ -185,7 +197,7 @@ lanes parse the member leniently (every member optional/raw at parse
 time) and diagnose at check time, and hashing always runs over stored
 bytes, never a typed re-serialization.
 
-### Standalone (always run when the member is present) — FAIL CLOSED
+### Standalone (run when the member is present and the era defines lineage) — FAIL CLOSED
 
 1. **Shape and grammar.** An array of entry objects; each entry's six
    members present with the required types; `format_version` matching
@@ -320,6 +332,20 @@ the supplied predecessor's own verification (`ok`, `observed_version`,
 over predecessor originators derives from the predecessor's own verify
 result (per-signer `valid`/`trusted`); the lineage area does not
 duplicate host policy.
+
+`error_count` is how many problems that verification actually diagnosed,
+across every channel the lane carries problems in — not the length of
+one channel. Lanes whose result splits errors per area (a tampered
+payload is a `content_index` error, a broken link a `chain` error, a
+forged signature an invalid signer row) MUST compose them; lanes whose
+result is a flat check list count failing checks. Only the cross-lane
+floor is normative: **when `artifact.ok` is false, `error_count` MUST be
+at least 1.** A report that says an artifact failed and in the same
+breath says it has zero errors is a misleading report (spec/trust.md),
+and the exact total is a lane-local shape, not a protocol fact. The same
+count is what every human diagnosis phrased "N error(s)" about someone
+else's artifact carries — the linkage `predecessor_invalid` line and the
+builders' predecessor refusal alike.
 
 Semantics of the area's `ok`: true iff the standalone checks passed
 (malformation ⇒ `lineage.ok=false` AND overall `ok=false`) AND no
@@ -512,11 +538,14 @@ domain-string changes, no new hash constructions.
 - **No retroactive interpretation of sealed eras.** A v0.6 capsule
   verifies under v0.6 rules, which contain no lineage semantics — a
   `predecessors` member inside a v0.6 capsule stays an unknown member
-  even to a v0.7.1 reader (inert, never shape-checked). Within era 0.7
-  the rule set now includes lineage, so a 0.7 capsule's member is
-  interpreted regardless of whether it was sealed before or after this
-  revision. `predecessors` is a *claim member*, not a rule selector —
-  see versioning.md "In-era tightening and cross-era force".
+  even to a v0.7.1 reader (inert, never shape-checked), whether that
+  capsule is the verification subject, a predecessor hop, or the inner
+  layer of an encrypted one. Within era 0.7 the rule set now includes
+  lineage, so a 0.7 capsule's member is interpreted regardless of
+  whether it was sealed before or after this revision. `predecessors`
+  is a *claim member*, not a rule selector — see versioning.md "In-era
+  tightening and cross-era force". Conformance vector:
+  `predecessors-in-v06-capsule-is-inert`.
 - **Cross-era citation is a feature.** Standalone check 3 keys the id
   recompute to the *predecessor's* era (`capsule-id-v0.6\x00` for a
   v0.6 predecessor) — the version-keyed-domain discipline versioning.md

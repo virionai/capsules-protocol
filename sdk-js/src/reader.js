@@ -110,6 +110,12 @@ export class CapsuleReader {
     if (!envBytes) throw new Error("missing provenance/envelope.json");
     this._envelope = parseJsonStrict(envBytes, "provenance/envelope.json");
     validateEnvelopeShape(this._envelope);
+    // Set only on the reader `decrypt()` returns: the layer this one
+    // came out of. It carries the L3 inner/outer lineage equality
+    // (spec/lineage.md standalone check 4) to verifyCapsule without the
+    // caller having to know the check exists — a normative fail-closed
+    // rule must not be opt-in.
+    this._outerManifest = null;
   }
 
   static async fromBytes(bytes) {
@@ -119,6 +125,9 @@ export class CapsuleReader {
 
   manifest() { return this._manifest; }
   envelope() { return this._envelope; }
+
+  /** The enclosing layer's manifest, or null for a top-level reader. */
+  outerManifest() { return this._outerManifest; }
 
   isEncrypted() {
     return this._envelope.cipher !== "none" && this.files.has("content.enc");
@@ -242,6 +251,8 @@ export class CapsuleReader {
     const innerZipBytes = chacha20Poly1305Decrypt(contentKey, contentNonce, aad, contentEnc);
 
     const innerFiles = await unpackZip(innerZipBytes);
-    return new CapsuleReader(innerFiles);
+    const inner = new CapsuleReader(innerFiles);
+    inner._outerManifest = this._manifest;
+    return inner;
   }
 }

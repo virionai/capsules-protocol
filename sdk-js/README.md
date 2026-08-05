@@ -175,6 +175,11 @@ const l3 = await verifyCapsule(inner, {
 });
 ```
 
+The reader `decrypt()` returns remembers the layer it came out of, so
+the L3 inner/outer lineage equality (spec/lineage.md) runs on this
+recipe with no extra option. Pass `outerManifest: outer.manifest()`
+only when you verify raw decrypted BYTES instead of that reader.
+
 ## Continue someone else's capsule (lineage / rewrap)
 
 You cannot seal under another originator's identity — and you don't

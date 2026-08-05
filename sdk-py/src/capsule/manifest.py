@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 
@@ -14,7 +15,7 @@ from .canonical import (
     sha256_hex,
     utf16_sort_key,
 )
-from .versions import CURRENT_VERSION, id_domain
+from .versions import CURRENT_VERSION, classify_version, id_domain
 
 
 
@@ -163,6 +164,174 @@ def build_signer_commitment(members: list[dict]) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Lineage declaration (manifest.predecessors) — spec/lineage.md.
+#
+# A successor capsule declares the exact sealed artifact(s) it continues
+# from. Presence binds, absence reports: an absent member is "no claim";
+# a PRESENT member no reader can interpret is the capsule asserting
+# something meaningless about its own origin, rejected fail-closed with
+# the SAME ``predecessors[i].<member>`` diagnoses in every lane.
+# ---------------------------------------------------------------------------
+
+_HEX64_LOWER = re.compile(r"^[0-9a-f]{64}$")
+
+#: The six spec-defined members of one predecessor entry, all REQUIRED.
+PREDECESSOR_ENTRY_MEMBERS: tuple[str, ...] = (
+    "capsule_id",
+    "format_version",
+    "originator_public_key",
+    "first_event_hash",
+    "entry_hash",
+    "manifest_hash",
+)
+
+#: The era default profile id (spec/lineage.md "Scope"), frozen forever.
+DEFAULT_PROFILE_ID = "v0.6-suite"
+
+
+def declared_alternate_profile_id(manifest) -> str | None:
+    """Return a non-default declared profile id, or None.
+
+    v0.7.1 lineage declarations commit to DEFAULT-PROFILE predecessors:
+    the entry grammar presumes the era-default identity derivation and
+    key encoding. A manifest that declares ``format.profile`` with any
+    id other than ``v0.6-suite`` is an alternate-profile capsule. A
+    present-but-uninterpretable declaration returns a placeholder string
+    — the caller treats it as non-default; the profile machinery
+    (spec/profiles.md, parallel track) owns its full diagnosis.
+    """
+    fmt = manifest.get("format") if isinstance(manifest, dict) else None
+    profile = fmt.get("profile") if isinstance(fmt, dict) else None
+    if profile is None:
+        return None
+    pid = profile.get("id") if isinstance(profile, dict) else None
+    if pid == DEFAULT_PROFILE_ID:
+        return None
+    if isinstance(pid, str) and pid:
+        return pid
+    return "(uninterpretable profile declaration)"
+
+
+def _is_hex64_lower(value) -> bool:
+    return isinstance(value, str) and _HEX64_LOWER.match(value) is not None
+
+
+def predecessors_problems(predecessors) -> list[str]:
+    """Validate a stored ``predecessors`` value; [] means well-formed.
+
+    Standalone checks 1-3 of spec/lineage.md. Every problem names its
+    member as ``predecessors[i].<member>`` — the shared cross-lane
+    diagnosis strings.
+
+      1. Shape and grammar — array of entry objects; six members present
+         with the required types; lowercase hex REQUIRED, not normalized
+         (the claim is bound by its stored bytes); a present-but-EMPTY
+         array is malformed ("no claim" has exactly one spelling:
+         absence); two entries sharing a manifest_hash are malformed
+         (the same artifact cited twice — the duplicate-signer
+         precedent). Two entries sharing capsule_id with DIFFERENT
+         manifest_hash values are LEGAL (a merge of two snapshots of one
+         line). Vendor extensions inside an entry use the x- prefix; any
+         other unrecognized member is malformed.
+      2. Null coherence — first_event_hash and entry_hash both null
+         (zero-event predecessor) or both 64-hex; a mixed declaration
+         describes a predecessor that cannot exist.
+      3. Identity coherence — when the declared format_version is in
+         THIS verifier's known table, the declared capsule_id must equal
+         the recompute under THAT era's identity rule (32 zero bytes for
+         a null first_event_hash). An unknown declared era SKIPS the
+         check (versioning.md forbids applying one era's formula to
+         another era's claim) — callers report identity_checked=False,
+         never a failure: the rule must not punish a capsule for the
+         verifier's age.
+    """
+    if not isinstance(predecessors, list):
+        return ["predecessors must be an array of predecessor entry objects"]
+    if not predecessors:
+        return [
+            'predecessors must not be empty when present ("no claim" has exactly one '
+            "spelling: absence)"
+        ]
+    problems: list[str] = []
+    for i, entry in enumerate(predecessors):
+        if not isinstance(entry, dict):
+            problems.append(f"predecessors[{i}] must be an entry object")
+            continue
+        for key in entry:
+            if key not in PREDECESSOR_ENTRY_MEMBERS and not key.startswith("x-"):
+                problems.append(
+                    f"predecessors[{i}].{key} is not a spec-defined entry member "
+                    f"(vendor extensions must use the x- prefix)"
+                )
+        for key in ("capsule_id", "originator_public_key", "manifest_hash"):
+            if not _is_hex64_lower(entry.get(key)):
+                problems.append(f"predecessors[{i}].{key} must be lowercase 64-hex")
+        for key in ("first_event_hash", "entry_hash"):
+            if key not in entry:
+                problems.append(f"predecessors[{i}].{key} must be lowercase 64-hex or null")
+            elif entry[key] is not None and not _is_hex64_lower(entry[key]):
+                problems.append(f"predecessors[{i}].{key} must be lowercase 64-hex or null")
+        version_class = classify_version(entry.get("format_version"))
+        if version_class["status"] == "invalid":
+            problems.append(
+                f"predecessors[{i}].format_version must be a '<major>.<minor>' version "
+                f"string, got {json.dumps(entry.get('format_version'))}"
+            )
+        # Null coherence (check 2) — only meaningful once both members typed.
+        feh = entry.get("first_event_hash")
+        eh = entry.get("entry_hash")
+        feh_ok = feh is None or _is_hex64_lower(feh)
+        eh_ok = eh is None or _is_hex64_lower(eh)
+        if feh_ok and eh_ok and (feh is None) != (eh is None):
+            problems.append(
+                f"predecessors[{i}].first_event_hash and predecessors[{i}].entry_hash must "
+                f"be both null (zero-event predecessor) or both 64-hex — a mixed "
+                f"declaration describes a predecessor that cannot exist"
+            )
+        # Identity coherence (check 3) — known declared eras only.
+        if (
+            version_class["status"] == "known"
+            and _is_hex64_lower(entry.get("capsule_id"))
+            and _is_hex64_lower(entry.get("originator_public_key"))
+            and feh_ok
+            and eh_ok
+            and (feh is None) == (eh is None)
+        ):
+            derived = compute_capsule_id(
+                hex_to_bytes(entry["originator_public_key"]), feh, entry["format_version"]
+            )
+            if derived != entry["capsule_id"]:
+                problems.append(
+                    f"predecessors[{i}].capsule_id does not derive from the declared "
+                    f"originator key and first event hash under era "
+                    f"{entry['format_version']} — the declaration contradicts its own members"
+                )
+    # Duplicate manifest_hash across entries (same artifact cited twice).
+    seen: dict[str, int] = {}
+    for i, entry in enumerate(predecessors):
+        mh = entry.get("manifest_hash") if isinstance(entry, dict) else None
+        if not _is_hex64_lower(mh):
+            continue
+        if mh in seen:
+            problems.append(
+                f"predecessors[{i}].manifest_hash duplicates predecessors[{seen[mh]}]."
+                f"manifest_hash (the same sealed artifact cited twice)"
+            )
+        else:
+            seen[mh] = i
+    return problems
+
+
+def predecessor_identity_checkable(entry) -> bool:
+    """True when the declared era's identity rule is available here.
+
+    I.e. standalone check 3 actually ran for this entry.
+    """
+    version = entry.get("format_version") if isinstance(entry, dict) else None
+    return classify_version(version)["status"] == "known"
+
+
 def build_manifest(
     *,
     originator: dict,
@@ -172,6 +341,7 @@ def build_manifest(
     encryption: dict | None = None,
     created_at: str,
     signer_commitment: list[dict] | None = None,
+    predecessors: list[dict] | None = None,
 ) -> dict:
     """Build a current-version manifest object (without ``id`` populated).
 
@@ -200,6 +370,10 @@ def build_manifest(
     # irrelevant to the canonical bytes.
     if signer_commitment is not None:
         manifest["signer_commitment"] = signer_commitment
+    # Optional lineage declaration (spec/lineage.md): absence is "no
+    # claim"; a present value must already satisfy predecessors_problems.
+    if predecessors is not None:
+        manifest["predecessors"] = predecessors
     return manifest
 
 

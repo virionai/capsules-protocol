@@ -392,6 +392,44 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         ));
     }
 
+    // The inner manifest's own lineage declaration is evaluated at L3
+    // (spec/lineage.md "Encrypted successors": L2 evaluates the outer
+    // declaration, L3 the inner). Standalone checks only — the linkage
+    // pool belongs to the outer verification. Both obligations are gated
+    // on the INNER capsule's own era: `predecessors` is a claim member,
+    // inert in eras whose rules do not define it, whether the capsule is
+    // a verification subject, a hop, or an encrypted inner layer.
+    let inner_era_lineage = crate::lineage::era_defines_lineage(&inner_manifest.format.version);
+    if inner_era_lineage {
+        if let Some(inner_predecessors) = inner_manifest.predecessors.as_ref() {
+            for problem in crate::lineage::predecessors_problems(inner_predecessors) {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Lineage,
+                    format!("L3 inner: manifest.{problem}"),
+                ));
+            }
+        }
+        // Inner/outer equality, fail-closed ONLY when BOTH manifests
+        // carry the member: single-layer presence is a weaker claim made
+        // honestly (a private or a public-only citation, the author's
+        // disclosure choice), but a capsule asserting one origin to the
+        // world and another to its recipients is lying about itself
+        // across layers. JCS byte equality, so case- or order-variant
+        // spellings never pass.
+        if let (Some(inner_declared), Some(outer_declared)) = (
+            inner_manifest.predecessors.as_ref(),
+            outer_manifest.predecessors.as_ref(),
+        ) {
+            if crate::jcs::jcs(inner_declared) != crate::jcs::jcs(outer_declared) {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Lineage,
+                    "L3: manifest.predecessors differs between the inner and outer manifests — \
+                     the capsule asserts one origin to the world and another to its recipients",
+                ));
+            }
+        }
+    }
+
     // Step 5: L3 cross-checks: inner manifest/envelope anchors must match
     // the outer envelope. Each mismatch is its own ChainAnchor error so
     // the renderer can attribute the failure precisely.

@@ -2,7 +2,7 @@
   "meta": {
     "name": "lineage",
     "spec_version": "0.7",
-    "description": "Language-neutral expected verifier outcomes for the lineage declaration (spec/lineage.md, `manifest.predecessors`). PRESENCE BINDS, ABSENCE REPORTS: an absent member is 'no claim' (declared=false, reported); a PRESENT malformed declaration is the capsule asserting something meaningless about its own origin and fails closed with the shared `predecessors[i].<member>` diagnoses. Identity coherence is era-keyed and SKIPPED (identity_checked=false, never failed) for unknown declared eras. Linkage against a supplied predecessor pool (per-vector `predecessors`, paths relative to this file) is REPORT-ONLY: it can falsify the lineage AREA (`expected.lineage.ok`) but never the capsule's overall ok — the ok-true-under-mismatch vectors pin that a host's file handling cannot flip a valid capsule's verdict, and no lane may 'helpfully' harden this into a parity break. Entry statuses are the closed vocabulary unverified | verified | mismatch | predecessor_invalid | predecessor_unverifiable (reason: unsupported_version | encrypted_predecessor | unsupported_profile | unsupported_capability). v0.7.1 declarations commit to plain, DEFAULT-PROFILE (v0.6-suite) predecessors; encrypted and alternate-profile supplies report predecessor_unverifiable with the scope reason — a verifier/scope limitation, never mismatch, never predecessor_invalid. Any unchecked entry MUST render with 'declared, not verified', and declared lineage MUST render with 'not countersigned' — a citation must never launder into an endorsement. expected.qualifiers pins the emitted lineage qualifier names exactly (bare strings, non-empty only on a valid verdict; payload-carrying facts live in the lineage area).",
+    "description": "Language-neutral expected verifier outcomes for the lineage declaration (spec/lineage.md, `manifest.predecessors`). PRESENCE BINDS, ABSENCE REPORTS: an absent member is 'no claim' (declared=false, reported); a PRESENT malformed declaration is the capsule asserting something meaningless about its own origin and fails closed with the shared `predecessors[i].<member>` diagnoses — but ONLY inside a capsule whose own era defines lineage: `predecessors` is a claim member, so in an earlier era it stays an unknown member (preserved, hashed, never shape-checked) whether the capsule is the subject or a hop. Identity coherence is era-keyed and SKIPPED (identity_checked=false, never failed) for unknown declared eras. Linkage against a supplied predecessor pool (per-vector `predecessors`, paths relative to this file) is REPORT-ONLY: it can falsify the lineage AREA (`expected.lineage.ok`) but never the capsule's overall ok — the ok-true-under-mismatch vectors pin that a host's file handling cannot flip a valid capsule's verdict, and no lane may 'helpfully' harden this into a parity break. Entry statuses are the closed vocabulary unverified | verified | mismatch | predecessor_invalid | predecessor_unverifiable (reason: unsupported_version | encrypted_predecessor | unsupported_profile | unsupported_capability). v0.7.1 declarations commit to plain, DEFAULT-PROFILE (v0.6-suite) predecessors; encrypted and alternate-profile supplies report predecessor_unverifiable with the scope reason — a verifier/scope limitation, never mismatch, never predecessor_invalid. Any unchecked entry MUST render with 'declared, not verified', and declared lineage MUST render with 'not countersigned' — a citation must never launder into an endorsement. expected.qualifiers pins the emitted lineage qualifier names exactly (bare strings, non-empty only on a valid verdict; payload-carrying facts live in the lineage area).",
     "generator": "sdk-js/tools/generate-lineage-fixtures.mjs",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
@@ -263,6 +263,16 @@
       "note": "A well-formed declaration naming era 0.9: versioning.md forbids applying one era's identity formula to another era's claim, so the recompute is SKIPPED and reported (identity_checked=false), never failed. The successor is not lying; this verifier is too old for the declared predecessor's era — the unknown-era skip is the malleability release valve. The SUCCESSOR itself is a 0.7 capsule and its verdict stays valid."
     },
     {
+      "name": "predecessors-in-v06-capsule-is-inert",
+      "capsule_file": "output/predecessors-in-v06-capsule.capsule",
+      "expected": {
+        "ok": true,
+        "lineage": { "declared": false, "ok": true, "verified_depth": 0, "entries": [] },
+        "qualifiers": []
+      },
+      "note": "NO RETROACTIVE INTERPRETATION OF SEALED ERAS (spec/versioning.md 'In-era tightening and cross-era force'; spec/lineage.md). This capsule declares era 0.6 and carries the SAME malformed value that fails `empty-array` closed — `\"predecessors\": []` — and it MUST verify: `predecessors` is a CLAIM member, not a rule selector, so it is an unknown member under a rule set that does not define it (preserved, hashed, NEVER shape-checked) and the area reports declared=false. A lane that shape-checks it here rejects a capsule a v0.6 reader accepts, breaking the archival guarantee, and contradicts the same lane's own hop rule — the identical artifact reached through the walk terminates it inertly. The capsule is byte-coherent under 0.6 (`capsule-id-v0.6\\u0000`, `capsule-provenance-v0.6:originator\\u0000`), so nothing but the era gate is under test."
+    },
+    {
       "name": "mismatch-different-seal",
       "capsule_file": "output/bob.capsule",
       "predecessors": ["output/alice-later-seal.capsule"],
@@ -289,11 +299,13 @@
           "declared": true,
           "ok": false,
           "verified_depth": 0,
-          "entries": [{ "status": "predecessor_invalid", "hop": 1 }]
+          "entries": [
+            { "status": "predecessor_invalid", "hop": 1, "artifact_error_count_min": 1 }
+          ]
         },
         "qualifiers": ["lineage_predecessor_invalid"]
       },
-      "note": "The two-fact split, never collapsed: the supplied artifact IS the declared artifact (its manifest matches the declared manifest_hash) AND it fails its own verification (a flipped content byte). Status predecessor_invalid takes precedence over mismatch; the diagnosis is a property of the supplied artifact under its own era, distinct from any claim about the successor's honesty. Overall ok stays true — report-only."
+      "note": "The two-fact split, never collapsed: the supplied artifact IS the declared artifact (its manifest matches the declared manifest_hash) AND it fails its own verification (a flipped content byte). Status predecessor_invalid takes precedence over mismatch; the diagnosis is a property of the supplied artifact under its own era, distinct from any claim about the successor's honesty. Overall ok stays true — report-only. `artifact_error_count_min` pins the report-honesty invariant: a report that says an artifact FAILED must never also say it has zero errors, whatever shape a lane carries its problems in. A floor, not an equality, because the count is lane-local — lanes with per-channel error lists (js/py/rust) compose them (3 here: the flipped byte's content_index diagnoses), lanes with a flat check list count failing checks."
     },
     {
       "name": "encrypted-predecessor-unverifiable",

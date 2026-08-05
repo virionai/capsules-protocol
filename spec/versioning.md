@@ -174,7 +174,11 @@ second distinction:
   whose rules do not define them: leaving one uninterpreted loses only
   a report. A `predecessors` member inside a v0.6 capsule is an unknown
   member even to a v0.7.1 reader — preserved, hashed, never
-  shape-checked.
+  shape-checked — and this holds wherever that capsule appears: as the
+  verification subject, as a predecessor hop, or as the inner layer of
+  an encrypted one. A verifier that applied the gate only to hops would
+  reject an artifact a reader of its own era accepts. Conformance
+  vector: `spec/vectors/lineage/` (`predecessors-in-v06-capsule-is-inert`).
 
 A claim member MAY still *refer across* eras: the lineage identity
 recompute keys the domain string to the DECLARED predecessor era

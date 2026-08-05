@@ -23,7 +23,7 @@ import {
 } from "./manifest.js";
 import { hexToBytes } from "./crypto.js";
 import { verifyEnvelopeSignatures } from "./envelope.js";
-import { defaultLineage, evaluateLineage } from "./lineage.js";
+import { defaultLineage, eraDefinesLineage, evaluateLineage } from "./lineage.js";
 import { CapsuleReader } from "./reader.js";
 import { toKeyHex } from "./keys.js";
 import { parseJsonStrict } from "./canonical.js";
@@ -140,9 +140,11 @@ function peekFormatVersion(files) {
  *                  keys) — signers must appear here for trusted=true
  *   outerEnvelope: optional envelope — for L3 verification, pass the outer
  *                  envelope so the inner can be checked against it.
- *   outerManifest: optional manifest — for L3 verification, pass the outer
- *                  manifest so the inner/outer lineage declarations can be
- *                  compared (spec/lineage.md "Encrypted successors").
+ *   outerManifest: only needed when verifying raw decrypted BYTES. The
+ *                  reader CapsuleReader.decrypt() returns already carries
+ *                  the outer manifest, so the inner/outer lineage
+ *                  comparison (spec/lineage.md "Encrypted successors")
+ *                  runs without it; passing it overrides that.
  *   predecessors:  optional pool of candidate predecessor artifacts
  *                  (bytes or CapsuleReaders) for lineage linkage —
  *                  REPORT-ONLY: it affects result.lineage, never ok.
@@ -508,9 +510,12 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
   // handling cannot forge a forgery verdict against an honest
   // successor. An encrypted capsule's OUTER declaration is evaluated
   // here at L2; the inner declaration is evaluated when the inner
-  // capsule is verified at L3.
+  // capsule is verified at L3. The capsule's own observed era decides
+  // whether the member is interpreted at all: in a pre-lineage era it
+  // is an unknown member, exactly as it is when reached as a hop.
   result.lineage = await evaluateLineage({
     manifest,
+    version: capsuleVersion,
     options,
     verify: verifyCapsule,
     errors,
@@ -699,9 +704,15 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     // weaker claim made honestly (a private or a public-only citation),
     // but a capsule asserting one origin to the world and another to
     // its recipients is lying about itself across layers. JCS byte
-    // equality, so case- or order-variant spellings never pass.
-    const outerManifest = options.outerManifest;
+    // equality, so case- or order-variant spellings never pass. Gated
+    // on the era like every other lineage obligation: in a pre-lineage
+    // era both members are unknown members and differ inertly.
+    // The outer manifest normally rides in on the reader `decrypt()`
+    // returned; `options.outerManifest` is the override for callers
+    // verifying raw inner bytes.
+    const outerManifest = options.outerManifest ?? reader.outerManifest?.() ?? null;
     if (
+      eraDefinesLineage(capsuleVersion) &&
       outerManifest != null && typeof outerManifest === "object" &&
       "predecessors" in outerManifest && "predecessors" in manifest
     ) {

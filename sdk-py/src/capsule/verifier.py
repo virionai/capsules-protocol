@@ -6,7 +6,7 @@ import re
 from typing import TypedDict
 from zipfile import BadZipFile
 
-from .canonical import hex_to_bytes, sha256_hex
+from .canonical import hex_to_bytes, jcs, sha256_hex
 from .chain import (
     first_and_entry_hash,
     participant_actor_id_problems,
@@ -15,6 +15,7 @@ from .chain import (
 )
 from .envelope import verify_envelope_signatures
 from .keys import to_key_hex
+from .lineage import default_lineage, era_defines_lineage, evaluate_lineage
 from .manifest import (
     build_content_index,
     commitment_member_key,
@@ -58,6 +59,36 @@ class _FormatVersionResult(TypedDict):
     accepted_by_policy: bool | None
 
 
+class _LineageEntry(TypedDict):
+    """One reported predecessor entry (spec/lineage.md "Reporting").
+
+    The declared six members are echoed so hosts apply key policy
+    without re-parsing the manifest; ``artifact`` is the slim summary of
+    the supplied predecessor's own verification, ``None`` when nothing
+    was checked.
+    """
+
+    capsule_id: str | None
+    format_version: str | None
+    originator_public_key: str | None
+    first_event_hash: str | None
+    entry_hash: str | None
+    manifest_hash: str | None
+    hop: int
+    identity_checked: bool
+    status: str
+    reason: str | None
+    errors: list[str]
+    artifact: dict | None
+
+
+class _LineageResult(TypedDict):
+    declared: bool
+    ok: bool
+    verified_depth: int
+    entries: list[_LineageEntry]
+
+
 class _SkillTrustResult(TypedDict):
     """Derived skill classification (spec/trust.md "Skill trust").
 
@@ -85,8 +116,10 @@ class VerifyResult(TypedDict):
     signer_set: _SignerSetResult
     actor_set: _ActorSetResult
     format_version: _FormatVersionResult
+    lineage: _LineageResult
     skill_trust: _SkillTrustResult
     trusted_signer_count: int
+    qualifiers: list[str]
     notes: list[str]
 
 
@@ -113,8 +146,10 @@ def _fail_closed(message: str, level: str) -> VerifyResult:
         "signer_set": {"bound": False, "ok": False, "errors": []},
         "actor_set": {"bound": False},
         "format_version": _unread_format_version(),
+        "lineage": default_lineage(),
         "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
+        "qualifiers": [],
         "notes": [],
     }
 
@@ -149,7 +184,10 @@ def verify_capsule(
     *,
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
+    outer_manifest: dict | None = None,
     accept_versions: list | None = None,
+    predecessors: list | None = None,
+    lineage_hop_cap: int | None = None,
 ) -> VerifyResult:
     """Verify a capsule.
 
@@ -163,6 +201,16 @@ def verify_capsule(
     with the underlying message in ``errors``.
 
     ``allowlist`` entries may be hex strings (any case) or 32 raw bytes.
+
+    ``outer_manifest``: only needed when verifying raw decrypted BYTES.
+    The reader ``CapsuleReader.decrypt()`` returns already carries the
+    outer manifest, so the L3 inner/outer lineage equality
+    (spec/lineage.md "Encrypted successors") runs without it; passing it
+    overrides that.
+
+    ``predecessors``: optional pool of candidate predecessor artifacts
+    (raw bytes or ``CapsuleReader``s) for lineage linkage — REPORT-ONLY:
+    it affects ``result["lineage"]``, never ``ok``.
     """
     level = "L3" if outer_envelope is not None else "L2"
     try:
@@ -170,7 +218,10 @@ def verify_capsule(
             reader,
             allowlist=allowlist,
             outer_envelope=outer_envelope,
+            outer_manifest=outer_manifest,
             accept_versions=accept_versions,
+            predecessors=predecessors,
+            lineage_hop_cap=lineage_hop_cap,
         )
     except Exception as e:
         # The docstring promises callers a result, not an exception, for
@@ -184,7 +235,10 @@ def _verify_capsule_impl(
     *,
     allowlist: list | None = None,
     outer_envelope: dict | None = None,
+    outer_manifest: dict | None = None,
     accept_versions: list | None = None,
+    predecessors: list | None = None,
+    lineage_hop_cap: int | None = None,
 ) -> VerifyResult:
     if isinstance(reader, (bytes, bytearray, memoryview)):
         try:
@@ -220,8 +274,13 @@ def _verify_capsule_impl(
         "signer_set": {"bound": False, "ok": True, "errors": []},
         "actor_set": {"bound": False},
         "format_version": _unread_format_version(),
+        # Not-evaluated default until the lineage stage runs below; a
+        # version-gate refusal returns it untouched (refusal exclusivity:
+        # the refusal diagnosis is the only error such a result carries).
+        "lineage": default_lineage(),
         "skill_trust": {"capsule_signed": False, "skills": {}},
         "trusted_signer_count": 0,
+        "qualifiers": [],
         "notes": notes,
     }
 
@@ -487,6 +546,28 @@ def _verify_capsule_impl(
                 f"{metadata_path}"
             )
 
+    # Lineage declaration (spec/lineage.md): standalone checks fail
+    # closed (problems land in ``errors``); supplied-bytes linkage over
+    # the ``predecessors`` pool is REPORT-ONLY — it can falsify
+    # result["lineage"]["ok"] but never the overall verdict, so a host's
+    # file handling cannot forge a forgery verdict against an honest
+    # successor. An encrypted capsule's OUTER declaration is evaluated
+    # here at L2; the inner declaration is evaluated when the inner
+    # capsule is verified at L3. The capsule's own observed era decides
+    # whether the member is interpreted at all: in a pre-lineage era it
+    # is an unknown member, exactly as it is when reached as a hop.
+    result["lineage"] = evaluate_lineage(
+        manifest=manifest,
+        version=capsule_version,
+        verify=verify_capsule,
+        errors=errors,
+        notes=notes,
+        predecessors=predecessors,
+        allowlist=allowlist,
+        accept_versions=accept_versions,
+        hop_cap=lineage_hop_cap,
+    )
+
     # Chain
     if not reader.is_encrypted():
         # Fail closed, matching the Rust verifier: a plain capsule with no
@@ -682,6 +763,36 @@ def _verify_capsule_impl(
             errors.append("L3: inner.first_event_hash does not match outer.first_event_hash")
         if outer_envelope.get("entry_hash") != envelope.get("entry_hash"):
             errors.append("L3: inner.entry_hash does not match outer.entry_hash")
+        # Lineage inner/outer equality (spec/lineage.md, fail-closed only
+        # when BOTH manifests carry the member): single-layer presence is
+        # a weaker claim made honestly (a private or a public-only
+        # citation), but a capsule asserting one origin to the world and
+        # another to its recipients is lying about itself across layers.
+        # JCS byte equality, so case- or order-variant spellings never
+        # pass. Gated on the era like every other lineage obligation: in
+        # a pre-lineage era both members are unknown members and differ
+        # inertly. The outer manifest normally rides in on the reader
+        # ``decrypt()`` returned; ``outer_manifest`` is the override for
+        # callers verifying raw inner bytes.
+        if outer_manifest is None:
+            outer_manifest = getattr(reader, "outer_manifest", lambda: None)()
+        if (
+            era_defines_lineage(capsule_version)
+            and isinstance(outer_manifest, dict)
+            and "predecessors" in outer_manifest
+            and isinstance(manifest, dict)
+            and "predecessors" in manifest
+        ):
+            try:
+                equal = jcs(manifest["predecessors"]) == jcs(outer_manifest["predecessors"])
+            except Exception:
+                equal = False
+            if not equal:
+                errors.append(
+                    "L3: manifest.predecessors differs between the inner and outer "
+                    "manifests — the capsule asserts one origin to the world and another "
+                    "to its recipients"
+                )
 
     result["ok"] = (
         not errors
@@ -725,4 +836,18 @@ def _verify_capsule_impl(
             else "unsigned"
         )
     result["skill_trust"] = {"capsule_signed": capsule_signed, "skills": skill_map}
+
+    # Lineage verdict qualifiers (spec/lineage.md; results vocabulary):
+    # bare strings, non-empty only on a VALID verdict — "valid verdict,
+    # custody claim not clean" is exactly what a renderer must not hide.
+    # Payload-carrying facts (verified_depth, per-entry statuses and
+    # reasons) live in result["lineage"], never on the bare-string array.
+    if result["ok"] and result["lineage"]["declared"]:
+        entries = result["lineage"]["entries"]
+        if any(e["status"] in ("unverified", "predecessor_unverifiable") for e in entries):
+            result["qualifiers"].append("lineage_declared_unverified")
+        if any(e["status"] == "mismatch" for e in entries):
+            result["qualifiers"].append("lineage_mismatch")
+        if any(e["status"] == "predecessor_invalid" for e in entries):
+            result["qualifiers"].append("lineage_predecessor_invalid")
     return result

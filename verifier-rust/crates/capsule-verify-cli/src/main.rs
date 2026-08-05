@@ -5,9 +5,17 @@
 //! pretty-printed JSON.
 //!
 //! Exit codes:
-//!   0  PASS (the capsule verified cleanly)
-//!   1  FAIL (verification ran but rejected the capsule)
+//!   0  PASS (the capsule verified cleanly AND every requested policy held)
+//!   1  FAIL (verification ran but rejected the capsule, or a requested
+//!      policy — e.g. a `--predecessor` custody check — was not satisfied)
 //!   2  I/O / argument error (file not found, permission denied, etc.)
+//!
+//! The CLI is the POLICY layer (spec/lineage.md "CLI exit policy",
+//! following the documented `--allowlist` pattern): the library reports
+//! lineage linkage and never decides, but an operator who passes
+//! `--predecessor` has asked for the custody claim to hold, so
+//! `capsule-verify verify s --predecessor p && publish` must not publish
+//! when it does not.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +23,8 @@ use std::process::ExitCode;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD;
 use base64::Engine;
 use capsule_verify::{
-    verify_capsule, EnvelopeCheck, SignerOutcome, TopErrorCategory, VerifyOptions, VerifyResult,
+    verify_capsule, EnvelopeCheck, LineageCheck, SignerOutcome, TopErrorCategory, VerifyOptions,
+    VerifyResult,
 };
 use clap::{Parser, Subcommand};
 
@@ -52,6 +61,16 @@ enum Command {
         /// capsule, the flag is silently ignored.
         #[arg(long = "decryption-key", value_name = "KEY")]
         decryption_key: Option<String>,
+        /// Candidate predecessor artifact for lineage linkage
+        /// (spec/lineage.md). Repeatable. Inside the library the pool is
+        /// REPORT-ONLY — it can never flip the capsule's own verdict —
+        /// but supplying it here sets a POLICY: every supplied file must
+        /// match a declared entry and verify under its own era, or the
+        /// run exits 1. Declared entries left unsupplied are reported,
+        /// never a policy failure (an operator may hold one branch of a
+        /// merge).
+        #[arg(long = "predecessor", value_name = "FILE", action = clap::ArgAction::Append)]
+        predecessor: Vec<PathBuf>,
         /// Emit the full VerifyResult as pretty-printed JSON instead of
         /// the plain-text report. Hashes appear in full hex form in JSON
         /// mode.
@@ -67,8 +86,9 @@ fn main() -> ExitCode {
             file,
             allowlist,
             decryption_key,
+            predecessor,
             json,
-        } => run_verify(&file, allowlist, decryption_key, json),
+        } => run_verify(&file, allowlist, decryption_key, predecessor, json),
     }
 }
 
@@ -78,6 +98,7 @@ fn run_verify(
     path: &Path,
     allowlist: Vec<String>,
     decryption_key: Option<String>,
+    predecessor: Vec<PathBuf>,
     json: bool,
 ) -> ExitCode {
     let bytes = match std::fs::read(path) {
@@ -111,14 +132,31 @@ fn run_verify(
         },
     };
 
+    // Predecessor pool for lineage linkage. An unreadable path is an I/O
+    // error like any other input file, not a custody verdict.
+    let mut predecessors: Vec<Vec<u8>> = Vec::with_capacity(predecessor.len());
+    for p in &predecessor {
+        match std::fs::read(p) {
+            Ok(b) => predecessors.push(b),
+            Err(e) => {
+                eprintln!("error: cannot read --predecessor {}: {}", p.display(), e);
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let supplied_predecessors = predecessors.len();
+
     let result = verify_capsule(
         &bytes,
         &VerifyOptions {
             allowlist,
             recipient_private_key,
             accept_versions: None,
+            predecessors,
         },
     );
+
+    let custody_policy_ok = custody_policy_satisfied(supplied_predecessors, &result.lineage);
 
     if json {
         match serde_json::to_string_pretty(&result) {
@@ -129,14 +167,36 @@ fn run_verify(
             }
         }
     } else {
-        print_plain(path, bytes.len(), &result);
+        print_plain(path, bytes.len(), &result, supplied_predecessors, custody_policy_ok);
     }
 
-    if result.ok {
+    if result.ok && custody_policy_ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
     }
+}
+
+/// The requested custody policy (spec/lineage.md "CLI exit policy").
+///
+/// Without `--predecessor` there is no policy: declared lineage never
+/// affects the exit code (`supplied == 0` and the count of verified
+/// entries is only ever compared against it). With at least one
+/// `--predecessor`, every supplied artifact must have landed on a
+/// declared entry AND left it `verified`. Each artifact is assigned to at
+/// most one entry and each entry receives at most one artifact, so both
+/// failure shapes — an unmatched supply (a mistyped path) and a matched
+/// artifact that mismatched, failed its own verification, or could not be
+/// checked — surface as the same shortfall. Declared entries left
+/// unsupplied never fail the policy: an operator may legitimately hold
+/// one branch of a merge.
+fn custody_policy_satisfied(supplied: usize, lineage: &LineageCheck) -> bool {
+    supplied
+        == lineage
+            .entries
+            .iter()
+            .filter(|e| e.status == "verified")
+            .count()
 }
 
 /// Render a `VerifyResult` to stdout in a human-readable form.
@@ -144,7 +204,13 @@ fn run_verify(
 /// Hashes are truncated for readability via [`short_hash`]; the full hex
 /// is preserved in the embedded error messages and in the JSON output
 /// (which is what forensics use).
-fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
+fn print_plain(
+    path: &Path,
+    byte_len: usize,
+    r: &VerifyResult,
+    supplied_predecessors: usize,
+    custody_policy_ok: bool,
+) {
     // Best-effort lookup of the originator pubkey + signed_at out of the
     // first signer; the structured `VerifyResult` doesn't carry the raw
     // manifest, so we surface what's available without re-parsing.
@@ -269,6 +335,16 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         print_check("participants", false, actor_id_msgs);
     }
 
+    // Lineage: rendered only when the capsule declares predecessors (or a
+    // declaration was refused outright) — absence is no claim, and a line
+    // reporting on nothing would be noise. A failing line means the
+    // CUSTODY CLAIM is not clean; whether the capsule itself verified is
+    // the Result line's job, since supplied-bytes linkage is report-only.
+    let lineage_msgs = strings_of(errors_for(r, TopErrorCategory::Lineage));
+    if r.lineage.declared || !lineage_msgs.is_empty() {
+        print_check("lineage", r.lineage.ok, lineage_msgs);
+    }
+
     let enc_msgs = strings_of(errors_for(r, TopErrorCategory::Encryption));
     print_check("encryption_state", enc_msgs.is_empty(), enc_msgs);
 
@@ -292,6 +368,8 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         render_signers("Inner signers:", &inner.signers);
     }
 
+    render_custody(r, supplied_predecessors, custody_policy_ok);
+
     if !r.notes.is_empty() {
         println!("Notes:");
         for n in &r.notes {
@@ -300,11 +378,94 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         println!();
     }
 
-    if r.ok {
-        println!("Result: PASS");
-    } else {
-        println!("Result: FAIL");
+    match (r.ok, custody_policy_ok) {
+        (true, true) => println!("Result: PASS"),
+        // The capsule verified; the custody check the operator ASKED for
+        // did not hold. Saying PASS alone would hide why the exit code is
+        // 1; saying FAIL would blame the capsule for the policy.
+        (true, false) => println!("Result: PASS (requested custody policy not satisfied)"),
+        (false, _) => println!("Result: FAIL"),
     }
+}
+
+/// Render the custody block for a declared lineage (spec/lineage.md
+/// "Required human-output language").
+///
+/// Every declared entry is rendered, supplied bytes or not: a custody
+/// claim that quietly disappears when bytes are missing is how a citation
+/// gets read as an endorsement. The block carries the pinned phrases —
+/// "not countersigned" on every declaration, "declared, not verified" on
+/// every unchecked entry, "different sealed state of the declared
+/// predecessor" on an id-matching mismatch — and never presents the
+/// successor as BEING its predecessor.
+fn render_custody(r: &VerifyResult, supplied_predecessors: usize, custody_policy_ok: bool) {
+    if !r.lineage.declared || r.lineage.entries.is_empty() {
+        return;
+    }
+    println!("Custody (manifest.predecessors):");
+    println!(
+        "  lineage is the successor's declaration; the predecessor's originator has \
+         not countersigned it"
+    );
+    // The depth is a property of the whole declaration, not of one entry,
+    // and it names two distinct identities: the successor is never
+    // presented as BEING the predecessor or as its endorsed continuation.
+    if r.lineage.verified_depth >= 1 {
+        let parents: Vec<&str> = r
+            .lineage
+            .entries
+            .iter()
+            .filter(|e| e.hop == 1)
+            .map(|e| e.capsule_id.as_deref().unwrap_or("(none)"))
+            .collect();
+        println!(
+            "  successor of capsule {}; lineage verified to depth {}",
+            parents.join(", "),
+            r.lineage.verified_depth
+        );
+    }
+    for e in &r.lineage.entries {
+        let id = e.capsule_id.as_deref().unwrap_or("(none)");
+        let era = e.format_version.as_deref().unwrap_or("(none)");
+        // Statuses that carry member-precise `errors` render the status
+        // alone: their pinned wording lives in those errors, printed just
+        // below, and saying it twice invites the two copies to drift.
+        let detail = match e.status.as_str() {
+            "verified" => "verified — the supplied artifact is the declared sealed state",
+            "mismatch" => "mismatch",
+            "predecessor_invalid" => "predecessor_invalid",
+            "predecessor_unverifiable" => {
+                "declared, not verified — bytes in hand, rules unavailable to this verifier"
+            }
+            _ => "declared, not verified — no predecessor bytes were supplied",
+        };
+        println!("  - hop {} · era {era} · capsule {id}", e.hop);
+        println!("        {detail}");
+        if let Some(reason) = e.reason.as_deref() {
+            println!("        reason: {reason}");
+        }
+        if !e.identity_checked {
+            println!(
+                "        identity coherence not checked: era {era} is outside this \
+                 verifier's known table"
+            );
+        }
+        for msg in &e.errors {
+            println!("        {msg}");
+        }
+    }
+    if supplied_predecessors > 0 && !custody_policy_ok {
+        println!(
+            "  custody policy (--predecessor): NOT satisfied — {supplied_predecessors} \
+             artifact(s) supplied, {} declared entr(y/ies) verified; exit 1",
+            r.lineage
+                .entries
+                .iter()
+                .filter(|e| e.status == "verified")
+                .count()
+        );
+    }
+    println!();
 }
 
 /// Print a single `[✓]` or `[✗]` check line, indenting any error
@@ -571,5 +732,65 @@ mod tests {
             vec!["zz76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc".to_string()];
         assert!(validate_allowlist(&non_hex).is_err());
         assert!(validate_allowlist(&["./keys.json".to_string()]).is_err());
+    }
+
+    /// A lineage conformance fixture, by file name.
+    fn lineage_fixture(name: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../spec/vectors/lineage/output")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    fn verify_with_pool(capsule: &str, pool: &[&str]) -> VerifyResult {
+        verify_capsule(
+            &lineage_fixture(capsule),
+            &VerifyOptions {
+                allowlist: Vec::new(),
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: pool.iter().map(|p| lineage_fixture(p)).collect(),
+            },
+        )
+    }
+
+    /// The CLI is the policy layer: supplying `--predecessor` asks for the
+    /// custody claim to hold, exactly as `--allowlist` asks for trust to
+    /// hold. The SDK result stays report-only underneath — every capsule
+    /// here verifies — so the policy is the only thing that moves.
+    #[test]
+    fn custody_policy_follows_the_allowlist_pattern() {
+        // No flag, no policy: a declared-but-unchecked lineage exits 0.
+        let declared_only = verify_with_pool("bob.capsule", &[]);
+        assert!(declared_only.ok && declared_only.lineage.declared);
+        assert!(custody_policy_satisfied(0, &declared_only.lineage));
+
+        // Supplied and verified: satisfied.
+        let verified = verify_with_pool("bob.capsule", &["alice.capsule"]);
+        assert!(custody_policy_satisfied(1, &verified.lineage));
+
+        // A different genuine seal of the same line: the capsule still
+        // verifies (linkage is report-only) but the requested check did
+        // not hold, so `verify s --predecessor p && publish` must not
+        // publish.
+        let mismatched = verify_with_pool("bob.capsule", &["alice-later-seal.capsule"]);
+        assert!(mismatched.ok, "linkage must never flip the capsule's verdict");
+        assert!(!custody_policy_satisfied(1, &mismatched.lineage));
+
+        // A mistyped path — an artifact matching no declared entry — must
+        // not exit 0 either.
+        let unmatched = verify_with_pool("bob.capsule", &["carol.capsule"]);
+        assert!(unmatched.ok);
+        assert!(!custody_policy_satisfied(1, &unmatched.lineage));
+
+        // A merge with one branch in hand: the unsupplied entry is
+        // reported, never a policy failure.
+        let merge = verify_with_pool("merge.capsule", &["alice.capsule"]);
+        assert!(custody_policy_satisfied(1, &merge.lineage));
+        assert!(merge
+            .lineage
+            .entries
+            .iter()
+            .any(|e| e.status == "unverified"));
     }
 }

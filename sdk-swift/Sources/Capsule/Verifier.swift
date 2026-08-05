@@ -46,6 +46,14 @@ public struct CapsuleVerification {
     /// suite, and the host's declared-acceptance verdict (nil when no
     /// acceptVersions policy was declared). Reported, never decided.
     public let formatVersion: FormatVersionReport
+    /// Lineage facts (spec/lineage.md): whether the manifest declares
+    /// `predecessors`, the area verdict, the verified depth, and one
+    /// entry per declared predecessor. The standalone checks fail the
+    /// capsule closed (the `lineage` check); supplied-bytes linkage is
+    /// REPORT-ONLY — it can falsify `lineage.ok` but never `ok`, so a
+    /// host's file handling cannot forge a forgery verdict against an
+    /// honest successor.
+    public let lineage: LineageReport
     /// Derived skill-trust classification (spec/trust.md "Skill trust").
     /// The tier is host-relative — it depends on the allowlist THIS
     /// verification ran with — so it derives from the verify result and
@@ -57,6 +65,14 @@ public struct CapsuleVerification {
     /// shares `capsuleSigned`; per-id variation only reflects whether
     /// that skill ships an indexed skill.json.
     public let skillTrust: SkillTrust
+    /// Verdict qualifiers (spec/lineage.md "Verdict qualifiers"): bare
+    /// strings naming a weaker claim on an otherwise VALID verdict — a
+    /// "valid verdict, custody claim not clean" fact a renderer must not
+    /// hide. Non-empty only when `ok` is true. Payload-carrying facts
+    /// (verified depth, per-entry statuses and reasons) live in `lineage`,
+    /// never on this array. This lane emits the three lineage names; the
+    /// profile/version qualifiers arrive with the results-vocabulary work.
+    public let qualifiers: [String]
     public let notes: [String]
 
     public struct FormatVersionReport {
@@ -97,9 +113,15 @@ public enum CapsuleVerifier {
     ///
     /// Pass `allowlist` of hex public keys (lowercase) to mark signers
     /// trusted; the verifier never returns trusted=true on its own.
+    ///
+    /// `predecessors` is the candidate pool for lineage linkage
+    /// (spec/lineage.md): sealed capsule bytes the host holds for the
+    /// declared predecessors. REPORT-ONLY — it populates
+    /// `CapsuleVerification.lineage` and never changes `ok`.
     public static func verify(_ bytes: Data,
                               allowlist: Set<String> = [],
-                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                              acceptVersions: Set<String>? = nil,
+                              predecessors: [Data] = []) -> CapsuleVerification
     {
         let parsed: ParsedCapsule
         do { parsed = try CapsuleReader.parse(bytes) }
@@ -114,12 +136,17 @@ public enum CapsuleVerifier {
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
                 formatVersion: formatVersionOnOpenRefusal(error),
+                // Refusal exclusivity: after an open-stage refusal the
+                // lineage channel holds its not-evaluated default and the
+                // refusal diagnosis is the only error carried.
+                lineage: .notEvaluated,
                 skillTrust: .failClosed,
+                qualifiers: [],
                 notes: initialNotes
             )
         }
         return verifyParsed(parsed, level: "L2", allowlist: allowlist,
-                            acceptVersions: acceptVersions)
+                            acceptVersions: acceptVersions, predecessors: predecessors)
     }
 
     /// spec/versioning.md: the observed version stays a REPORTED fact
@@ -151,7 +178,8 @@ public enum CapsuleVerifier {
                               recipientPrivateKey: Data,
                               recipientPublicKey: Data,
                               allowlist: Set<String> = [],
-                              acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                              acceptVersions: Set<String>? = nil,
+                              predecessors: [Data] = []) -> CapsuleVerification
     {
         let outerParsed: ParsedCapsule
         do { outerParsed = try CapsuleReader.parse(bytes) }
@@ -166,17 +194,19 @@ public enum CapsuleVerifier {
                 signers: [], trustedSignerCount: 0, signerSetBound: false,
                 actorSetBound: false,
                 formatVersion: formatVersionOnOpenRefusal(error),
+                lineage: .notEvaluated,
                 skillTrust: .failClosed,
+                qualifiers: [],
                 notes: initialNotes
             )
         }
         if !outerParsed.isEncrypted {
             // Plain capsule — L3 is the same surface as L2.
             return verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
-                                acceptVersions: acceptVersions)
+                                acceptVersions: acceptVersions, predecessors: predecessors)
         }
         let outer = verifyParsed(outerParsed, level: "L3", allowlist: allowlist,
-                                 acceptVersions: acceptVersions)
+                                 acceptVersions: acceptVersions, predecessors: predecessors)
         var checks = outer.checks
 
         let inner: ParsedCapsule
@@ -195,13 +225,21 @@ public enum CapsuleVerifier {
                 signerSetBound: outer.signerSetBound,
                 actorSetBound: outer.actorSetBound,
                 formatVersion: outer.formatVersion,
+                lineage: outer.lineage,
                 skillTrust: .failClosed,
+                qualifiers: [],
                 notes: outer.notes
             )
         }
         checks.append(VerifyCheck(name: "decrypt", ok: true,
                                   detail: "\(inner.files.count) inner files"))
-        let innerResult = verifyParsed(inner, level: "L3", allowlist: allowlist)
+        // The outer manifest travels into the inner verification for the
+        // L3 inner/outer lineage equality (spec/lineage.md "Encrypted
+        // successors"): L2 evaluates the outer declaration, L3 the inner
+        // plus the equality when both layers declare.
+        let innerResult = verifyParsed(inner, level: "L3", allowlist: allowlist,
+                                       predecessors: predecessors,
+                                       outerManifest: outerParsed.manifest)
         for c in innerResult.checks {
             checks.append(VerifyCheck(name: "inner." + c.name, ok: c.ok, detail: c.detail))
         }
@@ -240,6 +278,13 @@ public enum CapsuleVerifier {
             ))
         }
         let ok = checks.allSatisfy { $0.ok }
+        // A successor MAY place `predecessors` in the inner manifest, the
+        // outer, or both (spec/lineage.md "Encrypted successors"). The
+        // inner declaration is the one the recipient reads, so it is
+        // reported here when present; when only the outer declares, that
+        // is the capsule's only declaration. When both declare, the
+        // equality check above has already required them to be byte-equal.
+        let reported = innerResult.lineage.declared ? innerResult : outer
         return CapsuleVerification(
             ok: ok, level: "L3", checks: checks,
             signers: allSigners,
@@ -252,12 +297,16 @@ public enum CapsuleVerifier {
             signerSetBound: outer.signerSetBound,
             actorSetBound: outer.actorSetBound,
             formatVersion: outer.formatVersion,
+            lineage: reported.lineage,
             // Skills live inside the ciphertext: the inner verification's
             // derived classification is the one that describes them —
             // gated on the OVERALL L3 verdict (spec/trust.md): if any
             // outer or cross-check fails, the composite result is a
             // failing verification and must not classify anything signed.
             skillTrust: ok ? innerResult.skillTrust : .failClosed,
+            // Qualifiers are non-empty only on a VALID verdict, so a
+            // failing composite carries none whatever either half derived.
+            qualifiers: ok ? reported.qualifiers : [],
             notes: outer.notes
         )
     }
@@ -266,7 +315,9 @@ public enum CapsuleVerifier {
     private static func verifyParsed(_ parsed: ParsedCapsule,
                                      level: String,
                                      allowlist: Set<String>,
-                                     acceptVersions: Set<String>? = nil) -> CapsuleVerification
+                                     acceptVersions: Set<String>? = nil,
+                                     predecessors: [Data] = [],
+                                     outerManifest: JCSValue? = nil) -> CapsuleVerification
     {
         var checks: [VerifyCheck] = []
         func record(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -372,7 +423,17 @@ public enum CapsuleVerifier {
         do {
             let mh = try Manifest.hash(parsed.manifest)
             if let stored = lookupString(parsed.envelope, ["manifest_hash"]) {
-                record("manifest_hash", mh == stored, String(mh.prefix(12)) + "…")
+                // A divergence names both values in the cross-lane wording
+                // ("manifest_hash mismatch"): any post-seal edit to the
+                // manifest — including an optional member like
+                // `predecessors` — lands here, and the detail must say so
+                // rather than repeating the recomputed prefix a passing
+                // check also prints.
+                record("manifest_hash", mh == stored,
+                       mh == stored
+                           ? String(mh.prefix(12)) + "…"
+                           : "envelope.manifest_hash mismatch: stored \(stored) "
+                             + "vs recomputed \(mh)")
             }
         } catch {
             // Same wording as the JS reference: a canonicalization refusal
@@ -669,6 +730,60 @@ public enum CapsuleVerifier {
         record("participants", participantProblems.isEmpty,
                participantProblems.map { "manifest.\($0)" }.joined(separator: "; "))
 
+        // Lineage declaration (spec/lineage.md). PRESENCE BINDS, ABSENCE
+        // REPORTS: an absent member is "no claim" (declared=false); a
+        // PRESENT member no reader can interpret is the capsule asserting
+        // something meaningless about its own origin, rejected fail-closed
+        // with the shared `predecessors[i].<member>` diagnoses. Linkage
+        // against the supplied pool is REPORT-ONLY — it can falsify the
+        // lineage AREA but never this check, so a host's file handling
+        // cannot forge a forgery verdict against an honest successor.
+        // The capsule's own observed era decides whether the member is
+        // interpreted at all: in a pre-lineage era it is an unknown
+        // member, exactly as it is when reached as a hop.
+        let lineageEvaluation = Lineage.evaluate(
+            manifest: parsed.manifest,
+            version: declaredVersion,
+            pool: predecessors,
+            allowlist: allowlist,
+            acceptVersions: acceptVersions
+        )
+        let lineage = lineageEvaluation.report
+        notes.append(contentsOf: lineageEvaluation.notes)
+        if !lineageEvaluation.standaloneProblems.isEmpty {
+            record("lineage", false,
+                   lineageEvaluation.standaloneProblems
+                       .map { "manifest.\($0)" }.joined(separator: "; "))
+        } else if lineage.declared {
+            // The check stays TRUE under a failing linkage: the area
+            // boolean carries that verdict. The diagnoses ride along so an
+            // operator reading the check list sees them.
+            let linkage = lineage.entries.flatMap { entry in
+                entry.errors.map { "predecessor \(entry.capsuleId ?? "(unknown id)"): \($0)" }
+            }
+            let summary = lineage.entries
+                .map { "hop \($0.hop) \($0.status)\($0.reason.map { " (\($0))" } ?? "")" }
+                .joined(separator: ", ")
+            record("lineage", true,
+                   ([ "\(lineage.entries.count) declared predecessor(s): \(summary); "
+                        + "verified depth \(lineage.verifiedDepth)" ] + linkage)
+                       .joined(separator: "; "))
+        } else {
+            // Absence is a weaker claim made honestly — recorded like an
+            // absent signer_commitment, never a hole in the check list.
+            record("lineage", true, "absent (no lineage declared)")
+        }
+        // Standalone check 4 — the inner/outer equality of an encrypted
+        // successor's declarations, fail-closed only when BOTH manifests
+        // carry the member (`outerManifest` is non-nil only for the inner
+        // half of an L3 verification). Gated on the era like every other
+        // lineage obligation: in a pre-lineage era both members are
+        // unknown members and differ inertly.
+        if Lineage.eraDefinesLineage(declaredVersion),
+           let problem = Lineage.innerOuterProblem(inner: parsed.manifest, outer: outerManifest) {
+            record("lineage_inner_outer", false, problem)
+        }
+
         // Originator binding (invariant): the manifest names an originator
         // key — that key must actually have sealed the capsule with a valid
         // envelope signature under role "originator".
@@ -682,6 +797,25 @@ public enum CapsuleVerifier {
                    : "originator binding: manifest.originator.public_key \(originatorKey ?? "(missing)") has no valid envelope signature with role 'originator'")
 
         let ok = checks.allSatisfy { $0.ok }
+        // Verdict qualifiers (spec/lineage.md): bare strings naming a
+        // weaker claim on an otherwise valid verdict — "valid verdict,
+        // custody claim not clean" is exactly what a renderer must not
+        // hide. Payload-carrying facts (verified depth, per-entry statuses
+        // and reasons) live in the lineage area, never on this array.
+        var qualifiers: [String] = []
+        if ok && lineage.declared {
+            if lineage.entries.contains(where: {
+                $0.status == "unverified" || $0.status == "predecessor_unverifiable"
+            }) {
+                qualifiers.append("lineage_declared_unverified")
+            }
+            if lineage.entries.contains(where: { $0.status == "mismatch" }) {
+                qualifiers.append("lineage_mismatch")
+            }
+            if lineage.entries.contains(where: { $0.status == "predecessor_invalid" }) {
+                qualifiers.append("lineage_predecessor_invalid")
+            }
+        }
         // DISTINCT trusted keys, never rows.
         let trustedCount = Set(
             signers.filter { $0.trusted }.map { $0.publicKey.lowercased() }
@@ -716,7 +850,9 @@ public enum CapsuleVerifier {
             signerSetBound: signerSetBound,
             actorSetBound: actorSetBound,
             formatVersion: formatVersion,
+            lineage: lineage,
             skillTrust: .init(capsuleSigned: capsuleSigned, skills: skillTiers),
+            qualifiers: qualifiers,
             notes: notes
         )
     }

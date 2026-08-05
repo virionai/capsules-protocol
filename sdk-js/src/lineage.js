@@ -23,13 +23,26 @@ import { classifyVersion } from "./versions.js";
 import { unpackZip } from "./zip.js";
 
 /**
- * Eras whose rule sets define lineage semantics. A hop declaring an
- * earlier era (e.g. 0.6) carries any `predecessors` member as an
- * unknown member under that era's rules — inert, never shape-checked —
- * and terminates the interpretable walk (spec/lineage.md,
- * spec/versioning.md: no retroactive interpretation of sealed eras).
+ * Eras whose rule sets define lineage semantics. `predecessors` is a
+ * CLAIM member, not a rule selector, so it follows per-era rule sets:
+ * inside a capsule declaring an earlier era (e.g. 0.6) it stays an
+ * unknown member even to a v0.7.1 reader — preserved, hashed, never
+ * shape-checked (spec/versioning.md "In-era tightening and cross-era
+ * force"; spec/lineage.md "No retroactive interpretation of sealed
+ * eras"). The gate is the SAME whether the capsule is the verification
+ * subject or a hop reached through the walk — one artifact, one rule
+ * set.
  */
 const LINEAGE_ERAS = new Set(["0.7"]);
+
+/**
+ * Whether an observed `<major>.<minor>` era interprets `predecessors`.
+ * An unknown era never reaches here (the version gate fails closed
+ * first), so `false` means "known era, pre-lineage rules".
+ */
+export function eraDefinesLineage(version) {
+  return LINEAGE_ERAS.has(version);
+}
 
 /**
  * Resource limit, not a protocol rule (like the reader's file-count and
@@ -37,6 +50,27 @@ const LINEAGE_ERAS = new Set(["0.7"]);
  * pool — and the cap bounds pathological pools.
  */
 export const LINEAGE_HOP_CAP_DEFAULT = 256;
+
+/**
+ * How many problems a verify result actually diagnosed. `result.errors`
+ * carries the cross-cutting diagnoses only — area failures live in
+ * their own channels (a tampered payload is a `contentIndex` error, a
+ * broken link a `chain` error, a forged signature an invalid signer
+ * row) — so counting the top-level array alone reports a failing
+ * capsule as having zero errors. Every report that says "N error(s)"
+ * about someone else's artifact uses this count.
+ */
+export function verificationErrorCount(result) {
+  const invalidSignatures = (result?.envelope?.signers ?? []).filter(
+    (s) => s.valid === false,
+  ).length;
+  return (
+    (result?.errors?.length ?? 0) +
+    (result?.contentIndex?.errors?.length ?? 0) +
+    (result?.chain?.errors?.length ?? 0) +
+    invalidSignatures
+  );
+}
 
 /**
  * The fail-closed / not-evaluated lineage shape. `declared: false` here
@@ -169,7 +203,7 @@ async function classifyArtifact(input, verify, hostOptions) {
     ok: record.verification.ok,
     observed_version: record.verification.formatVersion?.observed ?? record.version,
     level: record.verification.level,
-    error_count: record.verification.errors.length,
+    error_count: verificationErrorCount(record.verification),
   };
   return record;
 }
@@ -209,14 +243,36 @@ function equalityDiffs(entry, record) {
  * live only in the returned area and `notes` (report-only).
  *
  * `verify` is the caller's verifyCapsule (passed in, not imported, to
- * keep the module graph acyclic).
+ * keep the module graph acyclic). `version` is the capsule's OBSERVED
+ * format version — the era whose rule set decides whether the member
+ * means anything at all.
  */
-export async function evaluateLineage({ manifest, options = {}, verify, errors, notes }) {
+export async function evaluateLineage({
+  manifest,
+  version,
+  options = {},
+  verify,
+  errors,
+  notes,
+}) {
   const lineage = defaultLineage();
-  const declared =
+  const present =
     manifest != null && typeof manifest === "object" && "predecessors" in manifest;
-  if (!declared) {
+  if (!present) {
     // No claim, nothing checked. ok=true: unchecked is not failed.
+    lineage.ok = true;
+    return lineage;
+  }
+  if (!eraDefinesLineage(version)) {
+    // Present, but this capsule's era defines no lineage semantics: the
+    // member is an unknown member under those rules — preserved and
+    // hashed, never shape-checked. Interpreting it would retroactively
+    // rewrite a sealed era's verdict.
+    notes.push(
+      `lineage: this capsule declares era ${version}, whose rule set defines no ` +
+        `lineage semantics; its predecessors member is an unknown member under ` +
+        `that era and was not interpreted`,
+    );
     lineage.ok = true;
     return lineage;
   }
@@ -322,7 +378,7 @@ export async function evaluateLineage({ manifest, options = {}, verify, errors, 
         entry.status = "predecessor_invalid";
         entry.errors.push(
           `supplied predecessor fails its own verification under era ` +
-            `${record.version} (${record.verification.errors.length} error(s)); ` +
+            `${record.version} (${record.summary.error_count} error(s)); ` +
             `this is a property of the supplied artifact, not of the successor's declaration`,
         );
         entry.errors.push(...diffs);

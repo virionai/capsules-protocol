@@ -387,8 +387,10 @@ async function checkCollection(path, doc) {
     // Lineage area expectations (spec/lineage.md; ignore-if-absent per
     // the shared outcome-schema contract). `expected.lineage` pins
     // declared/ok/verified_depth and, when present, per-entry
-    // status/hop/reason/identity_checked/capsule_id and the supplied
-    // artifact's observed version.
+    // status/hop/reason/identity_checked/capsule_id, the supplied
+    // artifact's observed version, and a FLOOR on its error count (the
+    // count is lane-local, so only the honesty invariant is pinned: an
+    // artifact reported as failing never also reports zero errors).
     if (v.expected.lineage) {
       const want = v.expected.lineage;
       const got = result.lineage ?? {};
@@ -434,6 +436,16 @@ async function checkCollection(path, doc) {
                 `${label}: expected lineage.entries[${i}].artifact.observed_version=` +
                   `${JSON.stringify(wantEntry.artifact_observed_version)}, got ` +
                   `${JSON.stringify(gotEntry.artifact?.observed_version)}`,
+              );
+            }
+            if (
+              wantEntry.artifact_error_count_min !== undefined &&
+              !(gotEntry.artifact?.error_count >= wantEntry.artifact_error_count_min)
+            ) {
+              fail(
+                `${label}: expected lineage.entries[${i}].artifact.error_count >= ` +
+                  `${wantEntry.artifact_error_count_min}, got ` +
+                  `${JSON.stringify(gotEntry.artifact?.error_count)}`,
               );
             }
           });
@@ -493,12 +505,15 @@ async function checkCollection(path, doc) {
             recipientPublicKey: pair.publicKey,
             recipientPrivateKey: pair.privateKey,
           });
+          // Deliberately the DOCUMENTED recipe, option for option: the
+          // L3 inner/outer lineage equality (spec/lineage.md "Encrypted
+          // successors") is a fail-closed MUST, so the vectors must pin
+          // it on the default invocation. The reader decrypt() returned
+          // carries the outer manifest; opting in here instead would
+          // let the check regress everywhere except this harness.
           const innerResult = await verifyCapsule(inner, {
             allowlist: vectorAllowlist,
             outerEnvelope: reader.envelope(),
-            // The outer manifest enables the L3 inner/outer lineage
-            // equality check (spec/lineage.md "Encrypted successors").
-            outerManifest: reader.manifest(),
           });
           // `inner_ok: false` pins an L3 fail-closed outcome (e.g. the
           // inner/outer lineage mismatch); default expectation is that

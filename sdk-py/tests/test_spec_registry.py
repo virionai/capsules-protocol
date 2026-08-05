@@ -19,6 +19,8 @@ lane (tools/check-spec-vectors.mjs) without hand-copied assertions:
                                      pith_normalized_fields marker verify)
   - version-compat/vectors.json     (version gates: known opens, unknown fails
                                      closed with a non-tamper diagnosis)
+  - lineage/vectors.json            (manifest.predecessors: fail-closed
+                                     standalone checks, REPORT-ONLY linkage)
 
 The `reason` categories are normative; the regexes below map each
 category onto this lane's error messages.
@@ -61,6 +63,7 @@ IJSON_ACCEPTANCE = VECTORS / "ijson-acceptance.json"
 UNICODE_BOUNDARY = VECTORS / "unicode-boundary" / "vectors.json"
 PITH_AUTHORING = VECTORS / "pith-authoring" / "vectors.json"
 VERSION_COMPAT = VECTORS / "version-compat" / "vectors.json"
+LINEAGE = VECTORS / "lineage" / "vectors.json"
 
 # Normative reject-reason vocabulary from ijson-acceptance.json.
 IJSON_REASONS = {"integer_out_of_range", "unpaired_surrogate", "duplicate_member"}
@@ -109,6 +112,7 @@ AREA_PREDICATES = {
     "encrypted_blob": lambda r: any("encrypted_blob_hash" in e for e in r["errors"]),
     "signer_set": lambda r: r["signer_set"]["ok"] is False,
     "originator_binding": lambda r: any("originator binding" in e for e in r["errors"]),
+    "lineage": lambda r: r["lineage"]["ok"] is False,
 }
 
 
@@ -121,7 +125,13 @@ def _allowlist(doc: dict, base: pathlib.Path) -> list[str]:
         return [doc["originator_public_key_hex"]]
     if doc.get("keys_file"):
         keys = _load((base / doc["keys_file"]).resolve())
-        return [keys["originator"]["publicKey"]]
+        # A collection whose keys_file names no "originator" pins no
+        # trust configuration (lineage: five independent keypairs, none
+        # of them THE originator) — verify with no allowlist, mirroring
+        # tools/check-spec-vectors.mjs.
+        originator = keys.get("originator")
+        if isinstance(originator, dict) and originator.get("publicKey"):
+            return [originator["publicKey"]]
     return []
 
 
@@ -146,6 +156,10 @@ def _error_haystack(result: dict) -> str:
     parts.extend(result["content_index"]["errors"])
     for e in result["chain"].get("errors", []):
         parts.append(e["message"] if isinstance(e, dict) else str(e))
+    # Lineage entry errors are report-only (they never join
+    # result["errors"]), but their diagnoses are pinned wording.
+    for entry in result.get("lineage", {}).get("entries", []):
+        parts.extend(entry.get("errors", []))
     return " ".join(parts)
 
 
@@ -175,16 +189,74 @@ def _assert_verify_outcome(name: str, expected: dict, result: dict) -> None:
     if expected.get("notes_includes"):
         # Honest-reporting pin: the verifier must REPORT the weaker claim
         # machine-readably (e.g. a zero-event chain that was not walked).
-        assert expected["notes_includes"] in " ".join(result["notes"]), (
-            f"{name}: expected a note containing {expected['notes_includes']!r}; "
-            f"got {result['notes']!r}"
-        )
+        # A string pins one substring; an array pins several (e.g. the
+        # lineage phrases "declared, not verified" AND "not
+        # countersigned").
+        needles = expected["notes_includes"]
+        if isinstance(needles, str):
+            needles = [needles]
+        notes_text = " ".join(result["notes"])
+        for needle in needles:
+            assert needle in notes_text, (
+                f"{name}: expected a note containing {needle!r}; got {result['notes']!r}"
+            )
     if expected.get("observed_version"):
         # spec/versioning.md: the observed format version is a REPORTED
         # fact on the verify result, not merely enforced internally.
         assert result["format_version"]["observed"] == expected["observed_version"], (
             f"{name}: expected format_version.observed="
             f"{expected['observed_version']!r}, got {result['format_version']!r}"
+        )
+    if "lineage" in expected:
+        # spec/lineage.md "Reporting" (ignore-if-absent per the shared
+        # outcome-schema contract): declared/ok/verified_depth plus, when
+        # present, per-entry status/hop/reason/identity_checked/capsule_id,
+        # the supplied artifact's observed version, and a FLOOR on its
+        # error count (the count is lane-local, so only the honesty
+        # invariant is pinned: an artifact reported as failing never also
+        # reports zero errors).
+        want = expected["lineage"]
+        got = result["lineage"]
+        for field in ("declared", "ok", "verified_depth"):
+            if field in want:
+                assert got[field] == want[field], (
+                    f"{name}: expected lineage.{field}={want[field]!r}, got {got[field]!r}"
+                )
+        if "entries" in want:
+            assert len(got["entries"]) == len(want["entries"]), (
+                f"{name}: expected {len(want['entries'])} lineage entries, "
+                f"got {len(got['entries'])}"
+            )
+            for i, want_entry in enumerate(want["entries"]):
+                got_entry = got["entries"][i]
+                for field in ("status", "hop", "reason", "capsule_id", "identity_checked"):
+                    if field in want_entry:
+                        assert got_entry[field] == want_entry[field], (
+                            f"{name}: expected lineage.entries[{i}].{field}="
+                            f"{want_entry[field]!r}, got {got_entry[field]!r}"
+                        )
+                if "artifact_observed_version" in want_entry:
+                    artifact = got_entry["artifact"] or {}
+                    assert artifact.get("observed_version") == (
+                        want_entry["artifact_observed_version"]
+                    ), (
+                        f"{name}: expected lineage.entries[{i}].artifact.observed_version="
+                        f"{want_entry['artifact_observed_version']!r}, got "
+                        f"{artifact.get('observed_version')!r}"
+                    )
+                if "artifact_error_count_min" in want_entry:
+                    artifact = got_entry["artifact"] or {}
+                    floor = want_entry["artifact_error_count_min"]
+                    assert artifact.get("error_count", 0) >= floor, (
+                        f"{name}: expected lineage.entries[{i}].artifact.error_count>="
+                        f"{floor}, got {artifact.get('error_count')!r}"
+                    )
+    if "qualifiers" in expected:
+        # Verdict qualifiers: exact array after stripping x- vendor
+        # entries (spec results vocabulary; ignore-if-absent).
+        got_qualifiers = [q for q in result["qualifiers"] if not q.startswith("x-")]
+        assert got_qualifiers == expected["qualifiers"], (
+            f"{name}: expected qualifiers {expected['qualifiers']!r}, got {got_qualifiers!r}"
         )
     if "skill_trust" in expected:
         # Skill-trust derivation (spec/trust.md "Skill trust"): the tier
@@ -367,6 +439,69 @@ def test_version_compat_registry_outcomes(doc: dict, vector: dict, base: pathlib
     refuses them.
     """
     _assert_registry_vector(doc, vector, base)
+
+
+@pytest.mark.parametrize("doc,vector,base", _collection_params(LINEAGE))
+def test_lineage_registry_outcomes(doc: dict, vector: dict, base: pathlib.Path):
+    """spec/lineage.md: fail-closed standalone checks, REPORT-ONLY linkage.
+
+    A PRESENT malformed ``manifest.predecessors`` is the capsule
+    asserting something meaningless about its own origin and fails closed
+    with the shared ``predecessors[i].<member>`` diagnoses; the
+    per-vector ``predecessors`` pool supplies linkage evidence and can
+    falsify the lineage AREA but NEVER the capsule's own ``ok`` — the
+    ok-true-under-mismatch vectors are the anti-framing pin, and a lane
+    that hardens them into overall failure is non-conforming.
+    """
+    for req in vector.get("requires", []):
+        assert req in KNOWN_REQUIREMENTS, f"{vector['name']}: unknown requirement {req!r}"
+    name = vector["name"]
+    expected = vector["expected"]
+    allowlist = _allowlist(doc, base)
+    data = (base / vector["capsule_file"]).read_bytes()
+    reader = CapsuleReader.from_bytes(data)
+    pool = [(base / rel).read_bytes() for rel in vector.get("predecessors", [])]
+    result = verify_capsule(reader, allowlist=allowlist, predecessors=pool)
+    _assert_verify_outcome(name, expected, result)
+
+    if expected.get("capsule_id"):
+        # The capsule's identity is a reported fact some vectors pin (the
+        # same-id-zero-event-rewrap and unendorsed-successor ids).
+        assert reader.manifest()["id"] == expected["capsule_id"], (
+            f"{name}: expected capsule_id {expected['capsule_id']}, "
+            f"got {reader.manifest()['id']}"
+        )
+
+    if expected.get("decryptable_with"):
+        # L3 pin: the inner/outer lineage equality is fail-closed only
+        # when BOTH manifests declare (spec/lineage.md "Encrypted
+        # successors"). `inner_ok: false` pins that L3 refusal.
+        #
+        # Deliberately the DOCUMENTED recipe, argument for argument: the
+        # equality is a fail-closed MUST, so it must be pinned on the
+        # default invocation. The reader ``decrypt()`` returned carries
+        # the outer manifest; opting in with ``outer_manifest=`` here
+        # would let the check regress everywhere except this test.
+        keys = _load((base / doc["keys_file"]).resolve())
+        pair = keys[expected["decryptable_with"]]
+        inner = reader.decrypt(
+            recipient_public_key=pair["publicKey"],
+            recipient_private_key=pair["privateKey"],
+        )
+        inner_result = verify_capsule(
+            inner,
+            allowlist=allowlist,
+            outer_envelope=reader.envelope(),
+        )
+        want_inner_ok = expected.get("inner_ok", True)
+        assert inner_result["ok"] is want_inner_ok, (
+            f"{name}: expected inner ok={want_inner_ok}, got {inner_result['errors']}"
+        )
+        if expected.get("inner_error_includes"):
+            assert expected["inner_error_includes"] in " ".join(inner_result["errors"]), (
+                f"{name}: expected an inner error containing "
+                f"{expected['inner_error_includes']!r}; got {inner_result['errors']}"
+            )
 
 
 @pytest.mark.parametrize("doc,vector,base", _collection_params(MALFORMED))

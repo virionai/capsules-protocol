@@ -33,6 +33,8 @@ export function generateEd25519(): Ed25519KeyPair;
 /** Generate an X25519 encryption keypair (raw 32-byte keys + hex forms). */
 export function generateX25519(): X25519KeyPair;
 
+/** Derive the raw 32-byte public key from a raw 32-byte private key. */
+export function ed25519DerivePublic(privateKeyRaw: Uint8Array): Uint8Array;
 export function ed25519Sign(privateKeyRaw: Uint8Array, message: Uint8Array): Uint8Array;
 export function ed25519Verify(
   publicKeyRaw: Uint8Array,
@@ -310,6 +312,13 @@ export class CapsuleReader {
   static fromBytes(bytes: Uint8Array): Promise<CapsuleReader>;
   manifest(): Manifest;
   envelope(): Envelope;
+  /**
+   * The enclosing layer's manifest on a reader returned by decrypt(),
+   * null on a top-level reader. verifyCapsule reads it for the L3
+   * inner/outer lineage equality, so that fail-closed rule runs without
+   * the caller opting in.
+   */
+  outerManifest(): Manifest | null;
   isEncrypted(): boolean;
   encryptedBlobBytes(): Uint8Array | undefined;
   encryptedBlobHash(): string | null;
@@ -340,6 +349,9 @@ export interface VerifyOptions {
   /**
    * For L3: the outer manifest, so the inner/outer lineage declarations
    * can be compared (fail-closed only when both carry the member).
+   * Only needed when verifying raw inner BYTES — a reader returned by
+   * CapsuleReader.decrypt() already carries it, and this option
+   * overrides that.
    */
   outerManifest?: Manifest;
   /**
@@ -571,6 +583,17 @@ export const PREDECESSOR_ENTRY_MEMBERS: readonly string[];
 export const DEFAULT_PROFILE_ID: string;
 /** Lineage walk hop cap default (a resource limit, not a protocol rule). */
 export const LINEAGE_HOP_CAP_DEFAULT: number;
+/**
+ * Whether an observed `<major>.<minor>` era's rule set defines lineage.
+ * `predecessors` is a claim member: in an earlier era it is an unknown
+ * member, never shape-checked (spec/versioning.md).
+ */
+export function eraDefinesLineage(version: string): boolean;
+/**
+ * Problems a verify result diagnosed, across every channel — the count
+ * every report that says "N error(s)" about an artifact uses.
+ */
+export function verificationErrorCount(result: VerifyResult): number;
 
 /** Reader limits; see spec/format.md "Container properties". */
 export interface ZipLimits {

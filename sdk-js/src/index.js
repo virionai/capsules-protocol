@@ -12,6 +12,7 @@ export { verifyCapsule } from "./verifier.js";
 export {
   generateEd25519,
   generateX25519,
+  ed25519DerivePublic,
   ed25519Sign,
   ed25519Verify,
   bytesToHex,
@@ -63,7 +64,11 @@ export {
 
 // Lineage verification internals (spec/lineage.md) — exposed for
 // tooling and conformance work; app code reads verifyCapsule(...).lineage.
-export { LINEAGE_HOP_CAP_DEFAULT } from "./lineage.js";
+export {
+  LINEAGE_HOP_CAP_DEFAULT,
+  eraDefinesLineage,
+  verificationErrorCount,
+} from "./lineage.js";
 
 // Useful for demos and tooling that needs to read or rewrite the
 // underlying ZIP container directly (e.g. tampering tests).

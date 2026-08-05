@@ -22,6 +22,9 @@
 //   - version-compat/vectors.json     (version gates: known opens and
 //                                      reports; unknown fails closed with
 //                                      a non-tamper diagnosis)
+//   - lineage/vectors.json            (manifest.predecessors: standalone
+//                                      fail-closed checks + report-only
+//                                      supplied-bytes linkage)
 //
 // signing-input.json is consumed by SigningInputVectorTest, and
 // jcs-numbers.json / ed25519-key-validation.json by their own test files.
@@ -406,6 +409,52 @@ class SpecRegistryTest {
         }
     }
 
+    /**
+     * Lineage (spec/lineage.md, `manifest.predecessors`). PRESENCE
+     * BINDS, ABSENCE REPORTS: an absent member is "no claim"
+     * (declared=false, reported); a PRESENT malformed declaration fails
+     * closed with the shared `predecessors[i].<member>` diagnoses.
+     * Identity coherence is era-keyed and SKIPPED (identity_checked
+     * false, never failed) for unknown declared eras. Linkage against
+     * the per-vector `predecessors` pool is REPORT-ONLY: the
+     * ok-true-under-mismatch vectors are normative — a lane that fails
+     * the capsule on a mismatched supply is non-conforming.
+     *
+     * The collection's `keys_file` names per-actor keypairs rather than
+     * an originator allowlist (no vector pins a trust-dependent fact),
+     * so verification runs with no allowlist here.
+     */
+    @Test
+    fun lineageRegistryOutcomes() {
+        val file = File(vectorsDir(), "lineage/vectors.json")
+        val doc = JsonParser.parseString(file.readText()).asJsonObject
+        val base = file.parentFile
+        val vectors = doc.getAsJsonArray("vectors")
+        assertTrue(vectors.size() > 0, "lineage registry is empty")
+        for (entry in vectors) {
+            val v = entry.asJsonObject
+            val name = v.get("name").asString
+            val bytes = File(base, v.get("capsule_file").asString).readBytes()
+            if (name in ENCRYPTED_SUCCESSOR_VECTORS) {
+                assertEncryptedRefused(name, bytes)
+                continue
+            }
+            val pool = (v.getAsJsonArray("predecessors") ?: JsonArray())
+                .map { File(base, it.asString).readBytes() }
+            val expected = v.getAsJsonObject("expected")
+            val result = CapsuleVerifier.verify(bytes, predecessors = pool)
+            assertVerifyOutcome(name, expected, result)
+            if (expected.has("capsule_id")) {
+                // Two distinct identities: a successor squats on nothing.
+                assertEquals(
+                    expected.get("capsule_id").asString,
+                    CapsuleReader.lookupString(CapsuleReader.parse(bytes).manifest, listOf("id")),
+                    "$name: capsule_id mismatch",
+                )
+            }
+        }
+    }
+
     @Test
     fun malformedRegistryOutcomes() {
         val file = File(vectorsDir(), "malformed-layout/vectors.json")
@@ -549,6 +598,14 @@ class SpecRegistryTest {
         )
         val failing = expected.getAsJsonArray("failing") ?: JsonArray()
         for (area in failing) {
+            // `lineage` is an AREA boolean, not a check: the registry's
+            // failing-area predicate for it is lineage.ok == false, which
+            // a report-only linkage failure satisfies without touching
+            // the capsule's own verdict.
+            if (area.asString == "lineage") {
+                assertFalse(result.lineage.ok, "$name: expected lineage.ok=false")
+                continue
+            }
             val checkName = AREA_CHECK[area.asString]
                 ?: error("$name: unknown or unsupported failing area ${area.asString}")
             val check = result.checks.firstOrNull { it.name == checkName }
@@ -559,10 +616,29 @@ class SpecRegistryTest {
         }
         if (expected.has("error_includes")) {
             val needle = expected.get("error_includes").asString
-            val haystack = result.checks.joinToString(" ") { "${it.name} ${it.detail}" }
+            // Lineage entry errors are REPORT-ONLY (they never fail the
+            // capsule), but their diagnoses are pinned wording.
+            val haystack = (
+                result.checks.map { "${it.name} ${it.detail}" } +
+                    result.lineage.entries.flatMap { it.errors }
+                ).joinToString(" ")
             assertTrue(
                 haystack.contains(needle),
                 "$name: expected an error containing $needle; got $haystack",
+            )
+        }
+        // Lineage area (spec/lineage.md; ignore-if-absent per the shared
+        // outcome-schema contract).
+        if (expected.has("lineage")) {
+            assertLineageOutcome(name, expected.getAsJsonObject("lineage"), result.lineage)
+        }
+        // Verdict qualifiers: the exact array after stripping x- vendor
+        // entries (ignore-if-absent).
+        if (expected.has("qualifiers")) {
+            val want = expected.getAsJsonArray("qualifiers").map { it.asString }
+            assertEquals(
+                want, result.qualifiers.filter { !it.startsWith("x-") },
+                "$name: qualifiers mismatch",
             )
         }
         if (expected.has("signer_set_bound")) {
@@ -582,13 +658,22 @@ class SpecRegistryTest {
             )
         }
         // Honest-reporting pin: some rules require the verifier to REPORT
-        // a weaker claim machine-readably, not just to pass/fail.
+        // a weaker claim machine-readably, not just to pass/fail. A
+        // string pins one substring; an array pins several (e.g. the
+        // lineage phrases "declared, not verified" AND "not
+        // countersigned", both of which keep a citation from being read
+        // as an endorsement).
         if (expected.has("notes_includes")) {
-            val needle = expected.get("notes_includes").asString
-            assertTrue(
-                result.notes.any { it.contains(needle) },
-                "$name: expected a note containing $needle; got ${result.notes}",
-            )
+            val declared = expected.get("notes_includes")
+            val needles =
+                if (declared.isJsonArray) declared.asJsonArray.map { it.asString }
+                else listOf(declared.asString)
+            for (needle in needles) {
+                assertTrue(
+                    result.notes.any { it.contains(needle) },
+                    "$name: expected a note containing $needle; got ${result.notes}",
+                )
+            }
         }
         // Skill-trust derivation (spec/trust.md "Skill trust"): the tier
         // MUST come from the verify result — capsuleSigned plus the exact
@@ -605,6 +690,80 @@ class SpecRegistryTest {
                 wantSkills, result.skillTrust.skills,
                 "$name: skillTrust.skills mismatch",
             )
+        }
+    }
+
+    /**
+     * `expected.lineage` pins {declared, ok, verified_depth} and, when
+     * present, the per-entry status / hop / reason / identity_checked /
+     * capsule_id and the supplied artifact's observed version. Every
+     * member is ignore-if-absent.
+     */
+    private fun assertLineageOutcome(name: String, want: JsonObject, got: LineageReport) {
+        if (want.has("declared")) {
+            assertEquals(want.get("declared").asBoolean, got.declared, "$name: lineage.declared")
+        }
+        if (want.has("ok")) {
+            assertEquals(want.get("ok").asBoolean, got.ok, "$name: lineage.ok")
+        }
+        if (want.has("verified_depth")) {
+            assertEquals(
+                want.get("verified_depth").asInt, got.verifiedDepth,
+                "$name: lineage.verified_depth",
+            )
+        }
+        val wantEntries = want.getAsJsonArray("entries") ?: return
+        assertEquals(
+            wantEntries.size(), got.entries.size,
+            "$name: lineage entry count; got ${got.entries}",
+        )
+        wantEntries.forEachIndexed { i, e ->
+            val wantEntry = e.asJsonObject
+            val gotEntry = got.entries[i]
+            val label = "$name: lineage.entries[$i]"
+            if (wantEntry.has("status")) {
+                assertEquals(
+                    wantEntry.get("status").asString, gotEntry.status,
+                    "$label.status; errors=${gotEntry.errors}",
+                )
+            }
+            if (wantEntry.has("hop")) {
+                assertEquals(wantEntry.get("hop").asInt, gotEntry.hop, "$label.hop")
+            }
+            if (wantEntry.has("reason")) {
+                assertEquals(wantEntry.get("reason").asString, gotEntry.reason, "$label.reason")
+            }
+            if (wantEntry.has("capsule_id")) {
+                assertEquals(
+                    wantEntry.get("capsule_id").asString, gotEntry.capsuleId,
+                    "$label.capsule_id",
+                )
+            }
+            if (wantEntry.has("identity_checked")) {
+                assertEquals(
+                    wantEntry.get("identity_checked").asBoolean, gotEntry.identityChecked,
+                    "$label.identity_checked",
+                )
+            }
+            if (wantEntry.has("artifact_observed_version")) {
+                assertEquals(
+                    wantEntry.get("artifact_observed_version").asString,
+                    gotEntry.artifact?.observedVersion,
+                    "$label.artifact.observed_version",
+                )
+            }
+            // A FLOOR, not an equality: the count is lane-local (this
+            // lane counts failing checks), so only the honesty invariant
+            // is pinned — an artifact reported as failing never also
+            // reports zero errors.
+            if (wantEntry.has("artifact_error_count_min")) {
+                val floor = wantEntry.get("artifact_error_count_min").asInt
+                val gotCount = gotEntry.artifact?.errorCount ?: 0
+                assertTrue(
+                    gotCount >= floor,
+                    "$label.artifact.error_count >= $floor; got $gotCount",
+                )
+            }
         }
     }
 
@@ -684,6 +843,21 @@ class SpecRegistryTest {
          * and the registry expectation applies again.
          */
         private val ENCRYPTED_VECTORS = setOf("clean-encrypted", "tampered-blob")
+
+        /**
+         * Lineage vectors whose SUCCESSOR is an encrypted capsule: the
+         * inner/outer `predecessors` equality is a standalone check this
+         * plain-only lane has no L3 to run, so the capsule is asserted
+         * against the documented plain-only refusal instead (strictly
+         * stronger than skipping). The sibling encryption-tagged vector
+         * `encrypted-predecessor-unverifiable` is NOT here: its capsule
+         * is plain and only the supplied POOL artifact is encrypted, and
+         * classifying a pool artifact reads the SIGNED envelope's cipher
+         * — no decryption path is involved — so this lane runs it and
+         * reports the same `encrypted_predecessor` reason as every other
+         * lane.
+         */
+        private val ENCRYPTED_SUCCESSOR_VECTORS = setOf("inner-outer-mismatch")
 
         /**
          * Verify-stage vectors that THIS lane legitimately rejects at OPEN:

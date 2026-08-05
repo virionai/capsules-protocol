@@ -120,6 +120,51 @@ l3 = verify_capsule(inner, allowlist=[keys.public_key_hex],
 print(inner.program())
 ```
 
+The reader `decrypt()` returns remembers the layer it came out of, so
+the L3 inner/outer lineage equality (spec/lineage.md) runs on this
+recipe with no extra argument. Pass `outer_manifest=outer.manifest()`
+only when you verify raw decrypted BYTES instead of that reader.
+
+## Continue someone else's capsule (lineage / rewrap)
+
+You cannot seal under another originator's identity — and you don't
+need to. A successor capsule declares the exact sealed artifact it
+continues from (`manifest.predecessors`,
+[../spec/lineage.md](../spec/lineage.md)), carries the content files
+forward byte-identically, and starts a fresh chain under YOUR key:
+
+```python
+from capsule import CapsuleBuilder, rewrap_capsule, generate_ed25519, verify_capsule
+
+bob = generate_ed25519()
+
+# One-call custody transfer:
+wrap = rewrap_capsule(alice_bytes, originator=bob)
+wrap["bytes"], wrap["capsule_id"], wrap["predecessor_entry"]
+
+# Or continue the work before sealing:
+builder = CapsuleBuilder.continue_from(
+    alice_bytes,
+    originator={"public_key": bob.public_key_hex, "label": "Bob"},
+    participants=[{"actor_id": "human:bob", "role": "custodian"}],
+)
+builder.append_event({"actor": "human:bob", "action": "continued"})
+sealed = builder.seal(signers=bob)
+
+# Verify the custody claim by supplying the predecessor bytes:
+result = verify_capsule(sealed, predecessors=[alice_bytes])
+result["lineage"]  # {"declared", "ok", "verified_depth", "entries": [...]}
+```
+
+The declaration is the successor's ONE-WAY claim — the predecessor's
+originator has not countersigned it — and linkage is report-only:
+supplying the wrong file changes `result["lineage"]`, never
+`result["ok"]`. Merges: `builder.declare_predecessor(other_parent_bytes)`
+once per parent; an archivist holding hashes but not bytes uses
+`builder.declare_predecessor_entry({...})`. Refusals (tampered /
+unknown-era / encrypted / alternate-profile predecessors) raise
+`PredecessorError` with a machine-readable `.reason`.
+
 ## Develop
 
 ```sh
@@ -133,11 +178,15 @@ ruff format --check src tests  # formatter check
 ## Parity and conformance
 
 - `tests/test_spec_registry.py` consumes the language-neutral outcome
-  registries (`spec/vectors/tamper-detection/`, `malformed-layout/`)
-  and the byte-level `signing-input.json` pins directly.
+  registries (`spec/vectors/tamper-detection/`, `malformed-layout/`,
+  `lineage/`, …) and the byte-level `signing-input.json` pins directly.
 - `tests/test_parity_jssdk.py` runs both directions: Python verifies
   JS-built fixtures, and JS verifies Python-built capsules via a Node
   subprocess.
+- `tests/test_rewrap.py` adds the lineage derivation-parity pin: the
+  six-member entry this lane derives from a checked-in predecessor is
+  JSON-equal to the one the JS reference lane sealed into the successor
+  fixture (cross-era and zero-event corners included).
 
 ## Module map (mirrors `sdk-js/src/`)
 
@@ -149,7 +198,8 @@ ruff format --check src tests  # formatter check
 | `capsule.zip_io` | `sdk-js/src/zip.js` | Deterministic STORED ZIP + safety |
 | `capsule.pith` | `sdk-js/src/pith.js` | Narrative-field normalizer |
 | `capsule.chain` | `sdk-js/src/chain.js` | Event hashing + chain verify |
-| `capsule.manifest` | `sdk-js/src/manifest.js` | Manifest, capsule_id, content_index |
+| `capsule.manifest` | `sdk-js/src/manifest.js` | Manifest, capsule_id, content_index, `predecessors` grammar |
+| `capsule.lineage` | `sdk-js/src/lineage.js` | Lineage standalone checks + report-only linkage walk |
 | `capsule.envelope` | `sdk-js/src/envelope.js` | Envelope build + sign + verify |
 | `capsule.builder` | `sdk-js/src/builder.js` | CapsuleBuilder (plain + encrypted multi-recipient) |
 | `capsule.reader` | `sdk-js/src/reader.js` | CapsuleReader (plain + decrypt) |

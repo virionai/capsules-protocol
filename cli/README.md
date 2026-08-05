@@ -26,13 +26,14 @@ Requires Node ≥ 20.
 
 ## Commands
 
-### `capsule verify <file> [--allowlist KEY...] [--json]`
+### `capsule verify <file> [--allowlist KEY...] [--predecessor FILE...] [--json]`
 
-Wraps the SDK's `verifyCapsule()` and applies the CLI's **trust
-policy** on top. The SDK checks the math — signature(s), capsule_id
-derivation, manifest hash, content-index hash, chain hash linkage,
-signer-set binding — and reports facts; it never decides policy. The
-CLI does, because the CLI is where the operator says what they demand:
+Wraps the SDK's `verifyCapsule()` and applies the CLI's **trust policy**
+and **custody policy** on top. The SDK checks the math — signature(s),
+capsule_id derivation, manifest hash, content-index hash, chain hash
+linkage, signer-set binding, the `manifest.predecessors` declaration —
+and reports facts; it never decides policy. The CLI does, because the
+CLI is where the operator says what they demand:
 
 - **No `--allowlist`** — no trust policy. The verdict covers integrity
   only, and both the report and the `Result:` line say so. Signer
@@ -43,6 +44,118 @@ CLI does, because the CLI is where the operator says what they demand:
   allowlist **FAILS with exit 1** — `capsule verify f --allowlist $KEY
   && deploy` will not deploy an artifact signed by someone you did not
   trust. An entry that is not 64 hex chars is a usage error (exit 2).
+- **No `--predecessor`** — no custody policy. A declared lineage is
+  reported in full (it is never omitted) but never affects the exit
+  code: linkage is a fact about a *pair* of artifacts, the second one
+  chosen by whoever ran the command, so it must not be able to brand an
+  honest capsule a forgery.
+- **`--predecessor <file>`** (repeatable) — sets the custody policy:
+  every supplied file must match a declared entry, verify valid under
+  its own era, and satisfy every one of the six equalities.
+  `capsule verify s --predecessor p && publish` will not publish on a
+  failed custody check you asked for. Repeat the flag for merges and
+  for deeper lineage (one file per hop). Declared entries you did not
+  supply are reported but do **not** fail the exit — an operator may
+  hold only one branch of a merge. A supplied file that matches nothing
+  DOES fail it: a mistyped path must never exit 0. An unreadable path
+  is a usage error (exit 2).
+
+```text
+$ capsule verify bob.capsule --predecessor alice.capsule
+...
+Custody (lineage):
+  declared:          1 predecessor entry
+  policy:            predecessor (1 file supplied)
+  verified depth:    1
+  - hop 1  capsule 3fa29c018e4d…  era 0.7  status=verified
+      supplied artifact: ok=true  level=L2  version=0.7  errors=0
+  policy check:      SATISFIED — every supplied predecessor matched a declared entry and verified
+  notes:
+    - manifest.predecessors is the successor's one-way declaration; the
+      predecessor's originator has not countersigned it
+    - successor of capsule 3fa29c01…; lineage verified to depth 1
+```
+
+Lineage wording is pinned by `spec/lineage.md` and asserted by
+`test/rewrap.test.mjs`: an unchecked entry always renders **"declared,
+not verified"**; a declared lineage always carries the **"not
+countersigned"** statement (citation is not endorsement — there is no
+consent bit in v0.7.1); a supplied file that is a different genuine seal
+of the same identity is reported as a **"different sealed state of the
+declared predecessor"**, never as tampering; and a predecessor that
+fails its own verification is worded as a property of *that artifact*,
+naming the era it was checked under.
+
+`--json` adds a `lineage` block (`declared`, `ok`, `verified_depth`,
+`entries[]` — the spec's facts channel, per-entry `status` one of
+`unverified` | `verified` | `mismatch` | `predecessor_invalid` |
+`predecessor_unverifiable`) and a `custody` block
+(`policy`, `predecessors_supplied`, `unmatched_count`, `verified_depth`,
+`satisfied`) carrying this invocation's policy. `integrity_ok` stays the
+capsule's own verdict: a failed custody check moves `ok` and the exit
+code, never `integrity_ok`.
+
+### `capsule rewrap <predecessor.capsule> --key FILE --out FILE [...]`
+
+Continue someone else's sealed capsule under **your own** identity. The
+originator binding means a successor cannot be signed under the
+predecessor's key; a successor instead *declares* the exact sealed
+artifact it continues from, in `manifest.predecessors`
+(`spec/lineage.md`). `rewrap` is that hand-off as one command — the
+CLI's only writing command.
+
+```sh
+capsule keygen --out ./keys --label bob
+capsule rewrap alice.capsule --key ./keys/bob.private.hex \
+    --out bob.capsule --participant human:bob --label Bob
+capsule verify bob.capsule --predecessor alice.capsule    # exit 0, depth 1
+```
+
+What travels and what does not: **files carry, claims reset.**
+`program.md`, `agents.md`, `payload/**`, `skills/**` and any other
+content-indexed file are copied byte-identically — they are the work
+being continued. The predecessor's manifest members are its originator's
+claims about *that* capsule and are not echoed: `participants`
+(yours to declare — `--participant`, repeatable; the default is an
+unbound actor set), `created_at`, labels, the signer commitment, and the
+predecessor's own `predecessors` member. Re-rewrapping declares only the
+immediate parent, so ancestry never flattens into an inline list — it is
+recovered hop by hop with repeated `--predecessor` flags. The chain
+resets to a fresh genesis (predecessor history stays where it is
+signed) opening with a `custody_received` observation event
+(`--custody-actor`, default `system:host`; `--no-custody-event` to omit).
+
+Refusals — the CLI applies exactly one policy, "do not build on a
+predecessor that fails verification", with the same supplied-flag
+override discipline as `--allowlist`:
+
+- predecessor fails its own verification → **exit 1**, nothing written.
+  `--allow-invalid-predecessor` proceeds, prints a warning, and still
+  cites the exact artifact — linkage verification reports it
+  `predecessor_invalid` whichever path sealed the successor. The flag
+  changes no emitted byte; it is UX, not a security boundary.
+- predecessor declares an era this build does not know → **exit 1**, no
+  override: the entry's `capsule_id` recompute needs that era's domain
+  string, so a derived entry would be a fabricated commitment.
+- predecessor is **encrypted** (or declares an alternate profile) →
+  **exit 2**: an input class this command does not take, not a verdict
+  about the artifact. v0.7.1 declarations commit to a plain,
+  default-profile capsule's members; decrypt the inner capsule with the
+  SDK (`reader.decrypt(...)`) and rewrap that — the inner IS a plain
+  capsule.
+
+`--created-at` / `--signed-at` pin both timestamps: the same
+predecessor, key and flags then reproduce the successor byte-for-byte.
+Without them, two rewraps are two distinct genuine successors (a
+different genesis timestamp is a different `capsule_id`) — both honest;
+the format ranks no successor over another. The private key is read,
+used to sign, and never printed. `--json` emits the machine result
+(successor id, carried paths, the six-member entry, the predecessor's
+verification summary, warnings).
+
+Rewrap obtains nothing from the predecessor's originator: every
+successful run prints the "not countersigned" note, and the successor's
+id line says **"new identity"**.
 
 ```text
 $ capsule verify clean.capsule --allowlist c172289fcacf...
@@ -178,25 +291,41 @@ CI depends on these; they are part of the CLI's contract (enforced by
 `test/smoke.mjs`).
 
 ```
-0    success — for verify: integrity verified AND any supplied trust
-     policy satisfied. With no --allowlist, exit 0 means integrity
-     only; signer identity was NOT checked.
+0    success — for verify: integrity verified AND every supplied policy
+     satisfied (--allowlist, --predecessor). With neither flag, exit 0
+     means integrity only; signer identity was NOT checked and no
+     custody claim was established. For rewrap: the successor was
+     written (including under --allow-invalid-predecessor).
 1    verification failed — integrity checks failed, OR a supplied
-     trust policy was not satisfied (no allowlisted key signed), OR
-     vectors mismatch.
+     policy was not satisfied (no allowlisted key signed; a supplied
+     predecessor did not establish the declared linkage), OR vectors
+     mismatch, OR rewrap refused its predecessor (fails its own
+     verification, or declares an era this build does not know).
+     rewrap writes nothing on exit 1.
 2    usage, I/O, or environment error — unknown flag, unexpected
-     positional, malformed --allowlist entry, missing file, capsule
-     that cannot be opened, encrypted-capsule content requested
-     without decryption, …
+     positional, malformed --allowlist entry, --key file or
+     --created-at/--signed-at value, missing --out, an --out that
+     exists without --force, missing file,
+     capsule that cannot be opened, encrypted-capsule content
+     requested without decryption, an input class a command does not
+     take (rewrap of an encrypted or alternate-profile predecessor), …
 ```
 
 The parser fails closed: any flag a command does not declare, and any
 positional beyond what it accepts, is an exit-2 error. A typo'd
-`--alowlist` can never silently drop your trust policy.
+`--alowlist` can never silently drop your trust policy, and a typo'd
+`--alow-invalid-predecessor` can never silently seal on a broken
+artifact.
 
-`verify`, `vectors verify`, and `extract` are the three commands that
-care about exit codes for scripting; `inspect`, `chain`, `manifest`,
-etc. exit 2 only on bad input.
+The split between 1 and 2 is deliberate: exit 1 is always a statement
+about an artifact (it failed, or it did not satisfy what you asked
+for); exit 2 is always a statement about the invocation or about what
+this build can process. A refusal for a class this CLI does not handle
+is never dressed up as a verdict on the capsule.
+
+`verify`, `rewrap`, `vectors verify`, and `extract` are the commands
+that care about exit codes for scripting; `inspect`, `chain`,
+`manifest`, etc. exit 2 only on bad input.
 
 ## JSON mode
 
@@ -206,10 +335,17 @@ changes from minor revisions.
 
 ## What's *not* in this CLI
 
-- **Building** a capsule. Builders are example-specific (the
-  calling application defines its own actor, action, and payload
-  vocabulary). Capsule construction lives in the per-language SDKs. The
-  CLI verifies and inspects — it does not author.
+- **Building** a capsule from scratch. Builders are example-specific
+  (the calling application defines its own actor, action, and payload
+  vocabulary). Capsule construction lives in the per-language SDKs.
+  `rewrap` is the one exception: continuing an EXISTING capsule needs
+  no application vocabulary, because everything it writes is derived
+  from the predecessor plus your key.
+- **Merging** two predecessors in one command. `rewrap` takes one
+  predecessor (a hand-off has one subject); a successor declaring two
+  parents is built through the SDK builder
+  (`continueFrom` + `declarePredecessor` per parent) and verifies here
+  with repeated `--predecessor` flags.
 - **Decryption with a recipient key.** Encrypted-capsule support is
   parking-lot for a follow-up CLI revision. For now, encrypted capsules
   surface a clean error pointing at the tools that do decrypt: the
@@ -224,6 +360,13 @@ changes from minor revisions.
 npm test
 ```
 
-Runs `test/smoke.mjs`, which exercises every command against the
-repo-local fixtures generated by the JavaScript reference SDK at test
-startup. Asserts exit codes (0 / 1 / 2) and JSON-output shape.
+Runs two suites against repo-local fixtures generated by the JavaScript
+reference SDK at test startup:
+
+- `test/smoke.mjs` — every command, exit codes (0 / 1 / 2), JSON shape.
+- `test/rewrap.test.mjs` — lineage and rewrap, built around the
+  end-to-end two-actor hand-off: Alice seals, the naive continuation
+  fails the originator binding, Bob rewraps, `verify --predecessor`
+  reaches depth 1, Carol rewraps Bob and it reaches depth 2. Asserts
+  every pinned phrase, both policy failure modes, and each refusal's
+  exit code.

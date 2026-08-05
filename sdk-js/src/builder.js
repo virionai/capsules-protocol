@@ -37,6 +37,7 @@ import {
   manifestHash,
   predecessorsProblems,
 } from "./manifest.js";
+import { verificationErrorCount } from "./lineage.js";
 import { normalizeEventPayload } from "./pith.js";
 import { CapsuleReader } from "./reader.js";
 import { verifyCapsule } from "./verifier.js";
@@ -174,7 +175,7 @@ async function openPredecessorForBuild(predecessor, { allowInvalidPredecessor = 
     // linkage verification reports the artifact predecessor_invalid
     // whichever path sealed the successor.
     throw new PredecessorError(
-      `predecessor fails its own verification (${verification.errors.length} error(s)); ` +
+      `predecessor fails its own verification (${verificationErrorCount(verification)} error(s)); ` +
         `pass allowInvalidPredecessor: true to declare it anyway — the declaration ` +
         `cites this exact artifact, and linkage verification will report it ` +
         `predecessor_invalid`,

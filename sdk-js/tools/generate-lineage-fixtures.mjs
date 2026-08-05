@@ -12,6 +12,8 @@
 //   - linkage against supplied predecessor bytes is REPORT-ONLY (the
 //     ok:true-under-mismatch anti-framing pin), with the closed entry
 //     status vocabulary and the era-keyed recursive walk;
+//   - the per-era reach of the member: the SAME malformed declaration
+//     that fails a 0.7 capsule closed is inert inside a 0.6 one;
 //   - the deliberate ABSENCE of a self-reference rule (same-key
 //     zero-event rewrap);
 //   - the default-profile scope (unsupported_profile linkage reason)
@@ -45,11 +47,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bytesToHex, hexToBytes, jcs, sha256Hex } from "../src/canonical.js";
+import { bytesToHex, concatBytes, hexToBytes, jcs, sha256, sha256Hex } from "../src/canonical.js";
 import {
   chacha20Poly1305Encrypt,
   ed25519PrivateFromRaw,
   ed25519PublicToRaw,
+  ed25519Sign,
   hkdfSha256,
   x25519DH,
   x25519PrivateFromRaw,
@@ -198,6 +201,79 @@ async function sealWithPredecessors(keys, predecessorsValue, { mutateManifest } 
     signedAt: T_PRED,
   });
   signEnvelope(envelope, [signerOf(keys)]);
+  const all = new Map(files);
+  all.set("manifest.json", manifestBytes(manifest));
+  all.set("provenance/envelope.json", Buffer.from(JSON.stringify(envelope, null, 2), "utf8"));
+  return Buffer.from(await packZip(all));
+}
+
+/**
+ * A capsule sealed under an EARLIER era that carries a `predecessors`
+ * member — the retroactivity pin. Byte-coherent under its declared
+ * version: `capsule-id-v<era>\0` for the identity and
+ * `capsule-provenance-v<era>:originator\0` for the signature, the
+ * domain strings that era's verifier reconstructs (the hand-rolled
+ * domains mirror generate-version-compat-fixtures.mjs on purpose: the
+ * fixture must pin the SPEC's version-keyed strings, not whatever the
+ * current SDK helpers emit). Everything about it verifies; the only
+ * question the vector asks is whether a v0.7.1 reader interprets a
+ * member that era's rule set does not define. It must not — the member
+ * is an unknown member there, preserved and hashed, never shape-checked.
+ */
+async function sealAtEraWithPredecessors(keys, era, predecessorsValue) {
+  const events = buildChainEvents([{
+    actor: "human:alice",
+    kind: "observation",
+    action: "noted",
+    target: "capsule",
+    timestamp: T_PRED,
+    payload: { note: "lineage conformance fixture" },
+  }]);
+  const { firstEventHash, entryHash } = firstAndEntryHash(events);
+  const files = new Map();
+  files.set("program.md", Buffer.from(`# Lineage Fixture\n\nSealed at ${era}.\n`, "utf8"));
+  files.set("chain/events.jsonl", eventsToJsonl(events));
+  const contentIndex = buildContentIndex(files);
+  const manifest = buildManifest({
+    originator: { public_key: keys.publicKeyHex, label: "Fixture" },
+    participants: [{ actor_id: "human:alice", role: "originator" }],
+    contentIndex,
+    firstEventHash,
+    encryption: null,
+    createdAt: T_PRED,
+    signerCommitment: buildSignerCommitment([
+      { role: "originator", public_key: keys.publicKeyHex },
+    ]),
+  });
+  manifest.format.version = era;
+  manifest.predecessors = predecessorsValue;
+  manifest.id = bytesToHex(
+    sha256(concatBytes(
+      Buffer.from(`capsule-id-v${era}\x00`, "utf8"),
+      keys.publicKey,
+      hexToBytes(firstEventHash),
+    )),
+  );
+  const envelope = buildEnvelope({
+    capsuleId: manifest.id,
+    firstEventHash,
+    entryHash,
+    manifestHash: manifestHash(manifest),
+    contentIndexHash: contentIndex.index_hash,
+    encryptedBlobHash: null,
+    cipher: "none",
+    signedAt: T_PRED,
+  });
+  envelope.version = era;
+  const { signers: _drop, ...payload } = envelope;
+  envelope.signers.push({
+    role: "originator",
+    public_key: keys.publicKeyHex,
+    signature: bytesToHex(ed25519Sign(keys.privateKey, concatBytes(
+      Buffer.from(`capsule-provenance-v${era}:originator\x00`, "utf8"),
+      jcs(payload),
+    ))),
+  });
   const all = new Map(files);
   all.set("manifest.json", manifestBytes(manifest));
   all.set("provenance/envelope.json", Buffer.from(JSON.stringify(envelope, null, 2), "utf8"));
@@ -493,6 +569,11 @@ async function main() {
     { ...aliceEntry, format_version: "0.9" },
   ]);
 
+  // No retroactive interpretation of sealed eras: the SAME malformed
+  // declaration that fails a 0.7 capsule closed (`empty-array`) is inert
+  // inside a 0.6 one, where the rule set defines no lineage semantics.
+  const v06Inert = await sealAtEraWithPredecessors(alice, "0.6", []);
+
   // ---- Default-profile scope (B2) ----
   // A predecessor declaring an alternate profile (default math, so its
   // members still cohere — the declaration is what this verifier does
@@ -615,6 +696,7 @@ async function main() {
     ["self-id-rewrap.capsule", selfIdRewrap],
     ...Object.entries(malformedCapsules),
     ["era-unknown-declared.capsule", eraUnknown],
+    ["predecessors-in-v06-capsule.capsule", v06Inert],
     ["alt-profile-pred.capsule", altProfilePred],
     ["successor-of-alt-profile.capsule", successorOfAltProfile],
     ["alice-encrypted.capsule", aliceEncrypted],

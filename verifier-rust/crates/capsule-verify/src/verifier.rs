@@ -10,7 +10,10 @@
 //!   5. capsule_id derivation
 //!   6. manifest_hash check
 //!   7. content_index check
-//!   8. encryption-shape check (plain vs encrypted-outer)
+//!   8. encryption-shape check (plain vs encrypted-outer), manifest
+//!      encryption agreement, and the lineage declaration: fail-closed
+//!      standalone checks on a present `manifest.predecessors` plus the
+//!      report-only linkage walk over any supplied predecessor artifacts
 //!   9. chain walk + first/entry hash checks (skipped on encrypted outers
 //!      — chain commits are L3, not L2)
 //!  10. envelope signature verification
@@ -40,6 +43,7 @@ use crate::crypto::{hex_to_bytes, sha256_hex};
 use crate::decrypt::decrypt_inner_zip;
 use crate::envelope::verify_signatures;
 use crate::l3::l3_attempt_decrypt_and_verify;
+use crate::lineage::LineageCheck;
 use crate::manifest::{
     build_content_index, compute_capsule_id, content_index_exclusions, manifest_hash,
 };
@@ -83,6 +87,11 @@ pub enum TopErrorCategory {
     /// namespace grammar (`human:`/`ai:`/`system:`/`capsule:` with a
     /// non-empty id — manifest.md field rules, finding A06)
     ActorId,
+    /// a PRESENT `manifest.predecessors` declaration no reader can
+    /// interpret (spec/lineage.md standalone checks 1–3). Linkage
+    /// against supplied predecessor bytes is REPORT-ONLY and never
+    /// reaches this category — it lives in `lineage.entries[].errors`.
+    Lineage,
     /// cipher / encrypted-blob inconsistencies: unsupported cipher,
     /// `envelope.encrypted_blob_hash` mismatch with the recomputed
     /// `sha256(content.enc)`, or encrypted blob present with cipher='none'
@@ -189,6 +198,14 @@ pub struct VerifyOptions {
     /// shape: the SDK reports, the host decides. `None` reports no
     /// policy verdict.
     pub accept_versions: Option<Vec<String>>,
+    /// Candidate predecessor artifacts (raw capsule bytes) for lineage
+    /// linkage (spec/lineage.md). REPORT-ONLY: supplying them can
+    /// falsify `lineage.ok`, never the capsule's own `ok` — a host's
+    /// file handling must not forge a forgery verdict against an honest
+    /// successor. Each artifact is verified under ITS declared version's
+    /// rules with these same host options; the pool itself belongs to
+    /// the walk and is never passed down.
+    pub predecessors: Vec<Vec<u8>>,
 }
 
 /// Top-level verifier result.
@@ -248,6 +265,15 @@ pub struct VerifyResult {
     /// deserializable (defaulting to the fail-closed "unread" shape).
     #[serde(default)]
     pub format_version: FormatVersionCheck,
+    /// Lineage facts (spec/lineage.md): the successor's declared
+    /// predecessors and what this invocation could establish about them.
+    /// Standalone malformation fails the capsule; supplied-bytes linkage
+    /// is REPORT-ONLY and can only falsify `lineage.ok`.
+    /// `#[serde(default)]` keeps pre-lineage JSON deserializable
+    /// (defaulting to the not-evaluated shape — the `signer_set` /
+    /// `actor_set` pattern).
+    #[serde(default)]
+    pub lineage: LineageCheck,
     /// Derived skill-trust classification (spec/trust.md "Skill trust").
     /// The tier is host-relative — it depends on the allowlist THIS
     /// verification ran with — so it derives from the verify result and
@@ -282,6 +308,16 @@ pub struct VerifyResult {
     /// trust is reported separately on `inner_envelope.signers[].trusted` —
     /// callers wanting a combined total can sum the two.
     pub trusted_signer_count: usize,
+    /// Verdict qualifiers: bare strings that qualify a VALID verdict,
+    /// never verdict inputs. This lane emits the three lineage names of
+    /// spec/lineage.md ("Reporting") — `lineage_declared_unverified`,
+    /// `lineage_mismatch`, `lineage_predecessor_invalid` — each meaning
+    /// "valid verdict, custody claim not clean", exactly what a renderer
+    /// must not hide. Payload-carrying facts never ride this array; they
+    /// live in their own channel (`lineage`). `#[serde(default)]` keeps
+    /// pre-qualifier JSON deserializable.
+    #[serde(default)]
+    pub qualifiers: Vec<String>,
     pub notes: Vec<String>,
 }
 
@@ -938,6 +974,24 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         }
     }
 
+    // ---- (8c) lineage declaration (spec/lineage.md) ---------------------
+    // Standalone checks fail closed (a PRESENT declaration no reader can
+    // interpret is the capsule asserting something meaningless about its
+    // own origin). Linkage over `options.predecessors` is REPORT-ONLY: it
+    // can falsify `lineage.ok` but never the capsule's own verdict, so a
+    // host's file handling cannot forge a forgery verdict against an
+    // honest successor. An encrypted capsule's OUTER declaration is
+    // evaluated here at L2; the inner one is evaluated at L3.
+    let mut lineage_problems: Vec<String> = Vec::new();
+    let lineage_check =
+        crate::lineage::evaluate_lineage(&manifest, options, &mut lineage_problems, &mut notes);
+    for problem in lineage_problems {
+        errors.push(TopError::outer(
+            TopErrorCategory::Lineage,
+            format!("manifest.{problem}"),
+        ));
+    }
+
     // ---- (9) chain walk -------------------------------------------------
     // For encrypted outers the chain lives inside the encrypted inner — L3
     // territory. We surface chain.ok=true with a note rather than failing,
@@ -1142,6 +1196,12 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         trusted_signer_count,
     );
 
+    // ---- (15) verdict qualifiers ----------------------------------------
+    // Derived AFTER the verdict: a qualifier qualifies a VALID verdict,
+    // and an invalid capsule's custody claim is not what the reader needs
+    // to hear about first.
+    let qualifiers = crate::lineage::lineage_qualifiers(ok, &lineage_check);
+
     VerifyResult {
         ok,
         level,
@@ -1154,10 +1214,12 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         signer_set: signer_set_check,
         actor_set: actor_set_check,
         format_version: format_version_check,
+        lineage: lineage_check,
         skill_trust: skill_trust_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
+        qualifiers,
         notes,
     }
 }
@@ -1785,10 +1847,16 @@ fn assemble_result(
         signer_set: SignerSetCheck::default(),
         actor_set: ActorSetCheck::default(),
         format_version,
+        // Refusal exclusivity (spec/lineage.md "Reporting"): after an
+        // open-stage or version-gate refusal the lineage channel holds
+        // its not-evaluated default and the refusal diagnosis is the only
+        // error carried — `declared: false` here means "not evaluated".
+        lineage: LineageCheck::default(),
         skill_trust: SkillTrustCheck::default(),
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
+        qualifiers: Vec::new(),
         notes,
     }
 }
@@ -1799,8 +1867,99 @@ mod tests {
     use crate::test_support::{
         chain_binding_capsule_bytes, clean_capsule_bytes, originator_ed25519_public_key_hex,
         recipient_x25519_private_key, semantic_binding_capsule_bytes,
-        synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes,
+        synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes, vector_capsule_bytes,
     };
+
+    /// Refusal exclusivity (spec/lineage.md "Reporting"): a capsule
+    /// refused at the version gate carries the refusal diagnosis and
+    /// nothing else, and every other channel holds its fail-closed
+    /// default. `lineage.declared == false` there means NOT EVALUATED —
+    /// distinguishable from the "no claim" shape a capsule that reached
+    /// the check reports (`declared: false, ok: true`), so a reader can
+    /// never mistake "we never looked" for "it cited nothing".
+    #[test]
+    fn version_gate_refusal_leaves_the_lineage_channel_unevaluated() {
+        let refused = verify_capsule(
+            &vector_capsule_bytes("version-compat", "unknown-newer-version.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!refused.ok);
+        assert!(
+            !refused.lineage.declared && !refused.lineage.ok,
+            "refused capsule must hold the not-evaluated lineage default; got {:?}",
+            refused.lineage
+        );
+        assert!(refused.qualifiers.is_empty(), "an invalid verdict carries no qualifiers");
+
+        let reached = verify_capsule(&clean_capsule_bytes(), &VerifyOptions::default());
+        assert!(
+            !reached.lineage.declared && reached.lineage.ok,
+            "a capsule that reached the check and declares nothing reports the honest \
+             no-claim shape; got {:?}",
+            reached.lineage
+        );
+    }
+
+    /// No retroactive interpretation of sealed eras: the SAME malformed
+    /// value that fails a 0.7 capsule closed (`empty-array`) is an inert
+    /// unknown member inside a 0.6 one. `predecessors` is a claim
+    /// member, so it follows per-era rule sets — and the gate applies to
+    /// the SUBJECT capsule, not only to hops reached through the walk.
+    #[test]
+    fn predecessors_in_a_pre_lineage_era_capsule_is_inert() {
+        let v07 = verify_capsule(
+            &vector_capsule_bytes("lineage", "empty-array.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!v07.ok, "a 0.7 capsule's malformed declaration still fails closed");
+
+        let v06 = verify_capsule(
+            &vector_capsule_bytes("lineage", "predecessors-in-v06-capsule.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(
+            v06.ok,
+            "a v0.6 capsule must verify byte-identically to what a v0.6 reader gives it; \
+             errors: {:?}",
+            v06.errors
+        );
+        assert_eq!(v06.format_version.observed.as_deref(), Some("0.6"));
+        assert!(
+            !v06.lineage.declared && v06.lineage.ok && v06.lineage.entries.is_empty(),
+            "the era reports the not-declared shape; got {:?}",
+            v06.lineage
+        );
+        assert!(v06.qualifiers.is_empty());
+        assert!(
+            v06.notes.iter().any(|n| n.contains("unknown member under that era")),
+            "the uninterpreted member is reported, never silently dropped; got {:?}",
+            v06.notes
+        );
+    }
+
+    /// Linkage is REPORT-ONLY: a host handing the verifier the wrong file
+    /// must not be able to brand an honest successor a forgery. The area
+    /// records the fact and the qualifier surfaces it; `ok` is untouched.
+    #[test]
+    fn supplied_predecessor_bytes_never_flip_the_capsule_verdict() {
+        let successor = vector_capsule_bytes("lineage", "bob.capsule");
+        let wrong_seal = vector_capsule_bytes("lineage", "alice-later-seal.capsule");
+        let result = verify_capsule(
+            &successor,
+            &VerifyOptions {
+                predecessors: vec![wrong_seal],
+                ..VerifyOptions::default()
+            },
+        );
+        assert!(result.ok, "linkage must never falsify ok; errors: {:?}", result.errors);
+        assert!(!result.lineage.ok, "the AREA carries the failed custody claim");
+        assert_eq!(result.qualifiers, vec!["lineage_mismatch".to_string()]);
+        assert!(
+            result.errors.is_empty(),
+            "a linkage fact is never a top-level error; got {:?}",
+            result.errors
+        );
+    }
 
     /// A plain capsule (signed cipher "none") with a `content.enc` appended
     /// and a corrupt chain. Encrypted-mode detection must key off the signed
@@ -1883,6 +2042,7 @@ mod tests {
                 allowlist: vec![originator_ed25519_public_key_hex()],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2029,7 +2189,7 @@ mod tests {
     #[test]
     fn clean_capsule_passes_l2() {
         let bytes = clean_capsule_bytes();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(result.ok, "clean capsule must pass; errors: {:?}", result.errors);
         assert!(result.errors.is_empty(), "no top-level errors: {:?}", result.errors);
@@ -2080,6 +2240,7 @@ mod tests {
                 allowlist: allowlist.clone(),
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2104,6 +2265,7 @@ mod tests {
                 allowlist,
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
         assert!(
@@ -2126,7 +2288,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(manifest_bytes).unwrap();
         let pk = manifest.originator.public_key.clone();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(result.ok, "must still pass with allowlist; errors: {:?}", result.errors);
         assert!(
@@ -2140,7 +2302,7 @@ mod tests {
     #[test]
     fn tampered_payload_fails_at_content_index() {
         let bytes = tampered_capsule_bytes("tampered-payload.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered payload must fail");
         assert!(
@@ -2167,7 +2329,7 @@ mod tests {
     #[test]
     fn tampered_chain_fails_at_chain_or_content_index() {
         let bytes = tampered_capsule_bytes("tampered-chain.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered chain must fail");
         assert!(
@@ -2180,7 +2342,7 @@ mod tests {
     #[test]
     fn tampered_envelope_fails_at_signature() {
         let bytes = tampered_capsule_bytes("tampered-envelope.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered envelope must fail");
         assert!(
@@ -2201,7 +2363,7 @@ mod tests {
     #[test]
     fn encrypted_capsule_rejected_with_clear_message() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered-blob.capsule must be rejected");
         assert!(
@@ -2286,7 +2448,7 @@ mod tests {
         zw.write_all(b"").unwrap(); // empty chain
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "0.5 manifest must be rejected");
         assert!(
@@ -2318,7 +2480,7 @@ mod tests {
     #[test]
     fn malformed_zip_surfaces_as_malformed_category() {
         let bytes = b"not a zip at all".to_vec();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "garbage bytes must not verify");
         assert!(
@@ -2388,7 +2550,7 @@ mod tests {
         zw.write_all(b"").unwrap();
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
         assert!(!result.ok);
         assert!(
             result
@@ -2612,7 +2774,7 @@ mod tests {
     #[test]
     fn clean_encrypted_passes_l2() {
         let bytes = tampered_capsule_bytes("clean-encrypted.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(
             result.ok,
@@ -2646,7 +2808,7 @@ mod tests {
     #[test]
     fn tampered_blob_fails_at_encrypted_blob_hash() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered-blob must fail at L2");
         assert!(
@@ -2686,7 +2848,7 @@ mod tests {
         let bytes = synthesize_capsule_with_envelope_mutation("clean.capsule", |env| {
             env["cipher"] = serde_json::Value::String("AES-256-GCM".to_string());
         });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "unsupported cipher must be rejected");
         assert!(
@@ -2711,7 +2873,7 @@ mod tests {
             synthesize_capsule_with_envelope_mutation("clean-encrypted.capsule", |env| {
                 env["cipher"] = serde_json::Value::String("none".to_string());
             });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "encrypted blob with cipher='none' must fail");
         assert!(
@@ -2737,6 +2899,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2804,6 +2967,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2834,6 +2998,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2870,6 +3035,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some([0x42; 32]),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2897,6 +3063,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2934,6 +3101,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2972,6 +3140,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3000,6 +3169,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3111,6 +3281,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3164,6 +3335,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3191,6 +3363,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3319,6 +3492,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3366,6 +3540,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
         assert!(
@@ -3388,6 +3563,7 @@ mod tests {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
         let has_inner = result
@@ -3604,6 +3780,7 @@ mod tests {
                 allowlist: vec!["cc76ce271ed61e515b598d73290a2b39".to_string()],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3641,6 +3818,7 @@ mod tests {
                 allowlist: vec!["not-hex".to_string(), pk],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3679,6 +3857,7 @@ mod tests {
                 allowlist: vec!["ab".repeat(32)],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -3712,6 +3891,7 @@ mod tests {
                 allowlist: vec![pk_upper],
                 recipient_private_key: None,
                 accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
