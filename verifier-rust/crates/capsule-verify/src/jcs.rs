@@ -14,8 +14,12 @@
 //!   uses `ryu-js` which mirrors that behavior)
 //! - `-0` → `0` (negative zero collapses)
 //! - control characters → lowercase `\u00XX` (RFC 8259 + JCS)
-//! - object keys sorted by code-unit order (ASCII-only keys in our use case
-//!   make this equivalent to `&str` byte order; documented for posterity)
+//! - object keys sorted by UTF-16 code-unit order. This is NOT `&str` byte
+//!   order: Rust's `str: Ord` is UTF-8 byte order == code-point order, and
+//!   the two disagree once a supplementary key (>= U+10000) meets a key in
+//!   U+E000..U+FFFF. `serde_jcs` 0.2.0 wraps keys in a `Utf16Key` whose
+//!   `Ord` compares `Vec<u16>` built by `encode_utf16()` (lib.rs:100-134),
+//!   which is correct; pinned by `spec_registry::jcs_key_order_registry`.
 //!
 //! If `serde_jcs` ever diverges from the JS oracle, replace the body of
 //! [`jcs`] with an inline canonicalizer; the public API and tests stay put.
@@ -24,12 +28,14 @@ use serde_json::Value;
 
 /// Canonicalize `value` per RFC 8785 (JCS) and return UTF-8 bytes.
 ///
-/// Object keys are sorted in UTF-16 code-unit order. For ASCII-only keys —
-/// which covers all manifest, envelope, and chain-record keys in the v0.6
-/// capsule format — this coincides with the byte order of UTF-8 strings. If
-/// the schema ever introduces keys containing supplementary (non-BMP)
-/// characters, the underlying `serde_jcs` crate already handles UTF-16
-/// ordering correctly.
+/// Object keys are sorted in UTF-16 code-unit order (RFC 8785 §3.2.3). All
+/// v0.6 manifest, envelope, and chain-record keys are ASCII, where that
+/// coincides with UTF-8 byte order — but the guarantee does not rest on
+/// that: `serde_jcs` compares `Vec<u16>` from `encode_utf16()`, so
+/// supplementary-plane keys are ordered correctly too. Do not swap in a
+/// canonicalizer that sorts `&str` directly: that is code-point order, and
+/// it disagrees with UTF-16 whenever a key >= U+10000 meets a key in
+/// U+E000..U+FFFF.
 ///
 /// Panics if `value` contains a non-finite number (NaN or ±Infinity), which
 /// `serde_json::Value` cannot represent in the first place, so this is a
@@ -42,6 +48,158 @@ pub fn jcs(value: &Value) -> Vec<u8> {
     serde_jcs::to_string(value)
         .expect("serde_jcs cannot fail on a serde_json::Value")
         .into_bytes()
+}
+
+/// Largest integer exactly representable as an IEEE-754 binary64: 2^53 - 1.
+const MAX_SAFE_INTEGER: i128 = (1i128 << 53) - 1;
+
+/// Smallest magnitude whose ECMAScript `Number::toString` form uses exponent
+/// notation. Below it an integral double serializes as a plain integer
+/// literal; at or above it the token carries an `e`.
+const PLAIN_INTEGER_CEILING: f64 = 1e21;
+
+/// Enforce the I-JSON acceptance boundary from `spec/canonicalization.md`.
+///
+/// RFC 8785 canonicalization is only defined over I-JSON (RFC 7493) input.
+/// This verifier's strings are Rust `String`s, which cannot hold unpaired
+/// surrogates (`serde_json` rejects lone-surrogate escapes at parse time), so
+/// only the number rule needs enforcing here: a number whose canonical token
+/// is a *plain integer literal* must satisfy |n| <= 2^53 - 1.
+///
+/// Returns `Err(message)` naming the offending path, or `Ok(())`.
+pub fn check_ijson(value: &Value) -> Result<(), String> {
+    check_ijson_at(value, "$")
+}
+
+fn check_ijson_at(value: &Value, path: &str) -> Result<(), String> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+        Value::Number(n) => check_number(n, path),
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                check_ijson_at(item, &format!("{path}[{i}]"))?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for (k, v) in map {
+                check_ijson_at(v, &format!("{path}.{k}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn out_of_range(path: &str) -> String {
+    format!(
+        "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1) at {path}; \
+         not representable identically across implementations"
+    )
+}
+
+fn check_number(n: &serde_json::Number, path: &str) -> Result<(), String> {
+    if let Some(u) = n.as_u64() {
+        return if i128::from(u) > MAX_SAFE_INTEGER {
+            Err(out_of_range(path))
+        } else {
+            Ok(())
+        };
+    }
+    if let Some(i) = n.as_i64() {
+        return if i128::from(i).abs() > MAX_SAFE_INTEGER {
+            Err(out_of_range(path))
+        } else {
+            Ok(())
+        };
+    }
+    let f = n
+        .as_f64()
+        .ok_or_else(|| format!("JCS: non-finite number at {path}"))?;
+    if !f.is_finite() {
+        return Err(format!("JCS: non-finite number at {path}"));
+    }
+    let magnitude = f.abs();
+    if f.fract() == 0.0 && magnitude > MAX_SAFE_INTEGER as f64 && magnitude < PLAIN_INTEGER_CEILING
+    {
+        return Err(out_of_range(path));
+    }
+    Ok(())
+}
+
+
+/// Parse JSON bytes destined for hashing, refusing duplicate object member
+/// names at any depth (spec/canonicalization.md "Objects", RFC 7493 §2.3).
+///
+/// `serde_json::Value` silently keeps the LAST duplicate, so the rule cannot
+/// be checked on the parsed tree (`check_ijson` never sees it): it must be
+/// enforced DURING deserialization. This walks the input with a visitor that
+/// builds the same `Value` tree but errors on a repeated member name. Names
+/// compare after escape processing (`"a"` and `"\u0061"` collide), because
+/// serde hands the visitor decoded keys.
+pub fn parse_json_strict(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+
+    struct Checked(Value);
+
+    impl<'de> Deserialize<'de> for Checked {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> Visitor<'de> for V {
+                type Value = Checked;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("any JSON value")
+                }
+                fn visit_bool<E: de::Error>(self, v: bool) -> Result<Checked, E> {
+                    Ok(Checked(Value::Bool(v)))
+                }
+                fn visit_i64<E: de::Error>(self, v: i64) -> Result<Checked, E> {
+                    Ok(Checked(Value::from(v)))
+                }
+                fn visit_u64<E: de::Error>(self, v: u64) -> Result<Checked, E> {
+                    Ok(Checked(Value::from(v)))
+                }
+                fn visit_f64<E: de::Error>(self, v: f64) -> Result<Checked, E> {
+                    serde_json::Number::from_f64(v)
+                        .map(|n| Checked(Value::Number(n)))
+                        .ok_or_else(|| E::custom("non-finite number"))
+                }
+                fn visit_str<E: de::Error>(self, v: &str) -> Result<Checked, E> {
+                    Ok(Checked(Value::String(v.to_owned())))
+                }
+                fn visit_string<E: de::Error>(self, v: String) -> Result<Checked, E> {
+                    Ok(Checked(Value::String(v)))
+                }
+                fn visit_unit<E: de::Error>(self) -> Result<Checked, E> {
+                    Ok(Checked(Value::Null))
+                }
+                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Checked, A::Error> {
+                    let mut out = Vec::new();
+                    while let Some(Checked(v)) = seq.next_element::<Checked>()? {
+                        out.push(v);
+                    }
+                    Ok(Checked(Value::Array(out)))
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Checked, A::Error> {
+                    let mut out = serde_json::Map::new();
+                    while let Some(key) = map.next_key::<String>()? {
+                        let Checked(value) = map.next_value::<Checked>()?;
+                        if out.insert(key.clone(), value).is_some() {
+                            return Err(de::Error::custom(format!(
+                                "duplicate object member {key:?}"
+                            )));
+                        }
+                    }
+                    Ok(Checked(Value::Object(out)))
+                }
+            }
+            d.deserialize_any(V)
+        }
+    }
+
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    let value = Checked::deserialize(&mut de)?;
+    de.end()?;
+    Ok(value.0)
 }
 
 #[cfg(test)]
@@ -190,6 +348,60 @@ mod tests {
     }
 
     #[test]
+    fn check_ijson_rejects_plain_integer_literal_out_of_range() {
+        // A 20-digit integer literal: serde_json parses it as u64, serde_jcs
+        // would happily echo it, and a JS reader would round it. Refuse.
+        let v: Value = serde_json::from_str(r#"{"payload":{"ts":10000000000000000000}}"#)
+            .expect("valid json");
+        let err = check_ijson(&v).expect_err("must be rejected");
+        assert!(
+            err.contains("integer outside IEEE-754 exact range"),
+            "unexpected message: {err}"
+        );
+        assert!(
+            err.contains("$.payload.ts"),
+            "message must name the path: {err}"
+        );
+    }
+
+    #[test]
+    fn check_ijson_rejects_exponent_input_that_serializes_as_plain_integer() {
+        // `1e19` arrives as an f64 but Number::toString lays it out as
+        // 10000000000000000000 - the same unsafe plain literal.
+        let v: Value = serde_json::from_str("[1e19]").expect("valid json");
+        assert!(check_ijson(&v).is_err());
+        assert_eq!(String::from_utf8(jcs(&v)).unwrap(), "[10000000000000000000]");
+    }
+
+    #[test]
+    fn check_ijson_accepts_max_safe_and_exponent_form() {
+        let safe: Value = serde_json::from_str("9007199254740991").expect("valid json");
+        assert!(check_ijson(&safe).is_ok());
+        // 1e21 and above serialize in exponent form, which round-trips
+        // through every lane's double path.
+        let big: Value = serde_json::from_str("1e21").expect("valid json");
+        assert!(check_ijson(&big).is_ok());
+        assert_eq!(String::from_utf8(jcs(&big)).unwrap(), "1e+21");
+    }
+
+    #[test]
+    fn serde_json_rejects_lone_surrogate_escape_at_parse() {
+        // The string half of the acceptance boundary is enforced by the
+        // parser in this lane: Rust `String` cannot hold a lone surrogate.
+        assert!(
+            serde_json::from_str::<Value>(r#"{"s":"x\ud83dy"}"#).is_err(),
+            "an unpaired high surrogate escape must not parse"
+        );
+        assert!(
+            serde_json::from_str::<Value>(r#"{"s":"x\udc00"}"#).is_err(),
+            "an unpaired low surrogate escape must not parse"
+        );
+        // The well-formed pair is accepted and yields one astral scalar.
+        let ok: Value = serde_json::from_str(r#"{"s":"x🙂"}"#).expect("valid pair");
+        assert_eq!(String::from_utf8(jcs(&ok)).unwrap().chars().count(), 10);
+    }
+
+    #[test]
     fn deterministic_sha256_of_canonical_form() {
         // Cross-check with the Task 1 crypto helper: hashing the canonical
         // bytes is deterministic across invocations, regardless of the input
@@ -239,6 +451,16 @@ mod vector_tests {
             let value = f64::from_bits(bits);
             let num = serde_json::Number::from_f64(value)
                 .expect("vectors contain only finite doubles");
+            if entry["accepted"] == Value::Bool(false) {
+                // Outside the I-JSON acceptance boundary
+                // (spec/canonicalization.md): `expected` documents the
+                // Number::toString layout, but the value must be refused.
+                assert!(
+                    super::check_ijson(&Value::Number(num)).is_err(),
+                    "bits {hex} (would serialize as {expected}) must be rejected"
+                );
+                continue;
+            }
             let got = String::from_utf8(jcs(&Value::Number(num))).expect("utf8");
             assert_eq!(got, expected, "bits {hex}");
         }

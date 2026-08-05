@@ -34,7 +34,7 @@ disclosure process.
 
 In scope:
 
-- The Capsule v0.6 format and its specification (`spec/`).
+- The Capsule v0.7 format and its specification (`spec/`).
 - Reference SDKs in this repository (`sdk-js/`, `sdk-py/`,
   `sdk-kotlin/`, `sdk-swift/`).
 - The Rust verifier (`verifier-rust/`) and CLI (`cli/`).

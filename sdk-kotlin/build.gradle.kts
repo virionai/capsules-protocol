@@ -8,5 +8,5 @@ plugins {
 
 allprojects {
     group = "ai.virion.capsule"
-    version = "0.6.0-prototype.1"
+    version = "0.7.0-prototype.1"
 }

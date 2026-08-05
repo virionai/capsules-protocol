@@ -16,6 +16,11 @@ final class JCSNumbersVectorTests: XCTestCase {
     private struct Vector: Decodable {
         let ieee_hex: String
         let expected: String
+        /// Absent means accepted. `false` marks a bit pattern outside the
+        /// I-JSON acceptance boundary (spec/canonicalization.md): `expected`
+        /// documents the Number::toString layout, but the value must be
+        /// refused before it can be canonicalized.
+        let accepted: Bool?
     }
 
     private struct VectorFile: Decodable {
@@ -43,8 +48,15 @@ final class JCSNumbersVectorTests: XCTestCase {
                 continue
             }
             let value = Double(bitPattern: bits)
+            if vector.accepted == false {
+                XCTAssertThrowsError(
+                    try JCS.assertAcceptable(.decimal(value)),
+                    "bits \(vector.ieee_hex) (would serialize as \(vector.expected)) must be rejected"
+                )
+                continue
+            }
             XCTAssertEqual(
-                JCS.canonical(.decimal(value)),
+                try JCS.canonical(.decimal(value)),
                 vector.expected,
                 "bits \(vector.ieee_hex)"
             )

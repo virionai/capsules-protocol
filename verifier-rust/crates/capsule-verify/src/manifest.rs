@@ -13,11 +13,12 @@ use serde_json::{json, Value};
 
 use crate::crypto::{bytes_to_hex, hex_to_bytes, sha256, sha256_hex, CryptoError};
 use crate::jcs::jcs;
-use crate::schemas::{ContentIndex, ContentIndexEntry, Manifest};
+use crate::schemas::{ContentIndex, ContentIndexEntry};
 
 /// Domain separator for capsule_id derivation. Mirrors the JS SDK's
-/// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant.
-const CAPSULE_ID_DOMAIN: &[u8] = b"capsule-id-v0.6\x00";
+/// `Buffer.from("capsule-id-v0.6\x00", "utf8")` constant — now selected
+/// BY the capsule's declared version via [`crate::versions::id_domain`]
+/// (spec/versioning.md "Version-keyed domain separation").
 
 /// Paths excluded from the content index by structural necessity, for every
 /// capsule regardless of profile:
@@ -59,21 +60,33 @@ pub enum CapsuleIdError {
 /// Compute capsule_id as `sha256_hex(domain || originator_pubkey_raw ||
 /// first_event_hash_raw)`, where `domain = b"capsule-id-v0.6\0"`.
 ///
+/// `first_event_hash_hex: None` is the zero-event capsule shape
+/// (spec/chain.md "Empty chains"): there is no first event, and the
+/// derivation uses 32 zero bytes — the genesis prev-hash value — in
+/// place of `first_event_hash_raw` (spec/manifest.md "Capsule identity").
+///
 /// Mirrors `computeCapsuleId` in `sdk-js/src/manifest.js`.
 pub fn compute_capsule_id(
     originator_pubkey_raw: &[u8],
-    first_event_hash_hex: &str,
+    first_event_hash_hex: Option<&str>,
+    version: &str,
 ) -> Result<String, CapsuleIdError> {
     if originator_pubkey_raw.len() != 32 {
         return Err(CapsuleIdError::BadOriginatorLength);
     }
-    if first_event_hash_hex.len() != 64 {
-        return Err(CapsuleIdError::BadFirstEventHashShape);
-    }
-    let feh_raw = hex_to_bytes(first_event_hash_hex)?;
+    let feh_raw: Vec<u8> = match first_event_hash_hex {
+        None => vec![0u8; 32], // genesis stand-in for an empty chain
+        Some(hex) => {
+            if hex.len() != 64 {
+                return Err(CapsuleIdError::BadFirstEventHashShape);
+            }
+            hex_to_bytes(hex)?
+        }
+    };
+    let domain = crate::versions::id_domain(version);
     let mut input =
-        Vec::with_capacity(CAPSULE_ID_DOMAIN.len() + originator_pubkey_raw.len() + feh_raw.len());
-    input.extend_from_slice(CAPSULE_ID_DOMAIN);
+        Vec::with_capacity(domain.len() + originator_pubkey_raw.len() + feh_raw.len());
+    input.extend_from_slice(&domain);
     input.extend_from_slice(originator_pubkey_raw);
     input.extend_from_slice(&feh_raw);
     Ok(bytes_to_hex(&sha256(&input)))
@@ -102,12 +115,17 @@ pub fn build_content_index(
             sha256: sha256_hex(bytes),
         });
     }
-    // BTreeMap iteration is already lexicographically sorted by path, so
-    // the entries vector is sorted by construction. The explicit sort below
-    // is a defensive belt-and-suspenders move that mirrors the JS step
-    // exactly — useful if a future refactor swaps in a different map type
-    // upstream.
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    // content_index.files is a JSON *array*, so this order is inside the
+    // bytes index_hash covers — and this function runs on the verify path,
+    // so the order has to match every other lane's, not merely be stable.
+    //
+    // BTreeMap iteration sorts by `str: Ord`, which is UTF-8 byte order ==
+    // Unicode code-point order. That is NOT the RFC 8785 §3.2.3 order the
+    // rest of the format uses: a supplementary-plane path (>= U+10000,
+    // UTF-16 lead surrogate 0xD800..0xDBFF) sorts BELOW U+E000..U+FFFF in
+    // UTF-16 and above it by code point. So this sort is load-bearing, not
+    // defensive: it re-orders the map's iteration into the normative order.
+    entries.sort_by(|a, b| a.path.encode_utf16().cmp(b.path.encode_utf16()));
 
     // Build a JSON Value of the array for canonicalization. Each entry is
     // an object with two string keys; serde_json::to_value cannot fail.
@@ -126,24 +144,22 @@ pub fn build_content_index(
 
 /// JCS-canonical bytes of a manifest, then SHA-256, lowercase hex.
 ///
-/// Mirrors `manifestHash` in `sdk-js/src/manifest.js`. Goes through
-/// `serde_json::to_value` so the canonicalization runs over the same shape
-/// the JS reference's `JSON.stringify` would produce.
-pub fn manifest_hash(manifest: &Manifest) -> String {
-    let value = match serde_json::to_value(manifest) {
-        Ok(v) => v,
-        // Manifest contains only JSON-representable types; this branch is
-        // unreachable in practice. We surface a clearly-wrong sentinel hash
-        // rather than panicking so that the verifier stays panic-free for
-        // any conceivable input.
-        Err(_) => return "0".repeat(64),
-    };
-    sha256_hex(&jcs(&value))
+/// Mirrors `manifestHash` in `sdk-js/src/manifest.js`. Takes the PRESERVED
+/// `serde_json::Value` tree parsed from the on-disk `manifest.json` bytes —
+/// never the typed `Manifest` struct. A struct projection silently drops
+/// members it does not know, so hashing a struct round-trip would diverge
+/// from what the signer signed whenever the manifest carries extension
+/// members (spec/manifest.md "Unknown members"). The preserved tree keeps
+/// them, so a legitimate signer's extensions verify and a post-seal
+/// mutation of any member — known or unknown — breaks the hash.
+pub fn manifest_hash(manifest: &Value) -> String {
+    sha256_hex(&jcs(manifest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schemas::Manifest;
     use crate::test_support::clean_capsule_bytes;
     use crate::unpack_zip;
 
@@ -155,24 +171,46 @@ mod tests {
         (manifest, map)
     }
 
+    fn load_clean_manifest_value() -> Value {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap()
+    }
+
     #[test]
     fn capsule_id_matches_stored() {
         let (manifest, _) = load_clean();
         let pk = hex_to_bytes(&manifest.originator.public_key).unwrap();
-        let id = compute_capsule_id(&pk, &manifest.first_event_hash).unwrap();
+        // Keyed by the fixture's DECLARED version (spec/versioning.md).
+        let id = compute_capsule_id(
+            &pk,
+            manifest.first_event_hash.as_deref(),
+            &manifest.format.version,
+        )
+        .unwrap();
         assert_eq!(id, manifest.id);
     }
 
     #[test]
     fn capsule_id_rejects_short_pubkey() {
-        let err = compute_capsule_id(&[0u8; 31], &"00".repeat(32)).unwrap_err();
+        let err = compute_capsule_id(&[0u8; 31], Some(&"00".repeat(32)), "0.6").unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadOriginatorLength));
     }
 
     #[test]
     fn capsule_id_rejects_short_first_event_hash() {
-        let err = compute_capsule_id(&[0u8; 32], "deadbeef").unwrap_err();
+        let err = compute_capsule_id(&[0u8; 32], Some("deadbeef"), "0.6").unwrap_err();
         assert!(matches!(err, CapsuleIdError::BadFirstEventHashShape));
+    }
+
+    /// `None` (a zero-event capsule) derives exactly like the genesis
+    /// zero hash — 32 zero bytes stand in for `first_event_hash_raw`
+    /// (spec/manifest.md "Capsule identity").
+    #[test]
+    fn capsule_id_none_uses_genesis_zero_bytes() {
+        let via_none = compute_capsule_id(&[7u8; 32], None, "0.6").unwrap();
+        let via_zero_hex = compute_capsule_id(&[7u8; 32], Some(&"0".repeat(64)), "0.6").unwrap();
+        assert_eq!(via_none, via_zero_hex);
     }
 
     #[test]
@@ -182,6 +220,35 @@ mod tests {
         let recomputed = build_content_index(&files, STRUCTURAL_EXCLUDED);
         assert_eq!(recomputed.index_hash, manifest.content_index.index_hash);
         assert_eq!(recomputed.files, manifest.content_index.files);
+    }
+
+    /// `content_index.files` is a JSON array, so its order is inside the
+    /// bytes `index_hash` covers — and this function runs on the VERIFY
+    /// path (`verify_content_index`), not just at build time. The order
+    /// must therefore be the same UTF-16 code-unit order RFC 8785 §3.2.3
+    /// gives object members, which is NOT Rust's `str: Ord` (UTF-8 byte
+    /// order == code-point order). A code-point sort puts the U+1F600 path
+    /// last and yields a different index_hash, so an honest capsule built
+    /// in any other lane fails content-index verification here.
+    #[test]
+    fn content_index_orders_paths_by_utf16_code_units() {
+        let emoji = "\u{1F600}.txt";
+        let pua = "\u{E000}.txt";
+        let nonchar = "\u{FFFF}.txt";
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        files.insert(nonchar.into(), b"a".to_vec());
+        files.insert(emoji.into(), b"b".to_vec());
+        files.insert(pua.into(), b"c".to_vec());
+        files.insert("z.txt".into(), b"d".to_vec());
+        let index = build_content_index(&files, STRUCTURAL_EXCLUDED);
+        let order: Vec<&str> = index.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(order, vec!["z.txt", emoji, pua, nonchar]);
+        // Pinned from the JS reference lane over the same file map:
+        //   buildContentIndex(new Map([...])).index_hash
+        assert_eq!(
+            index.index_hash,
+            "49e4bccd112720dad9125d366459e2d4893cb1ffd58d99dc75ea40cc6aa04976"
+        );
     }
 
     #[test]
@@ -199,13 +266,35 @@ mod tests {
 
     #[test]
     fn manifest_hash_is_deterministic() {
-        let (manifest, _) = load_clean();
+        let manifest = load_clean_manifest_value();
         let h1 = manifest_hash(&manifest);
         let h2 = manifest_hash(&manifest);
         assert_eq!(h1, h2);
         // 64 lowercase hex chars.
         assert_eq!(h1.len(), 64);
         assert!(h1.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+    }
+
+    /// Unknown members are part of the hashed document: adding one to the
+    /// preserved tree MUST change the manifest hash. (A struct round-trip
+    /// would drop it and leave the hash unchanged — the exact bug class
+    /// the preserved-Value contract exists to prevent.)
+    #[test]
+    fn manifest_hash_covers_unknown_members() {
+        let clean = load_clean_manifest_value();
+        let h_clean = manifest_hash(&clean);
+
+        let mut extended = clean.clone();
+        extended["x-acme-policy"] = serde_json::json!({ "tier": "gold" });
+        let h_extended = manifest_hash(&extended);
+
+        assert_ne!(
+            h_clean, h_extended,
+            "an unknown member must be canonicalised into the manifest hash"
+        );
+        // And the hash over the extended tree is stable — the member is
+        // preserved, not re-projected away.
+        assert_eq!(h_extended, manifest_hash(&extended));
     }
 
     #[test]

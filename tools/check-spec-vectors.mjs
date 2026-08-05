@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Verify checked-in spec vectors against the JavaScript reference SDK.
 //
-// Three vector shapes are recognized under spec/vectors/:
+// Seven vector shapes are recognized under spec/vectors/ (plus the
+// signing-input doc, documented at checkSigningInput below):
 //
 //   1. Embedded positive vector: a JSON doc with `capsule_bytes_b64` and an
 //      `expected` map of observed hashes (capsule_id, first_event_hash,
@@ -17,10 +18,39 @@
 //      verifier's own tests.
 //
 //   3. A JCS number-serialization vector set (jcs-numbers.json): a `vectors`
-//      array of `{ ieee_hex, expected }` entries, where `ieee_hex` is the
-//      big-endian IEEE-754 binary64 bit pattern of the input and `expected`
-//      its canonical RFC 8785 serialization. Implementations must parse the
-//      bit pattern (not the expected string) and serialize it.
+//      array of `{ ieee_hex, expected, accepted? }` entries, where `ieee_hex`
+//      is the big-endian IEEE-754 binary64 bit pattern of the input and
+//      `expected` its canonical RFC 8785 serialization. Implementations must
+//      parse the bit pattern (not the expected string) and serialize it.
+//      `accepted: false` marks a bit pattern outside the I-JSON acceptance
+//      boundary (spec/canonicalization.md): `expected` records the
+//      Number::toString layout, but canonicalization must refuse the value.
+//
+//   4. An Ed25519 key/signature validation registry (meta.kind
+//      "ed25519-verify"): a `vectors` array of `{ public_key_hex,
+//      message_hex, signature_hex, expected: { valid }, reason }` entries.
+//      The negative entries are witnesses an unguarded verifier accepts —
+//      small-order and non-canonical public keys, and a non-reduced S.
+//
+//   5. An identity-attestation outcome set (meta.kind ===
+//      "identity-attestation"): inline attestation documents plus the
+//      verification context they must be checked against, with an expected
+//      `{ ok, status, error_includes? }`. `status` is the attestation-layer
+//      vocabulary of spec/federation.md "Failure reporting".
+//
+//   6. A JCS key-ordering vector set (meta.kind === "jcs-key-order"): a
+//      `vectors` array of `{ name, keys, expected_key_order,
+//      canonical_utf8_hex, sha256_hex }` entries. Build an object mapping
+//      each key to its index in `keys`, canonicalize, and reproduce the
+//      pinned bytes. RFC 8785 3.2.3 sorts members on UTF-16 code units,
+//      which is neither code-point order nor a collation-aware order.
+//
+//   7. An I-JSON acceptance set (meta.kind === "ijson-acceptance"): a
+//      `vectors` array of `{ name, input_json, expect, canonical?, reason? }`
+//      entries carrying raw JSON text that must be accepted (with its
+//      canonical form pinned) or refused, per spec/canonicalization.md. A
+//      `reject` vector is satisfied by refusal at parse time OR at
+//      canonicalization time; both are conforming.
 //
 // keys.json (the tamper-detection fixture keypair, consumed by the
 // Rust/Python parity lanes) is the only JSON explicitly skipped. Any other
@@ -32,11 +62,13 @@ import { existsSync } from "node:fs";
 import { join, resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CapsuleReader, verifyCapsule } from "../sdk-js/src/index.js";
+import { verifyIdentityAttestation } from "../sdk-js/src/federation/attestation.js";
 import {
   bytesToHex,
   concatBytes,
   hexToBytes,
   jcs,
+  parseJsonStrict,
   sha256,
 } from "../sdk-js/src/canonical.js";
 import { envelopeCanonicalPayload, envelopeSigningInput } from "../sdk-js/src/envelope.js";
@@ -132,6 +164,9 @@ const FAILING_AREA = {
   chain: (r) => r.chain.ok === false,
   envelope: (r) => r.envelope.ok === false,
   encrypted_blob: (r) => r.errors.some((e) => e.includes("encrypted_blob_hash")),
+  signer_set: (r) => r.signerSet.ok === false,
+  originator_binding: (r) => r.errors.some((e) => e.includes("originator binding")),
+  lineage: (r) => r.lineage.ok === false,
 };
 
 // Map an open-stage `reason` category to the JS reference lane's error
@@ -140,23 +175,155 @@ const FAILING_AREA = {
 const OPEN_REASON = {
   missing_required_file: /missing (manifest\.json|provenance\/envelope\.json)/,
   invalid_json: /JSON/,
+  // Every manifest shape error from reader.js validateManifestShape is
+  // prefixed with the offending field path — as is every profile
+  // declaration shape error, which can name either document
+  // (spec/profiles.md: the closed profile object).
+  invalid_manifest_shape: /^(manifest|envelope)\./,
   duplicate_entry: /duplicate entry/,
   unsafe_path: /(parent traversal|absolute|NUL)/,
   unsupported_compression: /only STORED supported/,
   symlink_entry: /symlink/,
+  directory_marker_shape: /directory (attribute on non-directory name|marker with nonzero size)/,
+  local_central_name_mismatch: /local\/central name mismatch/,
+  // spec/versioning.md: unknown versions fail closed with a diagnosis
+  // DISTINCT from malformation or tampering. The needles below are the
+  // cross-lane normative wording.
+  unsupported_version_newer: /newer than this verifier supports/,
+  unsupported_version_older: /older than any version this verifier supports/,
+  // spec/profiles.md: a declared profile outside the verifier's table
+  // is a LIMITATION OF THE VERIFIER (never corruption); disagreeing
+  // manifest/envelope declarations are a capsule defect, diagnosed
+  // before any table lookup.
+  unsupported_profile: /is not supported by this verifier/,
+  profile_mismatch: /envelope\.profile does not match manifest\.format\.profile/,
 };
 
+// Map a verify-stage `reason` category (semantic-binding/vectors.json) to
+// the JS reference lane's error message. Same contract as OPEN_REASON: the
+// category is normative, the string is implementation-defined per lane.
+const VERIFY_REASON = {
+  first_event_hash_binding: /manifest\.first_event_hash mismatch/,
+  encryption_shape: /manifest\.encryption must be/,
+  encryption_metadata_path: /manifest\.encryption\.metadata_path/,
+  cipher_without_blob: /plain capsule must have cipher='none'/,
+  blob_without_cipher: /encrypted blob present but envelope\./,
+};
+
+// Optional lane capabilities a vector may require. The JS reference lane
+// implements all of them and therefore skips nothing; the list exists so a
+// typo in a vector's `requires` cannot silently make other lanes skip it.
+const KNOWN_REQUIREMENTS = new Set(["encryption"]);
+
+// expected.profile sub-assertion keys (snake_case, the wire vocabulary)
+// mapped to this lane's profile-channel members (spec/profiles.md).
+const PROFILE_EXPECTED_KEYS = {
+  observed: "observed",
+  observed_version: "observedVersion",
+  declared: "declared",
+  effective: "effective",
+  effective_version: "effectiveVersion",
+  supported: "supported",
+  status: "status",
+};
+
+/**
+ * Normalized result-surface assertions shared by open-stage (asserted on
+ * the fail-closed verify result) and verify-stage vectors:
+ * expected.verdict / verdict_reason (spec/results.md), expected.qualifiers
+ * (EXACT array after stripping `x-` vendor entries from the result — the
+ * conformance comparison rule), expected.profile.* (spec/profiles.md), and
+ * expected.suite (formatVersion.suite, which nulls under any non-default
+ * effective profile), plus the observed_profile shorthand pair.
+ */
+function checkResultVocabulary(label, result, expected) {
+  if (expected.verdict !== undefined && result.verdict !== expected.verdict) {
+    fail(`${label}: expected verdict='${expected.verdict}', got ${JSON.stringify(result.verdict)}`);
+  }
+  if ("verdict_reason" in expected) {
+    const got = result.verdictReason ?? null;
+    if (got !== expected.verdict_reason) {
+      fail(
+        `${label}: expected verdict_reason=${JSON.stringify(expected.verdict_reason)}, got ${JSON.stringify(got)}`,
+      );
+    }
+  }
+  if (Array.isArray(expected.qualifiers)) {
+    const got = (result.qualifiers ?? []).filter((q) => !String(q).startsWith("x-"));
+    if (JSON.stringify(got) !== JSON.stringify(expected.qualifiers)) {
+      fail(
+        `${label}: expected qualifiers=${JSON.stringify(expected.qualifiers)}, got ${JSON.stringify(got)}`,
+      );
+    }
+  }
+  if (expected.observed_profile !== undefined &&
+      (result.profile?.observed ?? null) !== expected.observed_profile) {
+    fail(
+      `${label}: expected profile.observed='${expected.observed_profile}', ` +
+        `got ${JSON.stringify(result.profile?.observed)}`,
+    );
+  }
+  if (expected.observed_profile_version !== undefined &&
+      (result.profile?.observedVersion ?? null) !== expected.observed_profile_version) {
+    fail(
+      `${label}: expected profile.observedVersion='${expected.observed_profile_version}', ` +
+        `got ${JSON.stringify(result.profile?.observedVersion)}`,
+    );
+  }
+  if (expected.profile && typeof expected.profile === "object") {
+    for (const [key, member] of Object.entries(PROFILE_EXPECTED_KEYS)) {
+      if (!(key in expected.profile)) continue;
+      const got = result.profile?.[member] ?? null;
+      const want = expected.profile[key];
+      if (got !== want) {
+        fail(
+          `${label}: expected profile.${key}=${JSON.stringify(want)}, got ${JSON.stringify(got)}`,
+        );
+      }
+    }
+  }
+  if ("suite" in expected) {
+    const got = result.formatVersion?.suite ?? null;
+    if (got !== expected.suite) {
+      fail(`${label}: expected formatVersion.suite=${JSON.stringify(expected.suite)}, got ${JSON.stringify(got)}`);
+    }
+  }
+}
+
+/** True when an open-stage vector pins facts on the fail-closed verify result. */
+function wantsFailClosedResult(expected) {
+  return Boolean(
+    expected.observed_version ||
+      expected.observed_profile !== undefined ||
+      expected.observed_profile_version !== undefined ||
+      expected.profile ||
+      expected.verdict !== undefined ||
+      "verdict_reason" in expected ||
+      Array.isArray(expected.qualifiers) ||
+      "suite" in expected,
+  );
+}
+
 async function checkCollection(path, doc) {
+  // F40: an empty collection is a hard failure, not a silent no-op. A
+  // registry emptied by a bad merge would otherwise still pass — the only
+  // zero-guard used to be the global `checked === 0` at the bottom, which
+  // a single surviving collection satisfies.
+  if (doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
   // capsule_file / keys_file paths are relative to the collection file.
   const base = dirname(path);
   // Resolve the allowlist origin: an inline hex key, or the originator key in
   // a referenced keys.json.
   let allowlist = [];
+  let keys = null;
   if (doc.originator_public_key_hex) {
     allowlist = [doc.originator_public_key_hex];
   } else if (doc.keys_file) {
     try {
-      const keys = JSON.parse(await readFile(join(base, doc.keys_file), "utf8"));
+      keys = JSON.parse(await readFile(join(base, doc.keys_file), "utf8"));
       if (keys.originator?.publicKey) allowlist = [keys.originator.publicKey];
     } catch (err) {
       fail(`${path}: keys_file unreadable: ${err.message}`);
@@ -169,6 +336,38 @@ async function checkCollection(path, doc) {
     if (!v.capsule_file || !v.expected) {
       fail(`${label}: vector requires capsule_file and expected`);
       continue;
+    }
+    for (const req of v.requires ?? []) {
+      if (!KNOWN_REQUIREMENTS.has(req)) fail(`${label}: unknown requirement '${req}'`);
+    }
+    // A vector may pin its own trust configuration: `allowlist` names
+    // keypairs in the collection's keys_file ([] = no allowlist). Trust-
+    // derivation vectors (skill-trust) verify THE SAME capsule bytes under
+    // different host configurations, which a doc-level allowlist cannot
+    // express.
+    let vectorAllowlist = allowlist;
+    if (Array.isArray(v.allowlist)) {
+      vectorAllowlist = [];
+      for (const name of v.allowlist) {
+        const pk = keys?.[name]?.publicKey;
+        if (!pk) fail(`${label}: allowlist entry '${name}' has no keypair in keys_file`);
+        else vectorAllowlist.push(pk);
+      }
+    }
+    // `allowlist_literal` entries reach the verifier VERBATIM — never
+    // resolved against keys_file, because a MALFORMED entry is by
+    // construction one no keypair can produce. Allowlist hygiene
+    // (spec/results.md `trust_not_evaluated` is about the EFFECTIVE,
+    // well-formed set) is otherwise inexpressible here, and it is exactly
+    // the rule that drifted apart across lanes once. When present, the
+    // effective allowlist is the resolved names (empty if the vector
+    // declares none) plus the literals — the collection-level default
+    // never applies, so every lane computes the same set.
+    if (Array.isArray(v.allowlist_literal)) {
+      vectorAllowlist = [
+        ...(Array.isArray(v.allowlist) ? vectorAllowlist : []),
+        ...v.allowlist_literal,
+      ];
     }
     let bytes;
     try {
@@ -199,6 +398,26 @@ async function checkCollection(path, doc) {
           `${label}: open failed, but not for reason '${v.expected.reason}': ${openError.message}`,
         );
       }
+      // spec/versioning.md, spec/profiles.md: the observed version and
+      // profile declaration are REPORTED FACTS even when open is
+      // refused — this is what lets an auditor tell "this verifier is
+      // too old / lacks this profile" apart from "this capsule is
+      // corrupt". The normalized verdict surface (spec/results.md) is
+      // asserted on the same fail-closed result.
+      if (wantsFailClosedResult(v.expected)) {
+        const refused = await verifyCapsule(bytes, { allowlist });
+        if (refused.ok !== false) {
+          fail(`${label}: open-stage fixture must fail closed at the verifier surface`);
+        }
+        if (v.expected.observed_version &&
+            refused.formatVersion?.observed !== v.expected.observed_version) {
+          fail(
+            `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+              `got ${JSON.stringify(refused.formatVersion?.observed)}`,
+          );
+        }
+        checkResultVocabulary(label, refused, v.expected);
+      }
       continue;
     }
 
@@ -209,10 +428,154 @@ async function checkCollection(path, doc) {
       fail(`${label}: capsule_file cannot be opened: ${err.message}`);
       continue;
     }
-    const result = await verifyCapsule(reader, { allowlist });
+    const verifyOptions = { allowlist: vectorAllowlist };
+    // Lineage linkage pool (spec/lineage.md): per-vector `predecessors`
+    // names checked-in artifacts (relative to the collection file)
+    // supplied to the verify call. REPORT-ONLY by design — the vectors
+    // pin that the pool never flips the capsule's own ok.
+    if (Array.isArray(v.predecessors)) {
+      verifyOptions.predecessors = [];
+      for (const rel of v.predecessors) {
+        try {
+          verifyOptions.predecessors.push(await readFile(join(base, rel)));
+        } catch (err) {
+          fail(`${label}: predecessors entry unreadable: ${err.message}`);
+        }
+      }
+    }
+    // A vector may pin host version policy: `accept_versions` is passed
+    // to the verifier's acceptVersions option (spec/versioning.md "Host
+    // policy" — reported, never decided).
+    if (Array.isArray(v.accept_versions)) verifyOptions.acceptVersions = v.accept_versions;
+    const result = await verifyCapsule(reader, verifyOptions);
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // The capsule's identity is a reported fact some vectors pin (e.g.
+    // the same-id-zero-event-rewrap and unendorsed-successor ids).
+    if (v.expected.capsule_id && reader.manifest().id !== v.expected.capsule_id) {
+      fail(
+        `${label}: expected capsule_id ${v.expected.capsule_id}, got ${reader.manifest().id}`,
+      );
+    }
+    // Normalized verdict surface + profile channel (spec/results.md,
+    // spec/profiles.md). This is the ONE qualifiers comparison: an exact
+    // array after stripping `x-` vendor entries from the result.
+    checkResultVocabulary(label, result, v.expected);
+    // spec/versioning.md: the observed format version is a reported fact.
+    if (v.expected.observed_version &&
+        result.formatVersion?.observed !== v.expected.observed_version) {
+      fail(
+        `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+          `got ${JSON.stringify(result.formatVersion?.observed)}`,
+      );
+    }
+    // Signer-set binding is PRESENCE BINDS, ABSENCE REPORTS: vectors pin
+    // the machine-readable bound/unbound report, not just ok.
+    if (typeof v.expected.signer_set_bound === "boolean" &&
+        result.signerSet.bound !== v.expected.signer_set_bound) {
+      fail(
+        `${label}: expected signerSet.bound=${v.expected.signer_set_bound}, got ${result.signerSet.bound}`,
+      );
+    }
+    // Actor-set binding (chain.md step 6) follows the same contract: a
+    // non-empty manifest.participants[] binds the chain's actors; an
+    // empty one must be REPORTED as unbound, never rejected.
+    if (typeof v.expected.actor_set_bound === "boolean" &&
+        result.actorSet.bound !== v.expected.actor_set_bound) {
+      fail(
+        `${label}: expected actorSet.bound=${v.expected.actor_set_bound}, got ${result.actorSet.bound}`,
+      );
+    }
+    // Skill-trust derivation (spec/trust.md "Skill trust"): the tier MUST
+    // come from the verify result — capsule_signed plus the exact per-id
+    // map — never from any skill_trust member in the capsule itself.
+    if (v.expected.skill_trust) {
+      const want = v.expected.skill_trust;
+      const got = result.skillTrust ?? {};
+      if (got.capsuleSigned !== want.capsule_signed) {
+        fail(
+          `${label}: expected skillTrust.capsuleSigned=${want.capsule_signed}, got ${got.capsuleSigned}`,
+        );
+      }
+      const wantSkills = JSON.stringify(
+        Object.fromEntries(Object.entries(want.skills ?? {}).sort()),
+      );
+      const gotSkills = JSON.stringify(
+        Object.fromEntries(Object.entries(got.skills ?? {}).sort()),
+      );
+      if (wantSkills !== gotSkills) {
+        fail(`${label}: expected skillTrust.skills=${wantSkills}, got ${gotSkills}`);
+      }
+    }
+    // Lineage area expectations (spec/lineage.md; ignore-if-absent per
+    // the shared outcome-schema contract). `expected.lineage` pins
+    // declared/ok/verified_depth and, when present, per-entry
+    // status/hop/reason/identity_checked/capsule_id, the supplied
+    // artifact's observed version, and a FLOOR on its error count (the
+    // count is lane-local, so only the honesty invariant is pinned: an
+    // artifact reported as failing never also reports zero errors).
+    if (v.expected.lineage) {
+      const want = v.expected.lineage;
+      const got = result.lineage ?? {};
+      if (typeof want.declared === "boolean" && got.declared !== want.declared) {
+        fail(`${label}: expected lineage.declared=${want.declared}, got ${got.declared}`);
+      }
+      if (typeof want.ok === "boolean" && got.ok !== want.ok) {
+        fail(`${label}: expected lineage.ok=${want.ok}, got ${got.ok}`);
+      }
+      if (typeof want.verified_depth === "number" && got.verifiedDepth !== want.verified_depth) {
+        fail(
+          `${label}: expected lineage.verified_depth=${want.verified_depth}, got ${got.verifiedDepth}`,
+        );
+      }
+      if (Array.isArray(want.entries)) {
+        const entries = got.entries ?? [];
+        if (entries.length !== want.entries.length) {
+          fail(
+            `${label}: expected ${want.entries.length} lineage entr${want.entries.length === 1 ? "y" : "ies"}, got ${entries.length}`,
+          );
+        } else {
+          want.entries.forEach((wantEntry, i) => {
+            const gotEntry = entries[i];
+            for (const [field, resultField] of [
+              ["status", "status"],
+              ["hop", "hop"],
+              ["reason", "reason"],
+              ["capsule_id", "capsule_id"],
+              ["identity_checked", "identityChecked"],
+            ]) {
+              if (wantEntry[field] !== undefined && gotEntry[resultField] !== wantEntry[field]) {
+                fail(
+                  `${label}: expected lineage.entries[${i}].${field}=` +
+                    `${JSON.stringify(wantEntry[field])}, got ${JSON.stringify(gotEntry[resultField])}`,
+                );
+              }
+            }
+            if (
+              wantEntry.artifact_observed_version !== undefined &&
+              gotEntry.artifact?.observed_version !== wantEntry.artifact_observed_version
+            ) {
+              fail(
+                `${label}: expected lineage.entries[${i}].artifact.observed_version=` +
+                  `${JSON.stringify(wantEntry.artifact_observed_version)}, got ` +
+                  `${JSON.stringify(gotEntry.artifact?.observed_version)}`,
+              );
+            }
+            if (
+              wantEntry.artifact_error_count_min !== undefined &&
+              !(gotEntry.artifact?.error_count >= wantEntry.artifact_error_count_min)
+            ) {
+              fail(
+                `${label}: expected lineage.entries[${i}].artifact.error_count >= ` +
+                  `${wantEntry.artifact_error_count_min}, got ` +
+                  `${JSON.stringify(gotEntry.artifact?.error_count)}`,
+              );
+            }
+          });
+        }
+      }
     }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];
@@ -222,14 +585,96 @@ async function checkCollection(path, doc) {
         fail(`${label}: expected '${area}' to fail, but it did not`);
       }
     }
-    if (v.expected.error_includes) {
-      const haystack = [
-        ...result.errors,
-        ...result.contentIndex.errors,
-        ...(result.chain.errors ?? []).map((e) => (typeof e === "string" ? e : e.message ?? "")),
-      ].join(" ");
-      if (!haystack.includes(v.expected.error_includes)) {
-        fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
+    const haystack = [
+      ...result.errors,
+      ...result.contentIndex.errors,
+      ...(result.chain.errors ?? []).map((e) => (typeof e === "string" ? e : e.message ?? "")),
+      // Lineage entry errors are report-only (they never join
+      // result.errors), but their diagnoses are pinned wording.
+      ...(result.lineage?.entries ?? []).flatMap((e) => e.errors ?? []),
+    ].join(" ");
+    if (v.expected.error_includes && !haystack.includes(v.expected.error_includes)) {
+      fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
+    }
+    // Verify-stage reason categories (semantic-binding/vectors.json): the
+    // category is normative; VERIFY_REASON maps it to this lane's message.
+    if (v.expected.reason && v.expected.stage !== "open") {
+      const pattern = VERIFY_REASON[v.expected.reason];
+      if (!pattern) {
+        fail(`${label}: unknown verify-stage reason '${v.expected.reason}'`);
+      } else if (!pattern.test(haystack)) {
+        fail(`${label}: expected an error for reason '${v.expected.reason}'; got: ${haystack}`);
+      }
+    }
+    // L3 pin: the fixture must decrypt with the named keys_file keypair,
+    // resolving the metadata through manifest.encryption.metadata_path,
+    // and the decrypted inner capsule must verify against the outer.
+    if (v.expected.decryptable_with) {
+      const pair = keys?.[v.expected.decryptable_with];
+      if (!pair?.publicKey || !pair?.privateKey) {
+        fail(`${label}: keys_file has no keypair '${v.expected.decryptable_with}'`);
+      } else {
+        try {
+          const inner = await reader.decrypt({
+            recipientPublicKey: pair.publicKey,
+            recipientPrivateKey: pair.privateKey,
+          });
+          // Deliberately the DOCUMENTED recipe, option for option: the
+          // L3 inner/outer lineage equality (spec/lineage.md "Encrypted
+          // successors") is a fail-closed MUST, so the vectors must pin
+          // it on the default invocation. The reader decrypt() returned
+          // carries the outer manifest; opting in here instead would
+          // let the check regress everywhere except this harness.
+          const innerResult = await verifyCapsule(inner, {
+            allowlist: vectorAllowlist,
+            outerEnvelope: reader.envelope(),
+          });
+          // `inner_ok: false` pins an L3 fail-closed outcome (e.g. the
+          // inner/outer lineage mismatch); default expectation is that
+          // the inner verifies.
+          const wantInnerOk = v.expected.inner_ok !== false;
+          if (wantInnerOk && !innerResult.ok) {
+            fail(`${label}: inner capsule does not verify: ${innerResult.errors.join("; ")}`);
+          }
+          if (!wantInnerOk && innerResult.ok) {
+            fail(`${label}: expected inner verification to fail at L3, but it verified`);
+          }
+          if (
+            v.expected.inner_error_includes &&
+            !innerResult.errors.join(" ").includes(v.expected.inner_error_includes)
+          ) {
+            fail(
+              `${label}: expected an inner error containing ` +
+                `'${v.expected.inner_error_includes}', got ${innerResult.errors.join("; ")}`,
+            );
+          }
+          // spec/results.md: encrypted_outer_only is per-result — the
+          // L3 result of the decrypted inner (a plain-capsule
+          // verification) never carries it.
+          if ((innerResult.qualifiers ?? []).includes("encrypted_outer_only")) {
+            fail(`${label}: inner L3 result must not carry the encrypted_outer_only qualifier`);
+          }
+        } catch (err) {
+          fail(`${label}: decrypt with '${v.expected.decryptable_with}' failed: ${err.message}`);
+        }
+      }
+    }
+    // Honest-reporting pins: some rules require the verifier to REPORT a
+    // weaker claim machine-readably (e.g. a zero-event chain that was not
+    // walked), not just to pass/fail. Those vectors pin a notes substring.
+    if (v.expected.notes_includes) {
+      // A string pins one substring; an array pins several (e.g. the
+      // lineage phrases "declared, not verified" AND "not countersigned").
+      const needles = Array.isArray(v.expected.notes_includes)
+        ? v.expected.notes_includes
+        : [v.expected.notes_includes];
+      const notesText = (result.notes ?? []).join(" ");
+      for (const needle of needles) {
+        if (!notesText.includes(needle)) {
+          fail(
+            `${label}: expected a note containing '${needle}', got ${JSON.stringify(result.notes ?? [])}`,
+          );
+        }
       }
     }
   }
@@ -256,11 +701,76 @@ function checkNumberVectors(path, doc) {
       fail(`${path}: vectors[${i}]: bit pattern is not a finite double`);
       return;
     }
+    if (entry.accepted === false) {
+      // Outside the I-JSON acceptance boundary: `expected` documents the
+      // Number::toString layout, but canonicalization must refuse the value.
+      let threw = false;
+      try {
+        jcs(value);
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        fail(`${path}: vectors[${i}] (bits ${ieee_hex}): accepted:false but jcs() accepted it`);
+      }
+      return;
+    }
     const got = Buffer.from(jcs(value)).toString("utf8");
     if (got !== expected) {
       fail(`${path}: vectors[${i}] (bits ${ieee_hex}): JS SDK serializes ${got}, vector says ${expected}`);
     }
   });
+}
+
+// Array-index-like keys ("0", "1", ...) are reordered by JS engines when a
+// canonical object is reparsed, which would make expected_key_order
+// unverifiable here. Vectors must not use them.
+const ARRAY_INDEX_KEY = /^(0|[1-9][0-9]*)$/;
+
+// JCS object-member ordering (meta.kind === "jcs-key-order"): RFC 8785
+// 3.2.3 sorts members on their UTF-16 code-unit sequences. This lane gets
+// that for free (`a < b` on a JS string IS UTF-16 order), so the set is
+// both the oracle's regression pin and the negative witness for lanes that
+// sort by code point or with a collation-aware comparator.
+function checkKeyOrderVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const entry of doc.vectors) {
+    checked++;
+    const label = `${path} [${entry?.name}]`;
+    const keys = entry?.keys;
+    if (!Array.isArray(keys) || keys.length === 0 || keys.some((k) => typeof k !== "string")) {
+      fail(`${label}: keys must be a non-empty array of strings`);
+      continue;
+    }
+    if (new Set(keys).size !== keys.length) {
+      fail(`${label}: keys must be distinct`);
+      continue;
+    }
+    if (keys.some((k) => ARRAY_INDEX_KEY.test(k))) {
+      fail(`${label}: array-index-like keys are not allowed in ordering vectors`);
+      continue;
+    }
+    const obj = {};
+    keys.forEach((k, i) => {
+      obj[k] = i;
+    });
+    const canonical = jcs(obj);
+    const gotHex = bytesToHex(canonical);
+    if (gotHex !== entry.canonical_utf8_hex) {
+      fail(`${label}: JS SDK canonicalizes to ${gotHex}, vector says ${entry.canonical_utf8_hex}`);
+      continue;
+    }
+    if (bytesToHex(sha256(canonical)) !== entry.sha256_hex) {
+      fail(`${label}: sha256_hex does not match SHA-256 of canonical_utf8_hex`);
+    }
+    const order = Object.keys(JSON.parse(Buffer.from(canonical).toString("utf8")));
+    if (JSON.stringify(order) !== JSON.stringify(entry.expected_key_order)) {
+      fail(`${label}: expected_key_order ${JSON.stringify(entry.expected_key_order)} != ${JSON.stringify(order)}`);
+    }
+  }
 }
 
 // Byte-level signing-input vector (meta.kind === "signing-input"): every
@@ -392,6 +902,176 @@ function isSigningInputVector(doc) {
   return doc && typeof doc === "object" && doc.meta?.kind === "signing-input";
 }
 
+function isIJsonAcceptanceSet(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "ijson-acceptance";
+}
+
+// I-JSON acceptance vectors (spec/canonicalization.md). `input_json` is raw
+// JSON text: each lane feeds it to its own parser, then canonicalizes. A
+// `reject` vector is satisfied by refusal at EITHER stage — some lanes' JSON
+// parsers refuse lone-surrogate escapes outright, others accept them and the
+// canonicalizer refuses. What is normative is that the value never reaches a
+// hash.
+const IJSON_REASONS = new Set(["integer_out_of_range", "unpaired_surrogate", "duplicate_member"]);
+
+function checkIJsonAcceptance(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (typeof v.input_json !== "string") {
+      fail(`${label}: input_json must be a string of raw JSON text`);
+      continue;
+    }
+    let parsed;
+    let parseFailed = false;
+    try {
+      // The SDK's strict document parse: JSON.parse plus the raw-text
+      // duplicate-member gate. Rejection here IS the parse-time refusal
+      // the vector contract allows.
+      parsed = parseJsonStrict(v.input_json);
+    } catch {
+      parseFailed = true;
+    }
+    if (v.expect === "accept") {
+      if (parseFailed) {
+        fail(`${label}: expected accept, but the JSON text does not parse`);
+        continue;
+      }
+      let got;
+      try {
+        got = Buffer.from(jcs(parsed)).toString("utf8");
+      } catch (err) {
+        fail(`${label}: expected accept, but canonicalization threw: ${err.message}`);
+        continue;
+      }
+      if (got !== v.canonical) {
+        fail(`${label}: canonical mismatch: got ${got}, vector says ${v.canonical}`);
+      }
+      continue;
+    }
+    if (v.expect !== "reject") {
+      fail(`${label}: expect must be "accept" or "reject"`);
+      continue;
+    }
+    if (!IJSON_REASONS.has(v.reason)) {
+      fail(`${label}: unknown reject reason '${v.reason}'`);
+      continue;
+    }
+    if (parseFailed) continue; // parse-stage refusal is conforming
+    let threw = false;
+    try {
+      jcs(parsed);
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      fail(`${label}: expected canonicalization to reject (${v.reason}), but it succeeded`);
+    }
+  }
+}
+
+function isKeyValidationVector(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "ed25519-verify";
+}
+
+function isAttestationVectorSet(doc) {
+  return doc && typeof doc === "object" && doc.meta?.kind === "identity-attestation";
+}
+
+// Attestation-layer outcome registry (spec/federation.md "Failure
+// reporting"). Each vector carries a complete attestation document plus the
+// verification context it must be checked against; `expected.status` pins the
+// machine-readable outcome, which is what separates "unknown" from "negative".
+function checkAttestationVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (!v.attestation || !v.expected) {
+      fail(`${label}: vector requires attestation and expected`);
+      continue;
+    }
+    const ctx = { ...(doc.context ?? {}), ...(v.context ?? {}) };
+    const trustRoots = v.trust_roots ?? doc.trust_roots;
+    let result;
+    try {
+      result = verifyIdentityAttestation(v.attestation, {
+        trustRoots,
+        now: new Date(ctx.now),
+        capsuleId: ctx.capsule_id,
+        signerPublicKeyHex: ctx.signer_public_key,
+        expectedIssuer: ctx.expected_issuer,
+        audience: ctx.audience,
+      });
+    } catch (err) {
+      fail(`${label}: verification threw: ${err.message}`);
+      continue;
+    }
+    if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
+      fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // spec/versioning.md: the observed format version is a reported fact.
+    if (v.expected.observed_version &&
+        result.formatVersion?.observed !== v.expected.observed_version) {
+      fail(
+        `${label}: expected formatVersion.observed='${v.expected.observed_version}', ` +
+          `got ${JSON.stringify(result.formatVersion?.observed)}`,
+      );
+    }
+    if (v.expected.status && result.status !== v.expected.status) {
+      fail(`${label}: expected status '${v.expected.status}', got '${result.status}'`);
+    }
+    if (v.expected.error_includes && !result.errors.join(" ").includes(v.expected.error_includes)) {
+      fail(`${label}: expected an error containing '${v.expected.error_includes}', got ${result.errors.join("; ")}`);
+    }
+  }
+}
+
+// Ed25519 key/signature validation registry (meta.kind === "ed25519-verify"):
+// each entry pins a (public_key, message, signature) triple and the verdict a
+// conforming verifier must report. The negative entries are witnesses — an
+// unguarded verifier accepts them — so this set fails closed on any lane that
+// skips small-order / non-canonical key rejection.
+function checkKeyValidationVectors(path, doc) {
+  if (!Array.isArray(doc.vectors) || doc.vectors.length === 0) {
+    fail(`${path}: vectors must be a non-empty array`);
+    return;
+  }
+  for (const v of doc.vectors) {
+    checked++;
+    const label = `${path} [${v.name}]`;
+    if (
+      typeof v.public_key_hex !== "string" ||
+      typeof v.message_hex !== "string" ||
+      typeof v.signature_hex !== "string" ||
+      typeof v.expected?.valid !== "boolean"
+    ) {
+      fail(`${label}: vector requires public_key_hex, message_hex, signature_hex, expected.valid`);
+      continue;
+    }
+    let got;
+    try {
+      got = ed25519Verify(
+        hexToBytes(v.public_key_hex),
+        hexToBytes(v.message_hex),
+        hexToBytes(v.signature_hex),
+      );
+    } catch {
+      got = false;
+    }
+    if (got !== v.expected.valid) {
+      fail(`${label}: expected valid=${v.expected.valid}, got valid=${got} (${v.reason})`);
+    }
+  }
+}
+
 async function checkFile(path) {
   if (isFixtureKeyFile(path)) return;
   let doc;
@@ -401,14 +1081,27 @@ async function checkFile(path) {
     fail(`${path}: cannot parse JSON: ${err.message}`);
     return;
   }
+  // The lane × collection coverage manifest is metadata, not a vector set;
+  // tools/check-vector-registry.mjs (its own conformance target) validates
+  // it. Recognized here only so the walker's fail-closed rule below does
+  // not misreport it as an unknown vector document.
+  if (doc?.meta?.kind === "vector-registry") return;
   if (isNumberVectorSet(path, doc)) checkNumberVectors(path, doc);
+  // Must sit before isCollection, which would otherwise swallow the file
+  // (it also carries a `vectors` array).
+  else if (doc?.meta?.kind === "jcs-key-order") checkKeyOrderVectors(path, doc);
+  else if (isIJsonAcceptanceSet(doc)) checkIJsonAcceptance(path, doc);
   else if (isSigningInputVector(doc)) await checkSigningInput(path, doc);
+  else if (isKeyValidationVector(doc)) checkKeyValidationVectors(path, doc);
+  else if (isAttestationVectorSet(doc)) checkAttestationVectors(path, doc);
   else if (isCollection(doc)) await checkCollection(path, doc);
   else if (isEmbeddedVector(doc)) await checkEmbeddedVector(path, doc);
   else {
     fail(
       `${path}: unrecognized vector document (expected capsule_bytes_b64 + expected, ` +
-        `an outcome-vector collection, a signing-input doc, or a jcs number set)`
+        `an outcome-vector collection, a signing-input doc, an ed25519-verify doc, ` +
+        `an identity-attestation set, an ijson-acceptance set, a jcs number set, ` +
+        `or a jcs key-order set)`
     );
   }
 }

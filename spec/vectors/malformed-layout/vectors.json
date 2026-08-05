@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "malformed-layout",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected outcomes for malformed-container fixtures. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the container before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
@@ -14,6 +14,8 @@
     "unsafe_path": "an entry name is absolute, contains a parent-traversal segment, or a NUL byte (checked on the RAW stored name, before any library-level sanitization)",
     "unsupported_compression": "an entry uses a compression method other than STORED",
     "symlink_entry": "an entry's Unix mode bits mark it as a symlink",
+    "directory_marker_shape": "an entry sets the DOS directory attribute (0x10) on a name that does not end in '/', or a '/'-terminated name declares a nonzero size; either shape makes readers disagree about whether the entry is a file",
+    "local_central_name_mismatch": "an entry's LOCAL file-header name differs from its central-directory name, so readers that key entries by the local header extract a different entry set",
     "entry_count_limit": "RESERVED: archive exceeds the 10,000-entry cap (no checked-in fixture yet; a >10k-entry archive is ~1 MiB of registry weight, deferred until the limits profile is normative)",
     "total_size_limit": "RESERVED: archive exceeds the 1 GiB total-uncompressed cap (cannot be checked in; covered by per-lane unit tests)"
   },
@@ -70,6 +72,21 @@
       "name": "symlink-entry",
       "capsule_file": "output/symlink-entry.capsule",
       "expected": { "ok": false, "stage": "open", "reason": "symlink_entry", "detail": "link" }
+    },
+    {
+      "name": "dir-bit-smuggle",
+      "capsule_file": "output/dir-bit-smuggle.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "directory_marker_shape", "detail": "smuggled.md" }
+    },
+    {
+      "name": "dir-marker-with-content",
+      "capsule_file": "output/dir-marker-with-content.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "directory_marker_shape", "detail": "notes/" }
+    },
+    {
+      "name": "local-name-mismatch",
+      "capsule_file": "output/local-name-mismatch.capsule",
+      "expected": { "ok": false, "stage": "open", "reason": "local_central_name_mismatch", "detail": "notes.md" }
     }
   ]
 }

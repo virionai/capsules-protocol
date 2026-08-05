@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "name": "profile-declaration",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the profile declaration policy (spec/profiles.md). ABSENCE of a declaration in a 0.6/0.7 capsule means the default profile v0.6-suite/1.0, permanently; explicit declaration of the default is legal and exactly equivalent to absence — in both documents or, via normalization, in one. Manifest-side `params` are profile-defined freight, sealed by manifest_hash and uninterpreted by non-implementing readers: they never change the outcome, and the envelope copy never carries them. A declared (id, version) pair outside the verifier's table is refused at OPEN with unsupported_profile: a limitation of the verifier, never a defect of the capsule (expected.profile.status='unsupported', formatVersion.suite nulled — the suite fact would be false for a capsule governed by rules this verifier did not apply). Normalized manifest/envelope declarations that disagree are refused with profile_mismatch BEFORE any table lookup (a capsule defect: verdict 'invalid', never a verdict_reason). A present declaration violating the closed object shape or the identifier grammar is a MALFORMED document (invalid_manifest_shape), never 'unsupported'. The version gate runs FIRST: an unknown-version capsule carries the version diagnosis as its only error, with the profile declaration reported status 'unevaluated'. Every negative fixture is internally coherent under default rules except for the declaration under test — the declaration sits inside manifest_hash and the signed envelope payload — so a lane that skips the gate verifies it ok=true and fails this registry: each negative vector doubles as the anti-silent-downgrade pin.",
+    "generator": "sdk-js/tools/generate-profile-declaration-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "absent-profile-is-default",
+      "capsule_file": "output/absent-profile-is-default.capsule",
+      "expected": {
+        "ok": true,
+        "observed_version": "0.7",
+        "suite": "v0.6",
+        "verdict": "valid",
+        "verdict_reason": null,
+        "profile": {
+          "observed": null,
+          "declared": false,
+          "effective": "v0.6-suite",
+          "effective_version": "1.0",
+          "supported": true,
+          "status": "default"
+        }
+      },
+      "note": "Positive control: no declaration anywhere. The absence rule as a pinned, REPORTED fact — the result says what absence meant (effective v0.6-suite/1.0) rather than leaving it folklore."
+    },
+    {
+      "name": "explicit-default-equivalent",
+      "capsule_file": "output/explicit-default-equivalent.capsule",
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "profile": {
+          "observed": "v0.6-suite",
+          "observed_version": "1.0",
+          "declared": true,
+          "effective": "v0.6-suite",
+          "status": "default"
+        }
+      },
+      "note": "The default declared in BOTH documents: legal and exactly equivalent to absence — a redundant claim made honestly; rejecting a true, coherent, redundant statement would be rigidity without a lie. Also the proof that every lane's typed open path tolerates a declaration-bearing manifest.format."
+    },
+    {
+      "name": "explicit-default-one-document",
+      "capsule_file": "output/explicit-default-one-document.capsule",
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "profile": { "declared": true, "status": "default" }
+      },
+      "note": "Manifest declares the default, envelope silent. Pins the NORMALIZATION rule: absence means the default, so both readings agree and the capsule verifies — a truthful statement in one document is not a mismatch."
+    },
+    {
+      "name": "default-profile-with-params",
+      "capsule_file": "output/default-profile-with-params.capsule",
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "verdict_reason": null,
+        "profile": {
+          "observed": "v0.6-suite",
+          "observed_version": "1.0",
+          "declared": true,
+          "effective": "v0.6-suite",
+          "effective_version": "1.0",
+          "supported": true,
+          "status": "default"
+        }
+      },
+      "note": "The malleability escape hatch, pinned positive: manifest.format.profile carries params — an issuer URL plus deeply nested vendor freight under an x- key — while envelope.profile stays the bare { id, version } pair. Params are profile-DEFINED and uninterpreted by non-implementing readers, so a verifier that does not implement the profile still verifies the capsule: the equality rule compares (id, version) only, and params ride sealed inside manifest_hash rather than being parsed. Without this vector a lane could regress to rejecting or deep-comparing params and the registry would stay green."
+    },
+    {
+      "name": "unsupported-vendor-profile",
+      "capsule_file": "output/unsupported-vendor-profile.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_profile",
+        "observed_profile": "x-test-kms-1",
+        "observed_profile_version": "1.0",
+        "suite": null,
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_profile",
+        "qualifiers": [],
+        "profile": { "status": "unsupported" }
+      },
+      "note": "The load-bearing vector. Both documents declare x-test-kms-1/1.0 over default-suite-valid signatures (the declaration is inside manifest_hash and the signed payload), so a lane that ignores the gate verifies it ok=true and fails the suite. The refusal is a LIMITATION OF THE VERIFIER, not a defect: verdict 'unsupported' + verdict_reason 'unsupported_profile', with the declaration reported so an auditor can route the capsule to an implementation of that profile. formatVersion.suite is null — reporting v0.6 about rules that were refused would be a false fact."
+    },
+    {
+      "name": "unsupported-default-profile-version",
+      "capsule_file": "output/unsupported-default-profile-version.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_profile",
+        "observed_profile": "v0.6-suite",
+        "observed_profile_version": "9.9",
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_profile",
+        "profile": { "status": "unsupported" }
+      },
+      "note": "v0.6-suite version 9.9 in both documents. Pins EXACT-match on the (id, version) pair using only the default row every lane has: a known id with an unknown version is not understood, period — partial recognition ('I know the id, I'll guess') is the wrong-rules hazard this gate exists to kill."
+    },
+    {
+      "name": "unsupported-profile-0.6-era",
+      "capsule_file": "output/unsupported-profile-0.6-era.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_profile",
+        "observed_version": "0.6",
+        "observed_profile": "x-test-kms-1",
+        "suite": null,
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_profile",
+        "profile": { "status": "unsupported" }
+      },
+      "note": "A 0.6-declared capsule carrying the same vendor declaration, coherent under the 0.6 domain strings. Pins that the profile gate is ERA-KEYED (rule-selector members have cross-era force — spec/versioning.md 'In-era tightening and cross-era force'), not a hardcoded 0.7 check."
+    },
+    {
+      "name": "profile-mismatch-value",
+      "capsule_file": "output/profile-mismatch-value.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "profile_mismatch",
+        "observed_profile": "x-test-kms-1",
+        "suite": null,
+        "verdict": "invalid",
+        "verdict_reason": null,
+        "profile": { "status": "mismatched" }
+      },
+      "note": "Manifest declares x-test-kms-1, envelope declares v0.6-suite. Two disagreeing self-descriptions are a self-contradiction — the capsule is ambiguous about which rules bind it — refused BEFORE any table lookup with both normalized pairs in the diagnosis. Never 'unsupported' (that would hand the auditor a false remediation), and never a verdict_reason: mismatch is a capsule DEFECT, so the verdict is 'invalid' (spec/results.md)."
+    },
+    {
+      "name": "profile-mismatch-presence",
+      "capsule_file": "output/profile-mismatch-presence.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "profile_mismatch",
+        "observed_profile": "x-test-kms-1",
+        "verdict": "invalid",
+        "profile": { "status": "mismatched" }
+      },
+      "note": "Manifest declares x-test-kms-1, envelope silent. The silent envelope normalizes to the default, the pairs differ, and the capsule is exactly as ambiguous as the value mismatch — same diagnosis."
+    },
+    {
+      "name": "profile-invalid-null",
+      "capsule_file": "output/profile-invalid-null.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "verdict": "invalid",
+        "profile": { "status": "invalid" }
+      },
+      "note": "manifest.format.profile is JSON null. null is NOT a declaration — the honest way to not declare is to omit, and a second spelling of absence is a known typed-decoder divergence across lanes. Malformed document (a capsule defect), never 'unsupported' (a verifier limitation): three different facts, three different remediations, kept distinguishable."
+    },
+    {
+      "name": "profile-invalid-not-object",
+      "capsule_file": "output/profile-invalid-not-object.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "verdict": "invalid",
+        "profile": { "status": "invalid" }
+      },
+      "note": "manifest.format.profile is the bare string \"v0.6-suite\". The declaration is a closed OBJECT { id, version, params? }; any other type is malformed."
+    },
+    {
+      "name": "profile-invalid-id-grammar",
+      "capsule_file": "output/profile-invalid-id-grammar.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "verdict": "invalid",
+        "profile": { "status": "invalid" }
+      },
+      "note": "id 'Acme KMS!' violates the identifier grammar (lowercase letter first, then lowercase letters, digits, '-' or '.', 1-64 bytes). A rule selector no reader can parse is a meaningless self-assertion — malformed, never 'unsupported'."
+    },
+    {
+      "name": "profile-unknown-member-in-object",
+      "capsule_file": "output/profile-unknown-member-in-object.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "verdict": "invalid",
+        "profile": { "status": "invalid" }
+      },
+      "note": "An extra member — the RESERVED name 'critical' — inside the profile object. The object is CLOSED: an uninterpretable member in the rule SELECTOR is the capsule asserting something meaningless about what governs it (vendor freight rides in params or x- members, so nothing is blocked). The closed object is also what keeps 'critical' available to a future era."
+    },
+    {
+      "name": "profile-params-in-envelope",
+      "capsule_file": "output/profile-params-in-envelope.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "verdict": "invalid",
+        "profile": { "status": "invalid" }
+      },
+      "note": "envelope.profile carries params. Params are SINGLE-SOURCED in manifest.format.profile so no second copy can diverge and the equality rule needs no deep-equality machinery in five lanes — the envelope copy is exactly { id, version }."
+    },
+    {
+      "name": "unknown-version-profile-unevaluated",
+      "capsule_file": "output/unknown-version-profile-unevaluated.capsule",
+      "expected": {
+        "stage": "open",
+        "reason": "unsupported_version_newer",
+        "observed_version": "9.9",
+        "observed_profile": "x-test-kms-1",
+        "observed_profile_version": "1.0",
+        "verdict": "unsupported",
+        "verdict_reason": "unsupported_version_newer",
+        "qualifiers": [],
+        "profile": { "status": "unevaluated" }
+      },
+      "note": "Format version 9.9 AND a declared vendor profile. Pins GATE ORDERING: the version gate refuses first and its diagnosis is the only error carried; the profile declaration is reported (observed values) with status 'unevaluated' — profile semantics are era-scoped, so an unknown era means the declaration cannot even be classified."
+    },
+    {
+      "name": "x-member-named-like-profile-is-inert",
+      "capsule_file": "output/x-member-named-like-profile-is-inert.capsule",
+      "expected": {
+        "ok": true,
+        "verdict": "valid",
+        "profile": { "observed": null, "declared": false, "status": "default" }
+      },
+      "note": "The manifest carries x-test-profile: {id, version} — an ordinary vendor extension member whose name and shape merely RESEMBLE a declaration. Only the two reserved members (manifest.format.profile, envelope.profile) have force; the x- member is preserved, hashed, and semantically inert."
+    },
+    {
+      "name": "profile-declaration-tampered",
+      "capsule_file": "output/profile-declaration-tampered.capsule",
+      "expected": {
+        "ok": false,
+        "error_includes": "manifest_hash",
+        "verdict": "invalid",
+        "verdict_reason": null,
+        "qualifiers": []
+      },
+      "note": "explicit-default-equivalent with the manifest declaration STRIPPED post-seal (no re-derivation). Declarations are sealed bytes — inside manifest_hash and the signed payload — so stripping one is tamper, caught as a manifest-hash mismatch by any reader capable of checking. This is what makes the strip/inject downgrade attack a detectable mutation rather than a silent rules change."
+    }
+  ]
+}

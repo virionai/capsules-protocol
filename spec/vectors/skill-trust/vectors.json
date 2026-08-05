@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "name": "skill-trust",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the skill-trust derivation fixtures (spec/trust.md 'Skill trust'). The tier is DERIVED from the verify result — capsule_signed = result.ok AND content_index.ok AND envelope.ok AND trusted_signer_count > 0 (the OVERALL verdict is consulted: a capsule that fails verification never classifies anything signed); a skill is 'signed' iff capsule_signed AND skills/<id>/skill.json is listed in manifest.content_index.files — and NEVER read from the capsule: a `skill_trust` manifest member is not part of v0.6, and when present (earlier drafts, hostile authors) it is an inert unknown member. The adversary is the capsule's own AUTHOR, so the member being tamper-evident proves nothing: author-claims-signed carries skill_trust:{exfil:'signed'} inside its correctly signed manifest, and a lane that surfaces that claim as trust hands a prompt-injection payload to a host LLM as trusted instructions. Each vector's `allowlist` names keypairs in keys_file ([] = verify with no allowlist). Independent implementations SHOULD reproduce ok, the failing areas, and expected.skill_trust below.",
+    "generator": "sdk-js/tools/generate-skill-trust-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "declared-signed-not-allowlisted",
+      "capsule_file": "output/author-claims-signed.capsule",
+      "allowlist": [],
+      "expected": {
+        "ok": true,
+        "skill_trust": {
+          "capsule_signed": false,
+          "skills": {
+            "exfil": "unsigned"
+          }
+        }
+      },
+      "note": "THE defect vector (finding A01). Attacker-authored capsule, attacker's own valid key, manifest declaring skill_trust:{exfil:'signed'}, SKILL.md full of prompt-injection text — verified by a host that does NOT allowlist the key. Integrity holds (ok=true: the capsule is not lying about its bytes); the derived classification MUST be unsigned. A lane that reports 'signed' here is enforcing the attacker's own claim."
+    },
+    {
+      "name": "declared-signed-allowlisted",
+      "capsule_file": "output/author-claims-signed.capsule",
+      "allowlist": [
+        "originator"
+      ],
+      "expected": {
+        "ok": true,
+        "skill_trust": {
+          "capsule_signed": true,
+          "skills": {
+            "exfil": "signed"
+          }
+        }
+      },
+      "note": "The same bytes at a host that DOES allowlist the signer: content index ok, envelope ok, one trusted distinct key, skill.json indexed — the derivation (not the author's member, which contributes nothing) classifies the skill signed."
+    },
+    {
+      "name": "skill-md-only-trusted-seal",
+      "capsule_file": "output/skill-md-only.capsule",
+      "allowlist": [
+        "originator"
+      ],
+      "expected": {
+        "ok": true,
+        "skill_trust": {
+          "capsule_signed": true,
+          "skills": {
+            "advice": "unsigned"
+          }
+        }
+      },
+      "note": "A markdown-only skill under a fully trusted seal: capsule_signed is true, but the tier's storage rule requires skills/<id>/skill.json in the content index, so the skill stays unsigned."
+    },
+    {
+      "name": "tampered-skill-md",
+      "capsule_file": "output/tampered-skill-md.capsule",
+      "allowlist": [
+        "originator"
+      ],
+      "expected": {
+        "ok": false,
+        "failing": [
+          "content_index"
+        ],
+        "skill_trust": {
+          "capsule_signed": false,
+          "skills": {
+            "exfil": "unsigned"
+          }
+        }
+      },
+      "note": "SKILL.md mutated post-seal. The signer is allowlisted and the signature itself still verifies, but content_index fails — an integrity failure means NOTHING in the capsule classifies signed."
+    },
+    {
+      "name": "failing-verdict-never-classifies-signed",
+      "capsule_file": "output/commitment-phantom-signer.capsule",
+      "allowlist": [
+        "originator"
+      ],
+      "expected": {
+        "ok": false,
+        "failing": [
+          "signer_set"
+        ],
+        "skill_trust": {
+          "capsule_signed": false,
+          "skills": {
+            "exfil": "unsigned"
+          }
+        }
+      },
+      "note": "The derivation must consult the OVERALL verdict. Envelope signature valid, content index valid, signer allowlisted — but manifest.signer_commitment names a key that never signed, so signer-set binding (an integrity invariant) fails and ok=false. A derivation of only content_index.ok AND envelope.ok AND trusted_signer_count>0 classifies this FAILING capsule's skills as signed — a failing capsule still telling the host its skills are trustworthy is precisely the prompt-injection path the derived tier exists to close (spec/trust.md: 'unsigned' includes integrity broken)."
+    }
+  ]
+}

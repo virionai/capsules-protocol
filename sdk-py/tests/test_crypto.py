@@ -6,7 +6,9 @@ from capsule.crypto import (
     X25519KeyPair,
     chacha20_poly1305_decrypt,
     chacha20_poly1305_encrypt,
+    ed25519_public_key_is_acceptable,
     ed25519_sign,
+    ed25519_signature_s_is_reduced,
     ed25519_verify,
     generate_ed25519,
     generate_x25519,
@@ -69,6 +71,71 @@ def test_sign_rejects_wrong_key_length():
 def test_verify_returns_false_on_garbage_inputs():
     # Don't raise; mirror the JS verify which catches and returns False.
     assert ed25519_verify(b"\x00" * 32, b"x", b"\x00" * 64) is False
+
+
+# The 8 points whose order divides 8, plus the non-canonical encodings that
+# decode into that subgroup. Each triple is a witness: an unguarded
+# OpenSSL-backed verifier accepts it with no private key involved.
+SMALL_ORDER_WITNESSES = [
+    ("0000000000000000000000000000000000000000000000000000000000000000",
+     "0000000000000000000000000000000000000000000000000000000000000000", 5),
+    ("0000000000000000000000000000000000000000000000000000000000000080",
+     "0000000000000000000000000000000000000000000000000000000000000000", 0),
+    ("0100000000000000000000000000000000000000000000000000000000000000",
+     "0100000000000000000000000000000000000000000000000000000000000000", 0),
+    ("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+     "0000000000000000000000000000000000000000000000000000000000000000", 8),
+    ("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+     "0000000000000000000000000000000000000000000000000000000000000000", 3),
+    ("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+     "0000000000000000000000000000000000000000000000000000000000000000", 3),
+    ("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+     "0000000000000000000000000000000000000000000000000000000000000000", 15),
+    ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "0100000000000000000000000000000000000000000000000000000000000000", 0),
+    ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "0100000000000000000000000000000000000000000000000000000000000000", 0),
+    ("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "0000000000000000000000000000000000000000000000000000000000000000", 1),
+    ("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "0100000000000000000000000000000000000000000000000000000000000000", 0),
+    ("0100000000000000000000000000000000000000000000000000000000000080",
+     "0100000000000000000000000000000000000000000000000000000000000000", 0),
+]
+
+
+@pytest.mark.parametrize("public_key_hex,r_hex,probe", SMALL_ORDER_WITNESSES)
+def test_verify_rejects_small_order_and_non_canonical_keys(
+    public_key_hex: str, r_hex: str, probe: int
+):
+    signature = bytes.fromhex(r_hex) + b"\x00" * 32
+    message = b"capsule-low-order-probe-%d" % probe
+    assert ed25519_verify(bytes.fromhex(public_key_hex), message, signature) is False
+    assert ed25519_public_key_is_acceptable(bytes.fromhex(public_key_hex)) is False
+
+
+def test_verify_rejects_non_reduced_signature_s():
+    # RFC 8032 section 7.1 TEST 2, then the same signature with S + L.
+    public_key = bytes.fromhex(
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+    )
+    message = bytes.fromhex("72")
+    good = bytes.fromhex(
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+        "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
+    )
+    non_reduced = bytes.fromhex(
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+        "f52db7415978abc61b2c2eb6aeebfca0387b2eaeb4302aeeb00d291612bb0c10"
+    )
+    assert ed25519_verify(public_key, message, good) is True
+    assert ed25519_signature_s_is_reduced(non_reduced) is False
+    assert ed25519_verify(public_key, message, non_reduced) is False
+
+
+def test_generated_keys_are_acceptable():
+    for _ in range(8):
+        assert ed25519_public_key_is_acceptable(generate_ed25519().public_key) is True
 
 
 def test_generate_x25519_returns_32_byte_keys():

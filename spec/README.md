@@ -1,4 +1,4 @@
-# Capsule Spec — v0.6
+# Capsule Spec — v0.7
 
 A portable unit of intelligence: a work product, the context to continue
 it, and a verifiable audit trail.
@@ -18,13 +18,17 @@ These five things are the durable core. They survive untouched.
 4. **Pith as a context-style discipline.** Cold-reading LLMs absorb
    Pith-styled narrative faster and with fewer hallucinations than
    free-form prose. The reference library is a normalizer, not
-   "deterministic compression" — that framing was misleading.
+   "deterministic compression" — that framing was misleading. It is an
+   authoring layer, opt-in at the builder: verification never depends
+   on it, and prose the author wrote is carried faithfully unless the
+   author asks for the rewrite (with the rewrite then declared
+   in-chain via `pith_normalized_fields`).
 5. **Offline-first verification.** The capsule file verifies without a
    server. External services are optional layers, never required.
 
 ## Cryptographic profile vs extension points
 
-v0.6 specifies one working cryptographic profile so independent
+v0.7 specifies one working cryptographic profile so independent
 implementations can interoperate today: JCS canonicalization, SHA-256
 hashes, Ed25519 envelope signatures, X25519 recipient wrapping, and
 ChaCha20-Poly1305 content encryption.
@@ -37,12 +41,17 @@ points that deployments can replace with their own systems, provided the
 capsule declares the profile unambiguously and readers fail closed when
 they do not understand it.
 
-In v0.6, alternate profiles are experimental and outside the conformance
-target. A future version or profile registry can standardize additional
-bindings for enterprise KMS, hardware keys, transparency logs,
-organization identity providers, or jurisdiction-specific audit systems
-without changing the core idea: portable work, context, and verifiable
-history travel together.
+Since spec revision v0.7.1 the declaration and refusal machinery is
+in the conformance target: a capsule declares its profile via
+`manifest.format.profile` / `envelope.profile`, and a reader that does
+not implement the declared profile refuses it with a diagnosis distinct
+from both tampering and malformation ([profiles.md](profiles.md)).
+Alternate profile *rule sets* themselves remain experimental and
+outside the conformance target. A future version or profile registry
+can standardize additional bindings for enterprise KMS, hardware keys,
+transparency logs, organization identity providers, or
+jurisdiction-specific audit systems without changing the core idea:
+portable work, context, and verifiable history travel together.
 
 ## What v0.6 strips
 
@@ -90,18 +99,43 @@ procedure.
 ## Document index
 
 - [format.md](format.md) — file layout
+- [canonicalization.md](canonicalization.md) — JCS input domain: the
+  I-JSON acceptance boundary every implementation enforces identically
 - [manifest.md](manifest.md) — manifest.json schema and capsule identity
 - [chain.md](chain.md) — event format and hash linkage
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
-- [trust.md](trust.md) — trust model, allowlists, skill trust tiers
-- [pith.md](pith.md) — context-style discipline for narrative fields
+- [versioning.md](versioning.md) — version compatibility: known versions
+  open forever, unknown ones fail closed with a non-tamper diagnosis,
+  domain strings keyed by declared version, the v0.6 algorithm suite,
+  and the in-era tightening bright line for fail-closed additions
+  (with the rule-selector vs claim retroactivity split)
+- [profiles.md](profiles.md) — profile declaration: the
+  `format.profile` / `envelope.profile` dyad, the default profile and
+  absence rule, fail-closed refusal of undeclared-rule-set capsules,
+  and the Profile Authoring Contract
+- [lineage.md](lineage.md) — the `predecessors` declaration: successor
+  capsules, report-only linkage verification, and the rewrap writer
+  conventions (v0.7.1)
+- [results.md](results.md) — verifier results and renderer language:
+  the normalized `verdict` / `verdict_reason` / `qualifiers` surface,
+  canonical note strings, and the renderer minimum-substring floor
+- [trust.md](trust.md) — trust model, allowlists, derived skill trust
+- [pith.md](pith.md) — authoring-layer context discipline for narrative
+  fields (opt-in normalizer; verification never depends on it)
 - [federation.md](federation.md) — key discovery, issuer metadata, and
-  temporal anchoring (informative draft, proposed for v0.7)
+  temporal anchoring (informative overlay; embedded locations remain a
+  post-0.7 item)
 
 ## Versioning
 
-This spec is `v0.6`. So is the SDK lane and the envelope schema. They
-move together until a second independent implementation lands.
+This spec is `v0.7`. So is the SDK lane and the envelope schema. They
+move together until a second independent implementation lands. The
+"What v0.6 keeps / strips / replaces" sections above describe the v0.6
+redesign baseline, which v0.7 inherits unchanged — the 0.6 → 0.7 bump
+changed the declared version, the version-keyed domain strings, and the
+removal of `manifest.skill_trust`, not the cryptographic profile; a
+v0.7 verifier still opens v0.6 capsules under the v0.6 rules
+([versioning.md](versioning.md)).
 
-`v1.0` is the schema that will be verified for ten years. v0.6 is the
+`v1.0` is the schema that will be verified for ten years. v0.7 is the
 schema that earns its way there.

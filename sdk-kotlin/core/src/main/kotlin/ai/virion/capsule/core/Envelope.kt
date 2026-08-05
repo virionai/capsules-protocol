@@ -3,7 +3,12 @@
 package ai.virion.capsule.core
 
 object Envelope {
-    const val VERSION = "0.6"
+    /**
+     * The version a NEW envelope declares — always the sealing version
+     * (computed, never a stored literal, so a version bump cannot leave
+     * the envelope declaring a stale era).
+     */
+    val VERSION: String get() = CapsuleVersions.CURRENT
     val SUPPORTED_CIPHERS = setOf("none", "ChaCha20-Poly1305")
 
     data class Signer(val role: String, val keyPair: CapsuleCrypto.Ed25519KeyPair)
@@ -40,9 +45,19 @@ object Envelope {
         return JCS.bytes(JCSValue.Obj(obj.pairs.filterNot { it.first == "signers" }))
     }
 
+    /**
+     * `domain_sep || canonical(envelope_minus_signers)` — the signing
+     * input. The domain embeds the envelope's DECLARED version — keyed
+     * selection per spec/versioning.md, so an older era's signatures
+     * stay verifiable under that era's domain forever. (Whether the
+     * declared version is one this verifier knows is gated earlier.)
+     */
     fun signingInput(envelope: JCSValue, role: String): ByteArray {
         require(role.isNotEmpty())
-        val domain = "capsule-provenance-v$VERSION:$role\u0000".toByteArray(Charsets.UTF_8)
+        val version = ((envelope as? JCSValue.Obj)?.pairs
+            ?.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
+            ?: CapsuleVersions.CURRENT
+        val domain = CapsuleVersions.provenanceDomain(version, role)
         return CapsuleCrypto.concat(domain, canonicalPayload(envelope))
     }
 
@@ -75,13 +90,39 @@ object Envelope {
     fun verifySignatures(envelope: JCSValue): VerifyResult {
         val obj = envelope as? JCSValue.Obj
             ?: return VerifyResult(false, emptyList(), "envelope is not an object")
+        // Any KNOWN version verifies under its own era's domain strings;
+        // an unknown one fails closed with the standard distinguishable
+        // diagnosis (spec/versioning.md), never a tamper-flavored one.
         val versionStr = (obj.pairs.firstOrNull { it.first == "version" }?.second as? JCSValue.Str)?.v
-        if (versionStr != VERSION) return VerifyResult(false, emptyList(), "unsupported version")
+        when (val status = CapsuleVersions.classify(versionStr)) {
+            CapsuleVersions.Status.KNOWN -> Unit
+            CapsuleVersions.Status.INVALID ->
+                return VerifyResult(false, emptyList(), "unsupported version")
+            else -> return VerifyResult(
+                false, emptyList(),
+                CapsuleVersions.unsupportedMessage("envelope.version", versionStr!!, status),
+            )
+        }
         val cipher = (obj.pairs.firstOrNull { it.first == "cipher" }?.second as? JCSValue.Str)?.v
         if (cipher !in SUPPORTED_CIPHERS) return VerifyResult(false, emptyList(), "unsupported cipher")
         val signers = (obj.pairs.firstOrNull { it.first == "signers" }?.second as? JCSValue.Arr)?.items
             ?: return VerifyResult(false, emptyList(), "no signers")
         if (signers.isEmpty()) return VerifyResult(false, emptyList(), "envelope has no signers")
+        // Duplicate (role, public_key) entries are malformed: counting rows
+        // instead of distinct members lets one key satisfy an M-of-N policy.
+        // Same key under different roles is permitted (distinct members).
+        val seen = mutableSetOf<Pair<String, String>>()
+        for (s in signers) {
+            val sObj = s as? JCSValue.Obj ?: continue
+            val role = (sObj.pairs.firstOrNull { it.first == "role" }?.second as? JCSValue.Str)?.v ?: ""
+            val pk = (sObj.pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v ?: ""
+            if (!seen.add(role to pk.lowercase())) {
+                return VerifyResult(
+                    false, emptyList(),
+                    "duplicate signer entry (role=$role, public_key=$pk)",
+                )
+            }
+        }
         var allValid = true
         val results = mutableListOf<Triple<String, String, Boolean>>()
         for (s in signers) {
@@ -90,10 +131,18 @@ object Envelope {
             val pk = (sObj.pairs.firstOrNull { it.first == "public_key" }?.second as? JCSValue.Str)?.v
             val sig = (sObj.pairs.firstOrNull { it.first == "signature" }?.second as? JCSValue.Str)?.v
             if (role == null || pk == null || sig == null) { allValid = false; continue }
-            val input = signingInput(envelope, role)
-            val valid = CapsuleCrypto.ed25519Verify(
-                CapsuleCrypto.hexToBytes(pk), input, CapsuleCrypto.hexToBytes(sig)
-            )
+            // Hex strings on the wire are attacker-controlled — a malformed
+            // (or non-canonical uppercase) key or signature is an INVALID
+            // signature, never an exception through verify(). The signing
+            // input itself can also refuse canonicalization; same idiom.
+            val valid = try {
+                val input = signingInput(envelope, role)
+                CapsuleCrypto.ed25519Verify(
+                    CapsuleCrypto.hexToBytes(pk), input, CapsuleCrypto.hexToBytes(sig)
+                )
+            } catch (_: IllegalArgumentException) {
+                false
+            }
             if (!valid) allValid = false
             results += Triple(role, pk, valid)
         }

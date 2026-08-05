@@ -50,19 +50,35 @@ public enum Bytes {
     /// of a caller-supplied `.capsule` file). For internal, SDK-controlled
     /// inputs (round-trip seal paths, builder-side hex) the non-throwing
     /// `fromHex` is fine and gives clearer crashes on programmer error.
+    ///
+    /// STRICT LOWERCASE, matching the JS reference's hexToBytes and the
+    /// Rust verifier's hex_to_bytes: uppercase hex is non-canonical on
+    /// every hashed or signed surface, and a case-insensitive decoder here
+    /// made this lane accept envelope signer keys the strict lanes reject
+    /// (addendum A11; vector malformed-shape/uppercase-signer-key-hex).
     public static func fromHexThrowing(_ hex: String, label: String = "hex") throws -> Data {
         guard hex.count % 2 == 0 else {
             throw CapsuleError.malformed("\(label): odd-length hex (\(hex.count) chars)")
         }
         var out = Data(capacity: hex.count / 2)
-        var idx = hex.startIndex
-        while idx < hex.endIndex {
-            let next = hex.index(idx, offsetBy: 2)
-            guard let byte = UInt8(hex[idx..<next], radix: 16) else {
-                throw CapsuleError.malformed("\(label): non-hex character in '\(hex[idx..<next])'")
+        var pending: UInt8? = nil
+        for scalar in hex.unicodeScalars {
+            let nibble: UInt8
+            switch scalar {
+            case "0"..."9": nibble = UInt8(scalar.value - 0x30)
+            case "a"..."f": nibble = UInt8(scalar.value - 0x61 + 10)
+            case "A"..."F":
+                throw CapsuleError.malformed(
+                    "\(label): uppercase hex is non-canonical; use lowercase")
+            default:
+                throw CapsuleError.malformed("\(label): non-hex character in '\(scalar)'")
             }
-            out.append(byte)
-            idx = next
+            if let high = pending {
+                out.append(high << 4 | nibble)
+                pending = nil
+            } else {
+                pending = nibble
+            }
         }
         return out
     }
@@ -94,7 +110,73 @@ public struct Ed25519KeyPair {
 }
 
 public enum Ed25519 {
+    /// Field prime p = 2^255 - 19, little-endian.
+    private static let fieldPrimeLE: [UInt8] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+    ]
+
+    /// Group order L = 2^252 + 27742317777372353535851937790883648493,
+    /// little-endian.
+    private static let groupOrderLE: [UInt8] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+        0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    ]
+
+    /// The 8 points whose order divides 8, as canonical y encodings with the
+    /// x-sign bit cleared: the identity (y = 1), the two order-4 points
+    /// (y = 0), the order-2 point (y = p - 1), and the four order-8 points
+    /// (two y values, two x signs each). Masking the sign bit means each
+    /// entry covers both signs.
+    private static let smallOrderY: Set<String> = [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    ]
+
+    /// Unsigned little-endian comparison, `a < b`. Both arrays are 32 bytes.
+    private static func lessThanLE(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        precondition(a.count == b.count, "lessThanLE: length mismatch")
+        var i = a.count - 1
+        while i >= 0 {
+            if a[i] != b[i] { return a[i] < b[i] }
+            i -= 1
+        }
+        return false
+    }
+
+    /// True when a 32-byte public key is canonically encoded and is not one
+    /// of the 8 small-subgroup points.
+    ///
+    /// CryptoKit imports and verifies against small-order keys, which is a
+    /// no-private-key forgery: take `edff…ff7f`, send a 64-byte all-zero
+    /// signature, and vary any signed field until the cofactored
+    /// verification equation happens to hold.
+    public static func publicKeyIsAcceptable(_ publicKey: Data) -> Bool {
+        guard publicKey.count == 32 else { return false }
+        var masked = [UInt8](publicKey)
+        masked[31] &= 0x7f
+        guard lessThanLE(masked, fieldPrimeLE) else { return false }
+        return !smallOrderY.contains(Bytes.toHex(Data(masked)))
+    }
+
+    /// True when a 64-byte signature's S component is reduced mod L, as
+    /// RFC 8032 section 5.1.7 requires.
+    public static func signatureSIsReduced(_ signature: Data) -> Bool {
+        guard signature.count == 64 else { return false }
+        let bytes = [UInt8](signature)
+        return lessThanLE(Array(bytes[32..<64]), groupOrderLE)
+    }
+
     public static func verify(publicKey: Data, message: Data, signature: Data) -> Bool {
+        guard publicKeyIsAcceptable(publicKey) else { return false }
+        guard signatureSIsReduced(signature) else { return false }
         guard let pk = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey) else {
             return false
         }

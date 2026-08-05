@@ -1,6 +1,7 @@
 import pytest
 
 from capsule.canonical import jcs, sha256_hex
+from capsule.versions import CURRENT_VERSION
 from capsule.manifest import (
     CONTENT_INDEX_EXCLUDED,
     STRUCTURAL_EXCLUDED,
@@ -90,11 +91,10 @@ def test_build_manifest_shape():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
-    assert m["format"]["version"] == "0.6"
+    assert m["format"]["version"] == CURRENT_VERSION
     assert m["format"]["container"] == "zip"
     assert m["format"]["canonicalization"] == "JCS-RFC8785"
     assert m["format"]["hash_algorithm"] == "SHA-256"
@@ -102,7 +102,7 @@ def test_build_manifest_shape():
     assert m["originator"] == {"public_key": "a" * 64, "label": "Acme"}
     assert m["first_event_hash"] == "b" * 64
     assert m["content_index"] is ci
-    assert m["skill_trust"] == {}
+    assert "skill_trust" not in m  # removed: trust derives at verify time
     assert m["encryption"] is None
     assert m["created_at"] == "2026-05-07T12:00:00Z"
 
@@ -114,7 +114,6 @@ def test_manifest_hash_recomputable():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
@@ -130,9 +129,34 @@ def test_manifest_bytes_is_jcs():
         participants=[],
         content_index=ci,
         first_event_hash="b" * 64,
-        skill_trust={},
         encryption=None,
         created_at="2026-05-07T12:00:00Z",
     )
     m["id"] = "c" * 64
     assert manifest_bytes(m) == jcs(m)
+
+
+def test_build_content_index_orders_paths_by_utf16_code_units():
+    # content_index.files is a JSON array, so its order is inside the bytes
+    # index_hash covers. It must match the JS reference lane, which sorts
+    # with `a < b` on JS strings (UTF-16 code units). Python's default str
+    # ordering is code-point order and would put the U+1F600 path last.
+    emoji, pua, nonchar = chr(0x1F600), chr(0xE000), chr(0xFFFF)
+    files = {
+        nonchar + ".txt": b"a",
+        emoji + ".txt": b"b",
+        pua + ".txt": b"c",
+        "z.txt": b"d",
+    }
+    index = build_content_index(files)
+    assert [e["path"] for e in index["files"]] == [
+        "z.txt",
+        emoji + ".txt",
+        pua + ".txt",
+        nonchar + ".txt",
+    ]
+    # Pinned from the JS reference lane over the same file map:
+    #   buildContentIndex(new Map([...])).index_hash
+    assert index["index_hash"] == (
+        "49e4bccd112720dad9125d366459e2d4893cb1ffd58d99dc75ea40cc6aa04976"
+    )

@@ -1,6 +1,6 @@
-# @capsule/sdk-v0.6-prototype
+# @capsule/sdk-v0.7-prototype
 
-Reference JavaScript SDK for Capsule v0.6 — a portable, signed,
+Reference JavaScript SDK for Capsule v0.7 — a portable, signed,
 verifiable file format for units of AI-assisted work. A `.capsule` is a
 deterministic ZIP carrying a document (`program.md`), its participants,
 and a hash-chained, Ed25519-signed audit trail that anyone can verify
@@ -16,7 +16,7 @@ Not yet published to npm. Install from a checkout of this repository:
 ```sh
 npm install /path/to/capsules-protocol/sdk-js
 # or, in package.json:
-#   "@capsule/sdk-v0.6-prototype": "file:../capsules-protocol/sdk-js"
+#   "@capsule/sdk-v0.7-prototype": "file:../capsules-protocol/sdk-js"
 ```
 
 Requirements: Node.js >= 20, ESM (`import`). Crypto is Node's built-in
@@ -42,7 +42,7 @@ import {
   CapsuleReader,
   verifyCapsule,
   generateEd25519,
-} from "@capsule/sdk-v0.6-prototype";
+} from "@capsule/sdk-v0.7-prototype";
 
 // 1. One keypair for your app (persist keys.privateKeyHex somewhere safe;
 //    in a real app you generate this once, not per capsule).
@@ -79,8 +79,9 @@ Sensible defaults keep the happy path short: `createdAt` and `seal()`'s
 `signedAt` default to now, while event timestamps inherit `createdAt`.
 Pass both values explicitly for reproducible builds. Events default to
 `kind: "observation"` / `target: "capsule"`, and a signer's role defaults to
-`"originator"`, and `verifyCapsule(bytes)` on unopenable input returns a
-fail-closed result (`ok: false`) instead of throwing.
+`"originator"`, and `verifyCapsule()` never throws: unopenable input, a
+malformed manifest, and a malformed chain all come back as a fail-closed
+result (`ok: false`) with the reason in `errors`.
 
 ## Keys: hex or bytes, your choice
 
@@ -155,7 +156,7 @@ verify the outer signatures (L2); only recipients can decrypt and fully
 verify the content (L3):
 
 ```js
-import { generateX25519 } from "@capsule/sdk-v0.6-prototype";
+import { generateX25519 } from "@capsule/sdk-v0.7-prototype";
 
 const recipient = generateX25519(); // recipient generates; shares publicKeyHex
 
@@ -174,14 +175,63 @@ const l3 = await verifyCapsule(inner, {
 });
 ```
 
+The reader `decrypt()` returns remembers the layer it came out of, so
+the L3 inner/outer lineage equality (spec/lineage.md) runs on this
+recipe with no extra option. Pass `outerManifest: outer.manifest()`
+only when you verify raw decrypted BYTES instead of that reader.
+
+## Continue someone else's capsule (lineage / rewrap)
+
+You cannot seal under another originator's identity — and you don't
+need to. A successor capsule declares the exact sealed artifact it
+continues from (`manifest.predecessors`, spec/lineage.md), carries the
+content files forward byte-identically, and starts a fresh chain under
+YOUR key:
+
+```js
+import { CapsuleBuilder, rewrapCapsule, generateEd25519 } from "@capsule/sdk-v0.7-prototype";
+
+const bob = generateEd25519();
+
+// One-call custody transfer:
+const { bytes, capsuleId, predecessorEntry } = await rewrapCapsule(aliceBytes, {
+  originator: { ...bob, label: "Bob" },
+});
+
+// Or continue the work before sealing:
+const builder = await CapsuleBuilder.continueFrom(aliceBytes, {
+  originator: { publicKey: bob.publicKeyHex, label: "Bob" },
+  participants: [{ actor_id: "human:bob", role: "custodian" }],
+});
+builder.appendEvent({ actor: "human:bob", action: "continued" });
+const sealed = await builder.seal({ signers: [bob] });
+
+// Verify the custody claim by supplying the predecessor bytes:
+const result = await verifyCapsule(sealed, { predecessors: [aliceBytes] });
+result.lineage; // { declared, ok, verifiedDepth, entries: [...] }
+```
+
+The declaration is the successor's ONE-WAY claim — the predecessor's
+originator has not countersigned it — and linkage is report-only:
+supplying the wrong file changes `result.lineage`, never `result.ok`.
+Merges: `builder.declarePredecessor(otherParentBytes)` once per parent.
+Refusals (tampered / unknown-era / encrypted / alternate-profile
+predecessors) throw `PredecessorError` with a machine-readable
+`.reason`.
+
 ## Going further
 
 - `builder.setAgents(md)` — who may do what, carried with the work
 - `builder.addPayload("payload/data.json", bytes)` — arbitrary attachments,
   bound by the content index
-- `builder.addSkill(id, { json, markdown, signed })` — portable skills
+- `builder.addSkill(id, { json, markdown })` — portable skills. Trust is
+  never author-declared: `verifyCapsule(...).skillTrust` derives it from
+  the host's allowlist at verify time (spec/trust.md)
 - `builder.previewCapsuleId()` — know the capsule id before sealing
-- `builder.appendEvent(e, { pith: false })` — skip payload normalization
+- `builder.appendEvent(e, { pith: true })` — opt in to Pith payload
+  normalization (off by default — an author who writes prose gets
+  their prose; a rewrite that changed a field is declared in the
+  event's `pith_normalized_fields`, spec/pith.md)
 - CLI: [`../cli/`](../cli/) (`capsule verify`, `capsule inspect`, ...)
 - Full surface: [`src/index.d.ts`](src/index.d.ts); protocol details:
   [`../spec/`](../spec/)

@@ -96,6 +96,31 @@ async function main() {
       ...base,
       { name: "link", data: Buffer.from("program.md", "utf8"), mode: 0o120777 },
     ],
+
+    // DOS directory attribute (0x10) on a name that is not "/"-terminated.
+    // Readers that decide directory-ness from the attribute bit (JSZip)
+    // drop the entry; readers that decide from the name (unzip(1), python
+    // zipfile) extract a 17-byte smuggled.md. Must reject.
+    "dir-bit-smuggle.capsule": [
+      ...base,
+      { name: "smuggled.md", data: Buffer.from("# hidden payload\n", "utf8"), dosAttrs: 0x10 },
+    ],
+
+    // A "/"-terminated name carrying content: the mirror image of the same
+    // differential. Must reject.
+    "dir-marker-with-content.capsule": [
+      ...base,
+      { name: "notes/", data: Buffer.from("# hidden payload\n", "utf8"), dosAttrs: 0x10 },
+    ],
+
+    // Central-directory name and LOCAL file-header name disagree. Readers
+    // that key on the local header (JSZip) silently replace program.md with
+    // the attacker's body; readers that key on the central directory see an
+    // extra notes.md. Must reject.
+    "local-name-mismatch.capsule": [
+      ...base,
+      { name: "notes.md", localName: "program.md", data: Buffer.from("# EVIL program\n", "utf8") },
+    ],
   };
 
   for (const [name, entries] of Object.entries(fixtures)) {

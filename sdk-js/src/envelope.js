@@ -14,8 +14,13 @@ import {
   jcs,
 } from "./canonical.js";
 import { ed25519Sign, ed25519Verify } from "./crypto.js";
+import {
+  CURRENT_VERSION,
+  classifyVersion,
+  provenanceDomain,
+  unsupportedVersionMessage,
+} from "./versions.js";
 
-const ENVELOPE_VERSION = "0.6";
 const SUPPORTED_CIPHERS = new Set(["none", "ChaCha20-Poly1305"]);
 
 export function buildEnvelope({
@@ -38,7 +43,7 @@ export function buildEnvelope({
     throw new Error("encrypted capsule requires encrypted_blob_hash (64-hex)");
   }
   return {
-    version: ENVELOPE_VERSION,
+    version: CURRENT_VERSION,
     capsule_id: capsuleId,
     first_event_hash: firstEventHash,
     entry_hash: entryHash,
@@ -57,14 +62,23 @@ export function envelopeCanonicalPayload(envelope) {
   return jcs(rest);
 }
 
-/** domain_sep_bytes || canonical_envelope_bytes — the raw signing input. */
+/**
+ * domain_sep_bytes || canonical_envelope_bytes — the raw signing input.
+ *
+ * The domain embeds the envelope's DECLARED version
+ * (`capsule-provenance-v<version>:<role>\0`), so signature verification
+ * of an older-era capsule reconstructs that era's domain — keyed
+ * selection per spec/versioning.md, never a single current constant.
+ * (Whether the declared version is one this verifier knows is gated
+ * earlier, by the reader and verifyEnvelopeSignatures.)
+ */
 export function envelopeSigningInput(envelope, role) {
   if (typeof role !== "string" || role.length === 0) {
     throw new Error("role must be a non-empty string");
   }
-  const domain = Buffer.from(`capsule-provenance-v${ENVELOPE_VERSION}:${role}\x00`, "utf8");
+  const version = typeof envelope?.version === "string" ? envelope.version : CURRENT_VERSION;
   const canonical = envelopeCanonicalPayload(envelope);
-  return concatBytes(domain, canonical);
+  return concatBytes(provenanceDomain(version, role), canonical);
 }
 
 /**
@@ -97,14 +111,41 @@ export function signEnvelope(envelope, signers) {
 export function verifyEnvelopeSignatures(envelope) {
   const out = [];
   let allValid = true;
-  if (envelope.version !== ENVELOPE_VERSION) {
+  // Any KNOWN version verifies under its own era's domain strings; an
+  // unknown one fails closed with the standard distinguishable diagnosis
+  // (spec/versioning.md) rather than a tamper-flavored failure.
+  const versionClass = classifyVersion(envelope.version);
+  if (versionClass.status === "invalid") {
     return { ok: false, signers: [], note: `unsupported envelope version: ${envelope.version}` };
+  }
+  if (versionClass.status !== "known") {
+    return {
+      ok: false,
+      signers: [],
+      note: unsupportedVersionMessage("envelope.version", envelope.version, versionClass.status),
+    };
   }
   if (!SUPPORTED_CIPHERS.has(envelope.cipher)) {
     return { ok: false, signers: [], note: `unsupported cipher: ${envelope.cipher}` };
   }
   if (!Array.isArray(envelope.signers) || envelope.signers.length === 0) {
     return { ok: false, signers: [], note: "envelope has no signers" };
+  }
+  // Duplicate (role, public_key) entries are malformed: counting rows
+  // instead of distinct members lets one key satisfy an M-of-N policy.
+  // Same key under different roles is permitted (distinct members).
+  const seen = new Set();
+  for (const s of envelope.signers) {
+    const keyLower = typeof s?.public_key === "string" ? s.public_key.toLowerCase() : "";
+    const member = `${s?.role}\u0000${keyLower}`;
+    if (seen.has(member)) {
+      return {
+        ok: false,
+        signers: [],
+        note: `duplicate signer entry (role=${s.role}, public_key=${s.public_key})`,
+      };
+    }
+    seen.add(member);
   }
   for (const s of envelope.signers) {
     let valid = false;

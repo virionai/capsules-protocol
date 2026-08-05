@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Capsule v0.6 conformance harness — JavaScript lane.
+// Capsule v0.7 conformance harness — JavaScript lane.
 //
 // Runs the repo-local JavaScript targets (JS SDK, CLI, examples, and
 // repo hygiene checks) serially, captures structured results, and
@@ -54,7 +54,7 @@ const TARGETS = [
   },
   {
     id: "sdk-js",
-    name: "@capsule/sdk-v0.6-prototype",
+    name: "@capsule/sdk-v0.7-prototype",
     language: "javascript",
     kind: "sdk",
     cwd: "sdk-js",
@@ -91,6 +91,148 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    id: "malformed-shape-fixtures-regen",
+    name: "malformed-shape fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-malformed-shape-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "ed25519-key-validation-regen",
+    name: "ed25519-key-validation vector regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-ed25519-key-validation-vector.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "signer-set-fixtures-regen",
+    name: "signer-set fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-signer-set-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "chain-binding-fixtures-regen",
+    name: "chain-binding fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-chain-binding-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "attestation-vectors-regen",
+    name: "identity-attestation vector regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-attestation-vectors.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "chain-rule-fixtures-regen",
+    name: "chain-rules fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-chain-rule-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "skill-trust-fixtures-regen",
+    name: "skill-trust fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-skill-trust-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "semantic-binding-fixtures-regen",
+    name: "semantic-binding fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-semantic-binding-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "version-compat-fixtures-regen",
+    name: "version-compat fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-version-compat-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "unicode-boundary-fixture-regen",
+    name: "unicode-boundary fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-unicode-boundary-fixture.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "profile-declaration-fixtures-regen",
+    name: "profile-declaration fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-profile-declaration-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "result-vocabulary-fixtures-regen",
+    name: "result-vocabulary fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-result-vocabulary-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    id: "pith-authoring-fixtures-regen",
+    name: "pith-authoring fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-pith-authoring-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    // Also asserts the frozen v0.6 predecessor copy stays byte-identical
+    // to the version-compat original (spec/lineage.md frozen evidence).
+    id: "lineage-fixtures-regen",
+    name: "lineage fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-lineage-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "spec-vectors",
     name: "spec/vectors registry",
     language: "javascript",
@@ -98,6 +240,21 @@ const TARGETS = [
     cwd: ".",
     install_cmd: "true",
     test_cmd: "node tools/check-spec-vectors.mjs",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
+    // Lane × collection coverage: every vector collection on disk must be
+    // listed in spec/vectors/registry.json with a consumer (or explicit
+    // exemption) for EVERY lane. Closes the meta-pattern where registry
+    // consumption was opt-in per lane by hardcoded filename, so a new
+    // collection was invisible to four lanes by default.
+    id: "vector-registry",
+    name: "spec/vectors lane-coverage manifest",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node tools/check-vector-registry.mjs",
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
@@ -475,7 +632,7 @@ function buildMarkdown(report) {
   const lines = [];
   const s = report.summary;
   const overall = s.overall_status === "pass" ? "PASS" : "FAIL";
-  lines.push(`# Capsule v0.6 conformance report — JavaScript lane`);
+  lines.push(`# Capsule v0.7 conformance report — JavaScript lane`);
   lines.push("");
   lines.push(
     "This report covers the JavaScript targets only (JS SDK, CLI, " +
@@ -536,7 +693,7 @@ async function main() {
   const overallStart = process.hrtime.bigint();
   const entries = [];
 
-  console.log(`Capsule v0.6 conformance harness (JavaScript lane) v${HARNESS_VERSION}`);
+  console.log(`Capsule v0.7 conformance harness (JavaScript lane) v${HARNESS_VERSION}`);
   console.log(`Node ${process.version} on ${process.platform}`);
   console.log(`Targets: ${TARGETS.length}`);
   console.log("");

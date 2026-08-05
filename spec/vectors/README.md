@@ -1,6 +1,20 @@
-# Capsule v0.6 Vectors
+# Capsule v0.7 Vectors
 
-This directory contains checked-in protocol vectors. Four shapes exist, all
+This directory contains checked-in protocol vectors.
+
+**`registry.json` is the lane × collection coverage manifest.** It lists
+every collection in this directory and the set of lanes REQUIRED to
+consume it — with an explicit, reasoned exemption where a collection
+legitimately does not apply to a lane. `tools/check-vector-registry.mjs`
+(the `vector-registry` conformance target) fails when a vector file
+exists on disk but is not listed there, when a listed file is missing or
+empty, when a collection's reason/failing vocabulary drifts from the
+declaration, or when a required lane's declared consumer file does not
+reference the collection. **When you add a collection, add it to
+registry.json in the same change** — the checker will not let it land
+half-wired.
+
+Eight vector shapes exist, all
 verified by `tools/check-spec-vectors.mjs` (the `spec-vectors` conformance
 lane):
 
@@ -15,10 +29,20 @@ lane):
    This is the language-neutral registry for negative cases. Two stages
    exist:
 
-   - *Verify stage* (default): `{ ok, failing?, error_includes? }`, where
-     `failing` names the result areas that must fail (`content_index`,
-     `chain`, `envelope`, `encrypted_blob`). See
-     `tamper-detection/vectors.json`.
+   - *Verify stage* (default): `{ ok, failing?, error_includes?,
+     signer_set_bound? }`, where `failing` names the result areas that
+     must fail (`content_index`, `chain`, `envelope`, `encrypted_blob`,
+     `signer_set`, `originator_binding`) and `signer_set_bound` pins the
+     machine-readable bound/unbound signer-set report. See
+     `tamper-detection/vectors.json`, `unknown-fields/vectors.json`
+     (the latter pins the unknown-member preservation rule of
+     `spec/manifest.md` / `spec/envelope.md` / `spec/chain.md`: a capsule
+     carrying `x-` extension members must verify, and a post-seal
+     mutation of an unknown member must fail), and
+     `signer-set/vectors.json` (pins `manifest.signer_commitment`
+     presence-binds/absence-reports, duplicate-signer rejection, and
+     originator binding — spec/manifest.md "signer_commitment",
+     spec/envelope.md "Signer set binding").
    - *Open stage*: `{ ok: false, stage: "open", reason, detail? }` — the
      reader must refuse the container before verification, for the named
      `reason` category (by error, exception, or fail-closed result, per the
@@ -28,10 +52,83 @@ lane):
      category vocabulary (including reserved categories that do not have
      checked-in fixtures yet).
 
+   `malformed-shape/vectors.json` uses both stages for capsules whose ZIP
+   container is well-formed but whose manifest or chain documents violate
+   the required field shapes (including an unknown manifest member whose
+   value is `1e999`). No fixture in that collection may make a verifier
+   raise an unhandled exception: verification is a total function.
+
+   `version-compat/vectors.json` pins `spec/versioning.md`: a capsule
+   declaring a KNOWN format version verifies with the observed version
+   REPORTED on the result (`expected.observed_version`); internally
+   coherent capsules declaring an unknown version are refused at open
+   with the DISTINGUISHABLE reason categories `unsupported_version_newer`
+   ("this verifier is too old" — not corruption) and
+   `unsupported_version_older`, while a version violating the
+   `<major>.<minor>` grammar maps to `invalid_manifest_shape`. Even when
+   open is refused, the fail-closed verify result must still report the
+   observed version — that reported fact is what lets an auditor tell a
+   version-support gap apart from tampering.
+
+   Outcome vectors may additionally pin the NORMALIZED result surface of
+   `spec/results.md` and the profile channel of `spec/profiles.md` —
+   asserted on the verify result at either stage (open-stage assertions
+   bind the fail-closed result, the same way `observed_version` already
+   does): `expected.verdict` (`valid` | `invalid` | `unsupported`),
+   `expected.verdict_reason` (string or null), `expected.qualifiers`
+   (EXACT array in the spec-defined order, compared after stripping
+   `x-` vendor entries from the result), `expected.profile.{observed,
+   observed_version, declared, effective, effective_version, supported,
+   status}`, the shorthand pair `expected.observed_profile` /
+   `expected.observed_profile_version`, and `expected.suite`
+   (`formatVersion.suite`, which nulls under any non-default effective
+   profile). A vector may also carry per-vector host policy:
+   `accept_versions` is passed to the verifier's declared
+   accepted-versions option, and `allowlist_literal` supplies allowlist
+   entries VERBATIM — never resolved against `keys_file`, because a
+   MALFORMED entry is by construction one no keypair can produce. When
+   `allowlist_literal` is present the effective allowlist is the
+   resolved `allowlist` names (empty if the vector declares none) plus
+   the literal entries, and the collection-level default never applies.
+   Consumers ignore expected keys they predate (ignore-if-absent), and a
+   missing `qualifiers` member on a result means vocabulary-unaware,
+   never unqualified.
+
+   `profile-declaration/vectors.json` pins `spec/profiles.md`: the
+   absence rule (absence = the default profile `v0.6-suite`/`1.0`),
+   explicit-default equivalence, the normalized-dyad equality rule,
+   fail-closed refusal of unsupported profiles (`unsupported_profile` —
+   a limitation of the verifier), mismatch-before-lookup
+   (`profile_mismatch` — a capsule defect), shape/grammar malformation,
+   gate ordering under an unknown version, x-member inertness, and
+   declaration-stripping tamper. Every negative fixture is internally
+   coherent under default rules except the declaration under test, so a
+   lane that skips the gate verifies it ok=true and fails the registry.
+
+   `result-vocabulary/vectors.json` pins `spec/results.md`: the derived
+   verdict for all three classes (including both unsupported-version
+   directions), the non-null-iff-unsupported `verdict_reason` rule, and
+   exact qualifier arrays for the strongest and weakest honest shapes,
+   host-relative trust/policy configurations, and the per-result
+   `encrypted_outer_only` scope fact (never on the decrypted inner's L3
+   result). `malformed-allowlist-entry` pins allowlist hygiene across
+   all five lanes: `trust_not_evaluated` is defined on the EFFECTIVE
+   (well-formed) allowlist, so a host set whose only entry is unusable
+   must drop it, note that it did, and report that trust was never
+   evaluated — never `no_trusted_signer`, which would claim a real
+   allowlist was applied and matched nothing.
+
+   `unicode-boundary/vectors.json` is a positive collection: a capsule whose
+   event summary is 200 astral code points, long enough that the Pith
+   normalizer must truncate it. Every implementation MUST verify it
+   `ok: true`. Before the surrogate-pair-safe cut it verified only in the
+   lane that produced it and failed everywhere else with a chain-hash error
+   that read like tampering (`spec/canonicalization.md`, `spec/pith.md`).
+
    Independent implementations SHOULD reproduce these outcomes; the Python
-   (`sdk-py/tests/test_spec_registry.py`) and Rust
-   (`verifier-rust/tests/spec_registry.rs`) lanes consume both collections
-   directly.
+   (`sdk-py/tests/test_spec_registry.py`) lane consumes all of these
+   collections and the Rust (`verifier-rust/tests/spec_registry.rs`) lane
+   consumes all but `malformed-shape`.
 
 3. **Byte-level signing-input vector** (`signing-input.json`, detected by
    `meta.kind: "signing-input"`) — pins the exact bytes being signed,
@@ -44,13 +141,74 @@ lane):
    signature over the reconstructed signing input.
 
 4. **JCS number-serialization set** (`jcs-numbers.json`): a `vectors` array
-   of `{ ieee_hex, expected }` entries, where `ieee_hex` is the big-endian
-   IEEE-754 binary64 bit pattern of the input and `expected` its canonical
-   RFC 8785 serialization. Implementations must parse the bit pattern (not
-   the expected string) and serialize it.
+   of `{ ieee_hex, expected, accepted? }` entries, where `ieee_hex` is the
+   big-endian IEEE-754 binary64 bit pattern of the input and `expected` its
+   canonical RFC 8785 serialization. Implementations must parse the bit
+   pattern (not the expected string) and serialize it. `accepted: false`
+   marks a bit pattern outside the I-JSON acceptance boundary
+   (`spec/canonicalization.md`): `expected` records the `Number::toString`
+   layout for reference, but canonicalization MUST refuse the value.
 
-Other JSON here (e.g. `tamper-detection/output/keys.json`) is supporting
-material, not a vector, and is ignored by the checker.
+5. **Ed25519 key/signature validation set** (`ed25519-key-validation.json`,
+   detected by `meta.kind: "ed25519-verify"`) — a `vectors` array of
+   `{ name, public_key_hex, message_hex, signature_hex, expected: { valid },
+   reason }` entries. Every negative entry is a *witness*: an unguarded
+   Ed25519 verifier accepts the triple. Implementations MUST report
+   `valid: false` for all 8 small-subgroup public keys, for non-canonical
+   32-byte key encodings (masked y >= p), and for a signature whose S is not
+   reduced mod L — and `valid: true` for the RFC 8032 positive control.
+   The Python (`test_ed25519_key_validation_registry`), Rust
+   (`ed25519_key_validation_registry`), Swift (`Ed25519KeyValidationTests`)
+   and Kotlin (`Ed25519KeyValidationVectorTest`) lanes consume it directly.
+
+6. **Identity-attestation outcome set**
+   (`identity-attestation/vectors.json`, detected by
+   `meta.kind: "identity-attestation"`) — inline attestation documents for
+   the native `ed25519-jcs` profile, the trust-root set and verification
+   context each is checked against (`capsule_id`, `signer_public_key`,
+   `expected_issuer`, `now`; per-vector `trust_roots`/`context` override the
+   top-level ones), and an expected `{ ok, status, error_includes? }`.
+   `status` is the attestation-layer vocabulary of `spec/federation.md`
+   *Failure reporting*: `attestation_verified`, `attestation_unverified`
+   (unknown — no trust roots cached), `attestation_rejected` (strong
+   negative). Only the native profile is pinned: Ed25519 signatures are
+   deterministic, ECDSA (the JWT profile) is not.
+
+7. **JCS key-ordering set** (`jcs-key-order.json`, detected by
+   `meta.kind: "jcs-key-order"`) — a `vectors` array of `{ name, note, keys,
+   expected_key_order, canonical_utf8_hex, sha256_hex }` entries. Build a
+   JSON object whose members are `keys`, each mapped to its 0-based index in
+   `keys`, canonicalize it, and reproduce `canonical_utf8_hex`
+   byte-for-byte. RFC 8785 §3.2.3 sorts members on their **UTF-16 code-unit
+   sequences** — not Unicode code-point order (the two disagree once a
+   supplementary-plane key meets a key in U+E000..U+FFFF) and not a
+   normalization- or collation-aware order (which can report canonically
+   equivalent keys as equal). `supplementary-vs-high-bmp` and
+   `canonically-equivalent-keys-are-distinct` are the negative witnesses for
+   those two wrong comparators. The same ordering governs
+   `content_index.files` (a JSON array, so its order is inside the hashed
+   bytes) and ZIP entry order. All five lanes consume this set: JS
+   (`sdk-js/test/jcs-key-order.test.js` plus the checker), Python
+   (`test_jcs_key_order_registry`), Rust (`jcs_key_order_registry`), Swift
+   (`testJcsKeyOrderRegistry`) and Kotlin (`jcsKeyOrderRegistry`).
+
+8. **I-JSON acceptance set** (`ijson-acceptance.json`, detected by
+   `meta.kind: "ijson-acceptance"`) — a `vectors` array of
+   `{ name, input_json, expect, canonical?, reason? }` entries. `input_json`
+   is raw JSON text; each implementation feeds it to its own parser and then
+   canonicalizes. `expect: "accept"` pins the canonical output.
+   `expect: "reject"` is satisfied by refusal at parse time OR at
+   canonicalization time — both are conforming; what is normative is that the
+   value never reaches a hash. The `reason` categories
+   (`integer_out_of_range`, `unpaired_surrogate`) are normative; exact error
+   strings are implementation-defined. All five lanes consume this set: JS
+   (the checker itself), Python (`test_ijson_acceptance_boundary`), Rust
+   (`ijson_acceptance_boundary`), Swift (`testIJsonAcceptanceRegistry`) and
+   Kotlin (`ijsonAcceptanceRegistry`). See `spec/canonicalization.md`.
+
+Other JSON here (e.g. `tamper-detection/output/keys.json`,
+`unknown-fields/output/keys.json`, and `signer-set/output/keys.json`) is
+supporting material, not a vector, and is ignored by the checker.
 
 Generators (deterministic; regeneration is an intentional spec change and
 should be reviewed with the byte-level diff):
@@ -58,8 +216,44 @@ should be reviewed with the byte-level diff):
 - `sdk-js/tools/generate-tamper-fixtures.mjs` → `tamper-detection/output/`
 - `sdk-js/tools/generate-malformed-fixtures.mjs` → `malformed-layout/output/`
   (derived from the tamper-detection clean fixture)
+- `sdk-js/tools/generate-malformed-shape-fixtures.mjs` →
+  `malformed-shape/output/` (derived from the same clean fixture)
+- `sdk-js/tools/generate-unknown-fields-fixtures.mjs` → `unknown-fields/output/`
+  (fixed throwaway TEST keypair; byte-stable, supports `--check`)
+- `sdk-js/tools/generate-signer-set-fixtures.mjs` → `signer-set/output/`
+  (fixed throwaway TEST keypairs; byte-stable, supports `--check`)
 - `sdk-js/tools/generate-signing-input-vector.mjs` → `signing-input.json`
   (derived from `plain-basic.json`)
+- `sdk-js/tools/generate-ed25519-key-validation-vector.mjs` →
+  `ed25519-key-validation.json` (searches node:crypto's raw verify for the
+  acceptance witnesses; `--check` detects drift)
+- `sdk-js/tools/generate-jcs-key-order-vector.mjs` → `jcs-key-order.json`
+  (self-contained; the case list lives in the generator, and the output is
+  pure ASCII with surrogate halves escaped individually)
+- `sdk-js/tools/generate-unicode-boundary-fixture.mjs` →
+  `unicode-boundary/output/` (fixed throwaway TEST keypair; byte-stable,
+  supports `--check`). Builds through `CapsuleBuilder.appendEvent`, so the
+  Pith truncation path is the thing under test.
+- `sdk-js/tools/generate-version-compat-fixtures.mjs` →
+  `version-compat/output/` (fixed throwaway TEST keypair; byte-stable,
+  supports `--check`). The unknown-version fixtures are internally
+  coherent under their DECLARED version's domain strings
+  (`capsule-id-v<V>`, `capsule-provenance-v<V>:<role>`), so only the
+  version gate refuses them.
+- `sdk-js/tools/generate-attestation-vectors.mjs` →
+  `identity-attestation/vectors.json` (fixed throwaway TEST issuer seed;
+  byte-stable, supports `--check`)
+- `sdk-js/tools/generate-profile-declaration-fixtures.mjs` →
+  `profile-declaration/output/` (fixed throwaway TEST keypair;
+  byte-stable, supports `--check`). Negative fixtures are internally
+  coherent under default rules except the declaration under test, so
+  only the profile gate refuses them.
+- `sdk-js/tools/generate-result-vocabulary-fixtures.mjs` →
+  `result-vocabulary/output/` (fixed throwaway TEST keypairs;
+  byte-stable, supports `--check`). The encrypted fixture is a
+  byte-copy of `tamper-detection/output/clean-encrypted.capsule`
+  (fresh encryption would not be deterministic), with that fixture's
+  keypairs mirrored into the collection's keys.json.
 
 No warranty: vectors are conformance fixtures only. They are not production
 templates, compliance artifacts, legal advice, security advice, or

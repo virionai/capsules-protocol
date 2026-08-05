@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "name": "unknown-fields",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the unknown-member fixtures. Unknown members in manifest.json, provenance/envelope.json, and chain events MUST be preserved verbatim and included in canonicalization/hashing (spec/manifest.md, spec/envelope.md, spec/chain.md). A verifier that projects these documents onto a fixed schema and re-serializes the projection for hashing drops the members, diverges from the signed bytes, and fails the positive vector here.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "unknown-fields-clean",
+      "capsule_file": "output/unknown-fields.capsule",
+      "expected": { "ok": true },
+      "note": "x- extension members in manifest, envelope, and chain event, all present at seal time and covered by manifest_hash, the envelope signature, and the event hash."
+    },
+    {
+      "name": "tampered-unknown-manifest-field",
+      "capsule_file": "output/tampered-unknown-manifest-field.capsule",
+      "expected": { "ok": false, "error_includes": "manifest_hash" },
+      "note": "The manifest's x-acme-policy value was mutated post-seal; the recomputed manifest_hash must diverge from the signed envelope.manifest_hash."
+    },
+    {
+      "name": "tampered-unknown-envelope-field",
+      "capsule_file": "output/tampered-unknown-envelope-field.capsule",
+      "expected": { "ok": false, "failing": ["envelope"] },
+      "note": "The envelope's x-acme-attestation value was mutated post-seal; the signature over JCS(envelope minus signers) must no longer verify."
+    },
+    {
+      "name": "tampered-unknown-event-field",
+      "capsule_file": "output/tampered-unknown-event-field.capsule",
+      "expected": { "ok": false, "failing": ["chain", "content_index"] },
+      "note": "The first event's x-acme-review-ticket value was mutated post-seal; the event hash must no longer recompute, and chain/events.jsonl is covered by the content index."
+    }
+  ]
+}

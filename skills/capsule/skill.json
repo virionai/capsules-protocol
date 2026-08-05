@@ -1,15 +1,15 @@
 {
   "id": "capsule",
-  "version": "0.6.0",
-  "title": "Capsule v0.6 — portable verifiable work-product",
+  "version": "0.7.0",
+  "title": "Capsule v0.7 — portable verifiable work-product",
   "description": "A portable unit of intelligence: a work product, the context to continue it, and a signed append-only audit trail. Verifies offline. Cold-readable by foreign LLMs.",
-  "spec_version": "0.6",
+  "spec_version": "0.7",
   "audience": [
     "foreign-llm",
     "auditor",
     "human-reader"
   ],
-  "applies_to": "manifest.format.version == \"0.6\"",
+  "applies_to": "manifest.format.version == \"0.7\"",
   "links": {
     "manifest": "manifest.json",
     "program": "program.md",
@@ -94,42 +94,42 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "0f97015f92543066afd4bf9c601f7dcb080b0f787624fc350928aee0307e1027"
+        "sha256": "66cd500dd133dd61206f0c99cb4f1a4c42e55084a4b982c40d21cf533dfdd053"
       },
       {
         "path": "spec/format.md",
         "title": "File layout",
-        "sha256": "f8431c5d058c221075eb08ff9f3830402517f1716845a3f528b286ee6a2c7166"
+        "sha256": "667e909ee866222a07e77c1d4ee1351bc210c0058eaade7dfe3d395fdf530524"
       },
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "54ba6367253d5312dedca1d049879e3984daf8d5ab480394ba45b28603f97282"
+        "sha256": "7a5dac7b48e31c4793a0c1e0a7b37542391c4d23af3022d4a0f26b62c047a498"
       },
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "16ddb7c83d615b9bd397f535fa3e9df94dd1d66112227c676e4d275a745d363d"
+        "sha256": "19fe8eb88ce0ee9dab4995df8429272c03460f05661e8f7fd4da62ac29908e26"
       },
       {
         "path": "spec/envelope.md",
         "title": "Provenance envelope",
-        "sha256": "13877c2e0ada919323ff5e48b63f8f1695d61f3694ab6a721c8e6b0803630997"
+        "sha256": "18d103d80ac1dd2ddfb77561768575e3a93106232292884b7f713613170fbaf9"
       },
       {
         "path": "spec/trust.md",
         "title": "Trust model",
-        "sha256": "0b77ec90797a03a99835db66a33b981dff5809161595924718740b8e1029ddc9"
+        "sha256": "e074d978feabd5f6c68ef803a4ac0358ced1eebd4ba26df5819f26cfc9e6c045"
       },
       {
         "path": "spec/pith.md",
         "title": "Pith context style",
-        "sha256": "adb8e133420028e7b41ab7bfcc647540e675c11616722ef63090051259b40a51"
+        "sha256": "777806eda72506d317a4f6f925a1ce2b386c524cab3f4c6effde93211c03c9f6"
       },
       {
         "path": "skills/capsule/SKILL.md",
         "title": "Foreign-LLM instructions",
-        "sha256": "3a908fddd1771833fd063c960c088bcf1c77d7356fd6bba353b20435c665f1d1"
+        "sha256": "d947db4a16a48725202a19e33c4534956eeb67f42397d3012e0d8ba2afa948b9"
       }
     ]
   }

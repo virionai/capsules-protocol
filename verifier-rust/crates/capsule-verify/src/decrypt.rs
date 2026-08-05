@@ -1,4 +1,4 @@
-//! L3 decryption of an encrypted Capsule v0.6.
+//! L3 decryption of an encrypted Capsule (any known version).
 //!
 //! Given an outer envelope, outer manifest, the file map already extracted
 //! from the outer ZIP, and a recipient's X25519 32-byte private key, this
@@ -9,7 +9,7 @@
 //! 2. Performs an X25519 ECDH between the recipient's secret and the
 //!    bundle's ephemeral public key.
 //! 3. HKDF-SHA256-derives a 32-byte wrap key (salt = recipient's *own*
-//!    public key, info = `b"capsule-key-wrap-v0.6"`).
+//!    public key, info = `capsule-key-wrap-v<declared version>`).
 //! 4. AEAD-decrypts the bundle's `wrapped_key` to recover the 32-byte
 //!    content key.
 //! 5. AEAD-decrypts `content.enc` with the content key, the
@@ -22,7 +22,7 @@
 //! (`sdk-js/src/builder.js`), not the spec text.** The 5 fields are:
 //!
 //! ```text
-//! { "version": "0.6",
+//! { "version": envelope.version,
 //!   "capsule_id":            envelope.capsule_id,
 //!   "first_event_hash":      envelope.first_event_hash,
 //!   "originator_public_key": manifest.originator.public_key,
@@ -62,10 +62,13 @@ pub enum DecryptError {
     /// Currently only `"ChaCha20-Poly1305"` and `"none"` are recognized.
     #[error("unsupported cipher: {0}")]
     UnsupportedCipher(String),
-    /// `skills/decryption/decryption.json` was not present in the outer
-    /// ZIP. Required for any encrypted capsule.
-    #[error("decryption metadata missing: skills/decryption/decryption.json")]
-    DecryptionMetadataMissing,
+    /// The decryption metadata file — `manifest.encryption.metadata_path`,
+    /// or the spec default `skills/decryption/decryption.json` when the
+    /// manifest omits the block — was not present in the outer ZIP.
+    /// Required for any encrypted capsule. The wrapped string is the path
+    /// that was looked up.
+    #[error("decryption metadata missing: {0}")]
+    DecryptionMetadataMissing(String),
     /// `skills/decryption/decryption.json` was present but failed to
     /// parse. The wrapped error string is the deserializer's message.
     #[error("decryption metadata invalid: {0}")]
@@ -126,7 +129,7 @@ pub struct KeyBundle {
     pub wrapped_key: String,
 }
 
-/// Decrypt an encrypted Capsule v0.6 inner ZIP.
+/// Decrypt an encrypted Capsule inner ZIP.
 ///
 /// `envelope` and `manifest` are the *outer* envelope and manifest (already
 /// parsed by the caller). `files` is the file map produced by
@@ -163,10 +166,23 @@ pub fn decrypt_inner_zip(
         .get("content.enc")
         .ok_or(DecryptError::NotEncrypted)?;
 
-    // Step 3: locate decryption metadata.
+    // Step 3: locate decryption metadata. The path is whatever
+    // `manifest.encryption.metadata_path` declares — the reference reader
+    // (sdk-js/src/reader.js) resolves it that way, so hardcoding the
+    // default location makes this verifier reject capsules the reference
+    // implementation reads. The spec default is only the fallback for a
+    // manifest that omits the block; `verify_capsule` separately rejects
+    // an encrypted capsule whose manifest.encryption is missing or points
+    // at a path that is not in the package.
+    let meta_path = manifest
+        .encryption
+        .as_ref()
+        .map(|e| e.metadata_path.as_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or("skills/decryption/decryption.json");
     let meta_bytes = files
-        .get("skills/decryption/decryption.json")
-        .ok_or(DecryptError::DecryptionMetadataMissing)?;
+        .get(meta_path)
+        .ok_or_else(|| DecryptError::DecryptionMetadataMissing(meta_path.to_string()))?;
 
     // Step 4: parse decryption metadata.
     let meta: DecryptionMetadata = serde_json::from_slice(meta_bytes)
@@ -202,8 +218,15 @@ pub fn decrypt_inner_zip(
     let shared = x25519_dh(recipient_private_key, &ephemeral_pub);
 
     // Step 8: HKDF. Salt is the recipient's own pubkey raw 32 bytes; info
-    // is the v0.6 wrap-step domain string; output 32 bytes.
-    let wrap_key = hkdf_sha256(&shared, &my_pubkey, b"capsule-key-wrap-v0.6", 32);
+    // is the wrap-step domain string KEYED BY THE CAPSULE'S DECLARED
+    // VERSION (spec/versioning.md): decrypting a v0.6 capsule uses the
+    // v0.6 wrap-domain forever, whatever era this verifier is from.
+    let wrap_key = hkdf_sha256(
+        &shared,
+        &my_pubkey,
+        &crate::versions::key_wrap_info(&envelope.version),
+        32,
+    );
     let wrap_key_arr: [u8; 32] = wrap_key
         .as_slice()
         .try_into()
@@ -312,7 +335,8 @@ fn chacha20_poly1305_decrypt(
 /// source ordering.
 fn build_aad(envelope: &Envelope, manifest: &Manifest) -> Vec<u8> {
     let aad_obj = serde_json::json!({
-        "version": "0.6",
+        // Keyed by the capsule's DECLARED version (spec/versioning.md).
+        "version": envelope.version,
         "capsule_id": envelope.capsule_id,
         "first_event_hash": envelope.first_event_hash,
         "originator_public_key": manifest.originator.public_key,
@@ -423,13 +447,22 @@ mod tests {
                 .expect("envelope parses");
 
         let got = build_aad(&envelope, &manifest);
-        let expected = br#"{"capsule_id":"260b65e936cf5cb0000e46eb770b715f0e0e27627958ae1d591cb5984e9b8049","cipher":"ChaCha20-Poly1305","first_event_hash":"331924b4ac4bb305b48f0fccf05fe3f963bcb9d08e3c87b5a6ed97d0ac2558ea","originator_public_key":"cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc","version":"0.6"}"#;
+        // The byte template (field order, key naming, quoting) is the pin;
+        // the key-derived VALUES are sourced from the fixture's own signed
+        // documents so the pin survives fixture keypair re-baselines.
+        let expected = format!(
+            r#"{{"capsule_id":"{}","cipher":"ChaCha20-Poly1305","first_event_hash":"{}","originator_public_key":"{}","version":"{}"}}"#,
+            envelope.capsule_id,
+            envelope.first_event_hash.as_deref().expect("encrypted fixture has a chain"),
+            manifest.originator.public_key,
+            envelope.version
+        );
         assert_eq!(
             got,
-            expected,
+            expected.as_bytes(),
             "AAD bytes mismatch:\n got:      {}\n expected: {}",
             String::from_utf8_lossy(&got),
-            String::from_utf8_lossy(expected)
+            expected
         );
     }
 

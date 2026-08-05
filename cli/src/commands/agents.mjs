@@ -1,13 +1,14 @@
 // `capsule agents <file>` — print agents.md (or "(absent)" if not in capsule).
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, readBytes } from "../format.mjs";
 
 const USAGE = "usage: capsule agents <file>\n";
 
 export async function agentsCmd(argv) {
-  const args = parseArgs(argv, {});
+  const args = parseArgs(argv, { maxPositionals: 1 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const file = args._[0];
   if (!file) { process.stderr.write(USAGE); return 2; }
   const bytes = await readBytes(file);

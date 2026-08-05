@@ -1,0 +1,168 @@
+{
+  "meta": {
+    "name": "chain-rules",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the per-event field rules in chain.md (verification steps 6 and 7) plus the manifest.md participants[] field rules: the actor_id namespace grammar, the entry shapes (object with actor_id, or the bare actor-id string shorthand), and the advisory members (participants[].role, participants[].label, originator.label, created_at, and the advisory event members event_id/action/target/timestamp/payload) that are NEVER verification inputs — a lane whose typed view requires any of them refuses spec-valid capsules the reference lane seals. The step-6 actor rule is CONDITIONAL on the manifest's own claim: a NON-EMPTY participants[] binds every event actor to the declared set (or the literal system:host), fail-closed; an EMPTY participants[] is the manifest making no claim about who acted — a weaker claim made honestly — so verification succeeds and the verifier MUST report the unbound actor set machine-readably (expected.actor_set_bound) and in notes. Conditioning on the list is safe because participants is covered by manifest_hash inside the signed payload. The kind enum is closed in EVERY tier, and so is the actor_id namespace set (human/ai/system/capsule, non-empty id) for every DECLARED participant. All capsules are cryptographically well-formed — real signatures, correct manifest hash, correct content index — so a verifier that skips the rule under test reports the wrong outcome and fails this registry.",
+    "generator": "sdk-js/tools/generate-chain-rule-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "notes": [
+    "chain.md verification step 6: when manifest.participants[] is non-empty, confirm actor appears in it or is system:host; when empty, report the unbound actor set instead of rejecting.",
+    "chain.md verification step 7: kind is one of decision | observation | mutation | session | checkpoint; readers reject unknown kinds unconditionally.",
+    "Both rules are per-event: a conformant reader reports which seq failed which check and does not stop at the first error.",
+    "manifest.md field rules: every declared participants[].actor_id must match human:<id>, ai:<id>, system:<id>, or capsule:<id> with a non-empty <id> — the namespace set is closed. Writers refuse the shape; verifiers reject it fail-closed (a declared set that cannot be interpreted is not a weaker claim).",
+    "manifest.md field rules: actor_id is the ONE participants[] member the spec interprets. A bare actor-id string entry is equivalent shorthand for {actor_id}: grammar-checked AND binding. role and label are advisory attribution text — like originator.label and created_at, never a verification input; verifiers gate nothing on their presence, absence, or type.",
+    "chain.md field rules: event_id, action, target, timestamp, and payload are advisory event members. The event hash commits to the stored line, so their absence verifies; a typed reader must not refuse the event over them."
+  ],
+  "vectors": [
+    {
+      "name": "actor-not-participant",
+      "capsule_file": "output/actor-not-participant.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain"
+        ],
+        "actor_set_bound": true,
+        "error_includes": "not in manifest.participants and not system:host"
+      },
+      "note": "manifest.participants declares human:origin; the single event's actor is human:mallory. The audit-spoofing shape the rule exists to catch: every hash and signature verifies, only the actor rule can fail it."
+    },
+    {
+      "name": "unknown-kind",
+      "capsule_file": "output/unknown-kind.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain"
+        ],
+        "error_includes": "is not one of decision, observation, mutation, session, checkpoint"
+      },
+      "note": "The single event declares kind \"gossip\". Closed enum in every tier: a custom kind is not a weaker claim, it is unreadable to the foreign LLM reader."
+    },
+    {
+      "name": "unbound-actors",
+      "capsule_file": "output/unbound-actors.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["actor_set_unbound"],
+        "notes_includes": "chain actors are not bound to a declared participant set"
+      },
+      "note": "Positive control: participants[] is EMPTY and the single event names human:origin anyway. Absence is a weaker claim made honestly — the verifier MUST verify this capsule and MUST report the unbound actor set, never an unqualified pass and never a rejection."
+    },
+    {
+      "name": "non-contiguous-seq",
+      "capsule_file": "output/non-contiguous-seq.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain"
+        ],
+        "error_includes": "seq 2 expected 1"
+      },
+      "note": "chain.md verification step 5: seq is strictly monotonic from 1. The single event carries seq=2, correctly hashed and signed, so only the seq rule can fail it. A verifier that trusts the stored seq or merely counts events reports ok=true."
+    },
+    {
+      "name": "participant-without-label",
+      "capsule_file": "output/participant-without-label.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the declared participant carries only actor_id + role. The base spec (manifest.md field rules) requires the actor_id pattern and nothing else — label is advisory display text — so every lane MUST verify this capsule with the actor set bound. A lane whose typed manifest view demands label refuses a spec-valid capsule (addendum A12)."
+    },
+    {
+      "name": "invalid-untrusted-path",
+      "capsule_file": "output/invalid-untrusted-path.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain"
+        ],
+        "error_includes": "untrusted_payload_fields[0] is not a valid payload path"
+      },
+      "note": "chain.md 'Untrusted content' path grammar: every entry must match payload(.segment)+ with segment = [A-Za-z0-9_-]+. The single event carries the entry \"not-payload.note\", correctly hashed and signed, so only the grammar rule decides it. A marking a host cannot resolve silently unmarks LLM-authored content — verifiers reject it fail-closed (addendum A15)."
+    },
+    {
+      "name": "invalid-actor-namespace",
+      "capsule_file": "output/invalid-actor-namespace.capsule",
+      "expected": {
+        "ok": false,
+        "actor_set_bound": true,
+        "error_includes": "does not match an allowed namespace"
+      },
+      "note": "manifest.md field rules (finding A06): the declared participant's actor_id is robot:origin — outside the closed namespace set human:/ai:/system:/capsule:. The single event names the SAME actor, so the step-6 membership rule passes and only the namespace grammar decides the outcome. Correctly hashed and signed: a verifier without the grammar check reports ok=true and fails this registry."
+    },
+    {
+      "name": "absent-participants",
+      "capsule_file": "output/absent-participants.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["actor_set_unbound"],
+        "notes_includes": "chain actors are not bound to a declared participant set"
+      },
+      "note": "Positive control for the participants shape rule: the manifest carries NO participants member at all. Absence is not a violation — the capsule MUST verify with the actor set reported unbound, exactly like the empty array (unbound-actors). Only a PRESENT non-array declaration is malformed (malformed-shape: participants-not-array / participants-string). A lane whose typed manifest view REQUIRES the member refuses a spec-valid capsule."
+    },
+    {
+      "name": "participant-only-actor-id",
+      "capsule_file": "output/participant-only-actor-id.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the declared participant carries ONLY actor_id — no role, no label. Both are advisory attribution members; a participant declared without them names who is involved without asserting what function each served — a weaker claim made honestly. Every lane MUST verify this capsule with the actor set bound; a lane whose typed manifest view demands role (or label) refuses a spec-valid capsule the reference builder seals (P2/A12)."
+    },
+    {
+      "name": "participant-bare-string",
+      "capsule_file": "output/participant-bare-string.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the participants[] entry is the bare actor-id string \"human:origin\" — equivalent shorthand for {\"actor_id\": \"human:origin\"}. Verifiers MUST interpret both shapes identically: grammar-checked AND binding the actor set (the single event's actor is the same id, so actor_set_bound must report true). A lane that grammar-checks the string but does not bind it silently rewrites the capsule's own claim; a lane that cannot parse it refuses a capsule the reference builder seals."
+    },
+    {
+      "name": "advisory-members-any-type",
+      "capsule_file": "output/advisory-members-any-type.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the declared participant carries role 42 and an object label. Advisory members are NEVER verification inputs — verifiers gate nothing on their presence, absence, or TYPE (the values are sealed under manifest_hash either way; a reader that wants display text simply has none to show). A typed lane that requires strings here refuses a capsule every dynamic lane verifies — the exact one-field-at-a-time drift this collection exists to close."
+    },
+    {
+      "name": "participant-missing-actor-id",
+      "capsule_file": "output/participant-missing-actor-id.capsule",
+      "expected": {
+        "ok": false,
+        "actor_set_bound": true,
+        "error_includes": "actor_id must be a string in an allowed namespace"
+      },
+      "note": "The manifest declares two participants: a well-formed one (which binds the actor set, and matches the single event's actor) and one WITHOUT actor_id. actor_id is the one member the spec interprets; an entry lacking it is a declared participant no reader can bind — not a weaker claim, a malformed one. Every lane rejects fail-closed with the SAME diagnosis (the participants[i].actor_id message), never a lane-specific manifest parse crash that makes the capsule look corrupt."
+    },
+    {
+      "name": "absent-advisory-manifest-members",
+      "capsule_file": "output/absent-advisory-manifest-members.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": true
+      },
+      "note": "Positive control: the manifest omits originator.label and created_at. Both are advisory (manifest.md field rules) — auditors verify the public key and the seal, not display text, and authoritative time-binding is the envelope's signed_at. A lane whose typed manifest view requires either member refuses a spec-valid capsule."
+    },
+    {
+      "name": "minimal-event-fields",
+      "capsule_file": "output/minimal-event-fields.capsule",
+      "expected": {
+        "ok": true,
+        "actor_set_bound": false,
+        "notes_includes": "chain actors are not bound to a declared participant set"
+      },
+      "note": "Positive control: the single event carries ONLY seq, kind, prev_hash, and hash — the members verification rules actually read. event_id, action, target, timestamp, and payload are advisory (chain.md field rules); the event hash commits to the stored line, so their absence is a weaker claim made honestly. participants[] is empty, so the absent actor binds nothing and the unbound set is REPORTED. A lane whose typed event view requires the advisory members refuses a spec-valid capsule."
+    }
+  ]
+}

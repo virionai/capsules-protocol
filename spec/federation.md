@@ -1,14 +1,14 @@
 # Capsule Federation
 
-**Status: informative for v0.6, in two layers.** The *overlay layer*
+**Status: informative for v0.7, in two layers.** The *overlay layer*
 (identity attestations, recipient discovery, signer-role/quorum policy)
-rides on unmodified v0.6 capsules, has a working reference adapter
+rides on unmodified v0.7 capsules, has a working reference adapter
 (`sdk-js/src/federation/`), and is stabilizing for v1.0. The *discovery
 layer* (signer document, key lifecycle, envelope `issuer` field,
 temporal anchors) touches the envelope schema and is therefore a
-**v0.7 draft** — per [envelope.md](envelope.md), envelope schema
-additions are v0.7 changes. Nothing in this document changes what a
-v0.6 verifier accepts or rejects.
+**v0.8 draft** — per [envelope.md](envelope.md), envelope schema
+additions ship as a version bump. Nothing in this document changes what
+a v0.7 verifier accepts or rejects.
 
 This document defines how a capsule signer key is bound to an
 **external identity** (a person, organization, or service managed by an
@@ -50,7 +50,7 @@ Consequences a conforming implementation MUST preserve:
    runs with no federation input and no network. A verifier that has
    never heard of the issuer still returns the same `valid`/`ok` math
    result. A capsule that verifies on an air-gapped machine today MUST
-   still verify there under v0.7.
+   still verify there under v0.8.
 2. **Discovery is a separate, host-side, cacheable step.** A verifier
    never fetches anything while checking math. Signer documents and
    issuer metadata are fetched and cached out-of-band, on the host's
@@ -127,7 +127,7 @@ Served at `https://<issuer>/.well-known/capsule-issuer.json`:
 ```json
 {
   "issuer": "https://capsules.example",
-  "spec_version": "0.6",
+  "spec_version": "0.7",
   "profiles": ["ed25519-jcs", "clerk-jwt"],
   "trust_roots": {
     "jwks": { "keys": [ /* … */ ] }
@@ -141,6 +141,13 @@ Served at `https://<issuer>/.well-known/capsule-issuer.json`:
 
 `trust_roots` MAY instead carry `jwks_uri`. The document is cacheable; a
 verifier that already holds the trust roots never fetches it.
+
+`issuer` MUST equal the domain the document was fetched from, and
+`jwks_uri` MUST be on that same origin. A reader MUST treat either
+mismatch as `issuer_document_invalid` and compute no trust from the
+document: trust roots are the keys every other check is made against, so
+a document that can name any issuer and point anywhere is not a trust
+anchor at all.
 
 ### Signer document
 
@@ -212,7 +219,7 @@ In order of preference:
 
 | # | Method | Transport | Notes |
 |---|---|---|---|
-| 1 | `.well-known/capsule-issuer.json` → `.well-known/capsule-signers` | HTTPS | Normative in v0.7. Either entry point resolves to the same signer document. |
+| 1 | `.well-known/capsule-issuer.json` → `.well-known/capsule-signers` | HTTPS | Normative in v0.8. Either entry point resolves to the same signer document. |
 | 2 | Sigstore identity | Fulcio + Rekor | For issuers that sign via OIDC identities rather than long-lived keys. Verification uses Rekor inclusion proofs, which can be bundled and checked offline. |
 | 3 | DNS TXT `_capsule-signers.<domain>` | DNS | Contains the URL of the signer document. Fallback for issuers that cannot serve `.well-known` paths. |
 | 4 | Distributed key list | out-of-band | Regulator- or consortium-published lists. Profile-specific; the list format is the signer-document shape, delivery is whatever the authority uses. |
@@ -221,9 +228,9 @@ A profile that names a discovery method the reader does not implement
 is an unsupported profile: the reader reports it as such and computes
 no trust. It does not fall back to a weaker method.
 
-## Envelope binding (v0.7 change)
+## Envelope binding (v0.8 change)
 
-v0.7 envelopes MAY carry an `issuer` field (the issuer identifier, DNS
+v0.8 envelopes MAY carry an `issuer` field (the issuer identifier, DNS
 form) inside the signed payload. When present, a reader computing
 trust:
 
@@ -232,9 +239,10 @@ trust:
    a matching role and a lifecycle status acceptable under host policy.
 3. Reports per-signer `trusted` accordingly.
 
-v0.6 capsules have no `issuer` field; hosts map keys to issuers via
-locally configured trust roots only. That behavior remains valid in
-v0.7 — the field is an optimization for discovery, not a trust grant.
+Capsules today (v0.6 and v0.7 alike) have no `issuer` field; hosts map
+keys to issuers via locally configured trust roots only. That behavior
+remains valid in v0.8 — the field is an optimization for discovery,
+not a trust grant.
 An attacker naming someone else's `issuer` in their envelope gains
 nothing: their key is not in that issuer's document.
 
@@ -242,10 +250,40 @@ nothing: their key is not in that issuer's document.
 
 An attestation is a signed statement binding **one capsule** and **one
 signer key** to an external subject. Its binding claims MUST include
-`capsule_id`, `signer_public_key`, and `signer_role`; verifiers MUST
-reject an attestation whose `capsule_id`/`signer_public_key` do not
-match the capsule and signer being checked, and MUST reject an expired
-attestation.
+`capsule_id`, `signer_public_key`, and `signer_role`.
+
+A verifier checking an attestation MUST be supplied the capsule id, the
+signer key, and the expected issuer out-of-band: they are host trust
+configuration and are never read from the artifact being checked. The
+verifier MUST reject the attestation unless **all** of the following
+hold.
+
+1. **Binding claims present.** `capsule_id`, `signer_public_key`, and
+   `signer_role` are each present and non-empty. An attestation missing
+   any of them binds nothing, however valid its signature — a raw
+   provider session token is exactly this case.
+2. **Binding matches.** `capsule_id` and `signer_public_key` equal the
+   capsule and signer being checked (`signer_public_key` compared as
+   case-insensitive hex).
+3. **Issuer matches.** The attestation's issuer equals the caller's
+   expected issuer after the normalization in *Vocabulary*. For the JWT
+   profile the token's `iss` is checked against that same
+   caller-supplied value — never against a field of the attestation
+   wrapper, which whoever produced the wrapper also controls — and the
+   token's `aud` MUST match the verifying host's expected audience.
+4. **Key selection is closed.** `kid` selects the trust-root key. An
+   unknown or ambiguous `kid` resolves to *no* key; a verifier MUST NOT
+   fall back to trying the other keys in a cached set. A `kid`-less
+   attestation resolves only when the set holds exactly one key of the
+   requested algorithm.
+5. **Time is parseable and current.** `expires_at` MUST be present, MUST
+   be an RFC 3339 instant, and MUST be in the future. An unparseable
+   timestamp is a rejection, never an absent constraint.
+
+For the `ed25519-jcs` profile a verifier MUST accept an issuer trust
+root published as an RFC 8037 Ed25519 OKP JWK (`kty: "OKP"`,
+`crv: "Ed25519"`, base64url `x`), which is what a JWKS-publishing issuer
+serves.
 
 Because `capsule_id = SHA-256(domain ‖ originator_pubkey ‖ first_event_hash)`
 depends only on the originator key and first event, it is known before
@@ -255,6 +293,23 @@ content index makes it tamper-evident) or delivered as a **detached
 sidecar** and re-associated by `capsule_id`. Embedding is preferred: the
 attestation travels with the file and cannot be altered without failing
 verification.
+
+Embedding the attestation document alone is not yet fully
+self-contained verification. Everything required to verify must be
+capturable inside the capsule at seal time — discovery is an
+optimization, never a precondition — and an audit years later will have
+no live issuer and no host cache. Checking an embedded attestation
+additionally needs (a) the issuer's trust-root key material as it stood
+at seal time (the JWKS entry named by `kid`), (b) the expected issuer
+identity, and (c) for the JWT profile, the audience the token was
+minted for. Today (a)–(c) are host trust configuration with no defined
+location in the capsule layout; a capsule MAY carry a snapshot of them
+alongside the attestation, but a verifier MUST still treat any embedded
+trust-root material as *self-attested* — trust derives only from
+matching it against keys the host obtained out-of-band, exactly as
+[trust.md](trust.md) requires for signer keys. Defining a normative
+embedded location for attestations, trust-root snapshots, and anchor
+proofs is an open v0.8 item.
 
 The attestation answers "who controls this key"; the signer document
 answers "does the issuer still vouch for it". They are independent
@@ -268,14 +323,24 @@ Mirrors the envelope-signing discipline: domain separation + JCS +
 raw-byte Ed25519, never hashing hex strings.
 
 ```
-signing_input = "capsule-identity-attestation-v0.6\x00" ‖ JCS(attestation_without_signature)
+signing_input = "capsule-identity-attestation-v<V>\x00" ‖ JCS(attestation_without_signature)
 signature     = Ed25519(issuer_trust_root_private_key, signing_input)
 ```
+
+`<V>` is the attestation's own declared `spec_version` — which sits
+inside the signed payload, so it cannot be replayed across eras. An
+issuer signs at the current spec version; a verifier reconstructs the
+domain from the declared version when it is a KNOWN one, and treats a
+well-formed unknown version as `attestation_unverified` (a verifier
+limitation, not a negative fact — the versioning.md diagnosis rule
+applied to the overlay). Previously issued v0.6 attestations therefore
+stay verifiable forever (conformance vector
+`valid-previous-spec-version`).
 
 ```json
 {
   "typ": "capsule-identity-attestation",
-  "spec_version": "0.6",
+  "spec_version": "0.7",
   "alg": "ed25519-jcs",
   "issuer": "https://capsules.example",
   "kid": "issuer-key-1",
@@ -311,10 +376,10 @@ realization). Authoring resolves recipient keys and passes them to
 can decide whether to proceed. Decryption never consults the directory —
 the recipient holds the matching X25519 private key locally.
 
-## Temporal anchoring (v0.7 companion)
+## Temporal anchoring (v0.8 companion)
 
 Key lifecycle only works if "when was this sealed" has evidence better
-than self-attested `signed_at`. The companion v0.7 change: envelopes
+than self-attested `signed_at`. The companion v0.8 change: envelopes
 MAY carry an `anchors` array:
 
 ```json
@@ -343,6 +408,12 @@ role such as an org `admin`) sign a capsule, with a quorum. This is
 where the layers compose. A signer counts toward a requirement only if
 **all** of the following hold:
 
+0. **Bound signer set** — the envelope signer set matches
+   `manifest.signer_commitment` (see [envelope.md](envelope.md) "Signer
+   set binding"). A host evaluating quorum over an *unbound* set is
+   evaluating policy over an unauthenticated input; hosts with quorum
+   requirements SHOULD require the commitment to be present. Counting
+   is always over distinct public keys, never signer rows.
 1. **Valid signature** — the signer is valid in the L2 verification
    result.
 2. **Trusted key** — the key is on the host's allowlist, derived from
@@ -354,7 +425,11 @@ where the layers compose. A signer counts toward a requirement only if
    anchors preferred; self-attested `signed_at` otherwise).
 4. **Attested identity** — where the requirement is identity-scoped,
    the signer is covered by a verified identity attestation for the
-   required role (and, if scoped, the required provider role).
+   required role (and, if scoped, the required provider role). The
+   attestation MUST be one whose `capsule_id` binds **this** capsule:
+   policy evaluation re-checks the binding rather than matching
+   attestations to signers by public key alone, so a cross-capsule
+   replay cannot satisfy a requirement.
 
 Policy evaluation is a pure function of the verification result,
 verified attestations, and cached issuer documents — no network, no
@@ -383,8 +458,19 @@ Attestation-layer categories:
   issuer. Unknown, not negative: the signer is *valid but
   identity-unverified*.
 - `attestation_rejected` — trust roots present but the attestation is
-  expired, its signature fails, or its `capsule_id`/`signer_public_key`
-  binding does not match. Strong negative signal.
+  expired, its signature fails, its binding claims are absent, or its
+  `capsule_id`/`signer_public_key`/issuer binding does not match. Strong
+  negative signal.
+
+These two outcomes are oppositely signed and MUST stay distinguishable
+in an implementation's result: an adapter that collapses both into a
+bare "not ok" destroys the distinction this vocabulary exists to draw.
+The reference adapter reports `attestation_verified`,
+`attestation_unverified`, or `attestation_rejected` on every result —
+and returns the subject identity only inside a structure that carries
+that status, never as a bare field a caller can read while skipping the
+verdict — and `spec/vectors/identity-attestation/vectors.json` pins
+those outcomes.
 
 The verifier's L2 math result is unchanged in every case.
 
@@ -407,10 +493,10 @@ The verifier's L2 math result is unchanged in every case.
 
 1. Should the signer document itself be signed (self-signed by a
    long-lived issuer root key, or witnessed via Rekor), or is HTTPS +
-   caching + `previous` archaeology sufficient for v0.7?
+   caching + `previous` archaeology sufficient for v0.8?
 2. Minimum required cache/staleness semantics, or leave entirely to
    host policy?
 3. Whether `retired` needs a machine-readable successor-key pointer
    for rotation UX.
-4. Whether the DNS TXT method earns its place in v0.7 or waits for
+4. Whether the DNS TXT method earns its place in v0.8 or waits for
    demand.

@@ -87,7 +87,7 @@ legal, compliance, security, or operational guidance.
       payload: { summary: "Created generic table data." },
     },
     {
-      actor: "tool:renderer",
+      actor: "system:renderer",
       kind: "observation",
       action: "rendered_workproduct",
       target: "payload/workproduct/table-graph.html",

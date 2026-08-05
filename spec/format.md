@@ -61,10 +61,10 @@ Optional but conventional:
 For encrypted capsules, the inner shape contains the required files; the
 outer shape replaces them with `content.enc` plus decryption metadata.
 
-## Files that are *not* part of v0.6
+## Files that are *not* part of v0.7
 
 The following files appeared in the prior format and are not part of
-v0.6:
+v0.7:
 
 - `surface.md` — replaced by `program.md`
 - `handoff.md` — folded into `program.md` as a "Continuation" section
@@ -74,11 +74,21 @@ v0.6:
 - `surface-citations.md` convention — ordinary markdown links
 
 A reader that encounters these files in an old capsule should ignore
-them (they are not authoritative under v0.6) but should not error.
+them (they are not authoritative under v0.7) but should not error.
+
+How readers treat capsules whose *declared format version* differs from
+their own — known-older versions open forever; unknown versions fail
+closed with a non-tamper diagnosis — is defined in
+[versioning.md](versioning.md).
 
 ## Container properties
 
-- File entries are sorted by path, ASCII order.
+- File entries are sorted by path on **UTF-16 code-unit sequences** — the
+  same ordering RFC 8785 §3.2.3 applies to object members, so every
+  conforming implementation lays the entries out in the same order. NOT
+  Unicode code-point order; the two disagree once a supplementary-plane
+  path (>= U+10000) is compared against a path in U+E000..U+FFFF. Pinned by
+  `spec/vectors/jcs-key-order.json`.
 - Internal ZIP timestamps are fixed at `1980-01-01T00:00:00Z` (the ZIP
   epoch) so identical content produces identical bytes.
 - Compression: `STORED` (no compression). This makes archive bytes a
@@ -93,6 +103,20 @@ them (they are not authoritative under v0.6) but should not error.
   archive's central directory. A reader whose ZIP library sanitizes or
   deduplicates names on load must check the raw central directory
   itself, or it will silently accept archives that other readers reject.
+- The central directory is the authoritative entry set. After extraction
+  a reader MUST assert that the set of entries it produced is exactly the
+  set of non-directory names the central-directory scan admitted. A name
+  the scan admitted but the extractor dropped, or a name the extractor
+  produced that the scan never saw, is a rejection.
+- Directory-ness MUST be unambiguous. An entry whose external attributes
+  set the DOS directory bit (`0x10`) on a name that does not end in `/`
+  is rejected, and so is a `/`-terminated name that declares a nonzero
+  uncompressed or compressed size. Readers disagree about which signal
+  wins, so a signed capsule must never contain either shape.
+- An entry's name in the LOCAL file header MUST equal its
+  central-directory name. Some ZIP libraries re-key entries by the local
+  name, so a mismatch lets two conforming readers extract different
+  content under the same path.
 - File-count and total-uncompressed-size limits are configurable on the
   reader; defaults are 10,000 entries and 1 GiB. Exceeding either is a
   rejection.
@@ -109,3 +133,9 @@ they are required to produce archives whose `content_index` (per-file
 hashes) match, and whose canonical envelope payload matches.
 
 This is the right boundary because it is what an auditor actually checks.
+
+The lineage declaration respects the same boundary: a
+`manifest.predecessors` entry pins a predecessor by its recomputed
+`capsule_id` and `manifest_hash` — the hashes the format defines — never
+by archive bytes, so a predecessor repacked by a conforming tool still
+matches its declaration ([lineage.md](lineage.md)).

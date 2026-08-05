@@ -1,0 +1,412 @@
+{
+  "meta": {
+    "kind": "identity-attestation",
+    "name": "identity-attestation",
+    "spec_version": "0.7",
+    "description": "Language-neutral attestation-layer outcomes for the native ed25519-jcs profile. Implementations SHOULD reproduce ok and status; status is the vocabulary of spec/federation.md 'Failure reporting'.",
+    "generator": "sdk-js/tools/generate-attestation-vectors.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "trust_roots": {
+    "keys": [
+      {
+        "kid": "issuer-key-1",
+        "alg": "ed25519-jcs",
+        "public_key_hex": "712651f450ba05b63898b99ef5f7ba45632e8e2527f7f715cd671ec4024cc51e"
+      }
+    ]
+  },
+  "context": {
+    "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected_issuer": "https://capsules.example",
+    "now": "2026-05-07T12:00:00Z"
+  },
+  "vectors": [
+    {
+      "name": "valid",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "107d15a9d1f3b21989382caa80e78ec09a7fbfb6b1a79b3cf49a802624d9a214b649851cd4c74ec66160b3aa39d90de607a6fd8d225284522fd3ea48785fa10a"
+      },
+      "expected": {
+        "ok": true,
+        "status": "attestation_verified"
+      }
+    },
+    {
+      "name": "valid-previous-spec-version",
+      "note": "FROZEN backward-compatibility evidence: a genuine v0.6 attestation issued by the pre-bump SDK, byte-preserved. The ed25519-jcs signing domain embeds the DECLARED spec_version (which is itself under the signature), so a current verifier must reconstruct capsule-identity-attestation-v0.6 for it and accept — previously issued attestations stay verifiable forever.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.6",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "7a54edefdc3d9141b19e21b86031c7f8baab534e133d0240c2d53cb7a80e5362e282b992a63174c51fad9bbbbebea937b91c589a571de990ea1140f5f00c0c03"
+      },
+      "expected": {
+        "ok": true,
+        "status": "attestation_verified"
+      }
+    },
+    {
+      "name": "spec-version-unknown-newer",
+      "note": "Declares spec_version 9.9, internally coherent under the 9.9 domain. This verifier cannot reconstruct that era's signing domain; checking the signature under the wrong domain would read as tampering, so the outcome is UNVERIFIED (unknown, not negative) with a verifier-too-old diagnosis, mirroring spec/versioning.md.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "9.9",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "7884d25be94543188322490c747b282ffdb329b7f0b125ac139aef11d86edc82f3afde65eccef4008d602c70cb9efc868efacfc44821c0f911d5954048e36e01"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_unverified",
+        "error_includes": "newer than this verifier supports"
+      }
+    },
+    {
+      "name": "valid-okp-jwk-trust-root",
+      "note": "The same attestation, with the issuer's trust root published as an RFC 8037 Ed25519 OKP JWK.",
+      "trust_roots": {
+        "keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "alg": "EdDSA",
+            "use": "sig",
+            "kid": "issuer-key-1",
+            "x": "cSZR9FC6BbY4mLme9fe6RWMujiUn9_cVzWcexAJMxR4"
+          }
+        ]
+      },
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "107d15a9d1f3b21989382caa80e78ec09a7fbfb6b1a79b3cf49a802624d9a214b649851cd4c74ec66160b3aa39d90de607a6fd8d225284522fd3ea48785fa10a"
+      },
+      "expected": {
+        "ok": true,
+        "status": "attestation_verified"
+      }
+    },
+    {
+      "name": "no-binding-claims",
+      "note": "Binding claims are mandatory; an attestation without them binds nothing.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z"
+        },
+        "signature": "107d15a9d1f3b21989382caa80e78ec09a7fbfb6b1a79b3cf49a802624d9a214b649851cd4c74ec66160b3aa39d90de607a6fd8d225284522fd3ea48785fa10a"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "missing required binding claim 'capsule_id'"
+      }
+    },
+    {
+      "name": "capsule-id-replay",
+      "note": "Validly signed, but bound to a different capsule.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "signature": "2ad8f9f9c0eac4ba347985883a33bb858eef909bb283623062ca9715bd26f5f0210b7835370a867f19bf103c6d52fc023724fa5c854cbddb5a2f39885de28503"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "capsule_id binding mismatch"
+      }
+    },
+    {
+      "name": "signer-key-mismatch",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "b57848fb41d3753e5048a65b6a6bd423931f09e2560e05f1c5afbe59eacd8049f83da2277ca06bd0098855f2b06305bbe4af725c526f621a91c8f61bffcde403"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "signer_public_key binding mismatch"
+      }
+    },
+    {
+      "name": "expired",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2026-05-06T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "e765439c5b5cbc87853e5b4390ad47d55153ad2220de58a077e6fbb52d8c721fa9e0ee1cab3db90636cb83ca48254a1c1d3c5189bd1bf6f9eb4fb0589533d60a"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "attestation expired"
+      }
+    },
+    {
+      "name": "expires-at-unparseable",
+      "note": "NaN must never read as 'never expires'.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "whenever",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "95135ed1ceabac5cefd297c9ac768e1b1dcb66f0d139c0d2debec9ade137b3205f23c22edc72f8905e0b031dccee5b594a93be2b04cf0197d510e1c84ab2c801"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "expires_at is not an RFC 3339 instant"
+      }
+    },
+    {
+      "name": "tampered-claims",
+      "note": "A subject claim edited after signing.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "superadmin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "107d15a9d1f3b21989382caa80e78ec09a7fbfb6b1a79b3cf49a802624d9a214b649851cd4c74ec66160b3aa39d90de607a6fd8d225284522fd3ea48785fa10a"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "attestation signature invalid"
+      }
+    },
+    {
+      "name": "issuer-mismatch",
+      "note": "Signed by a key the host holds, but issued under another issuer identity.",
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://other.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "27c80832015702b5d914ea264343ac70658f0800dd0361c2b33b613a0e27bd1a01ce9be3031d7372278cb5f3ee06e476d2dcdacc5cc22484ac7ca30e7f3ce90b"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_rejected",
+        "error_includes": "attestation issuer mismatch"
+      }
+    },
+    {
+      "name": "unknown-kid",
+      "note": "kid selects the key; an unknown kid resolves to no key rather than falling back.",
+      "trust_roots": {
+        "keys": [
+          {
+            "kid": "issuer-key-1",
+            "alg": "ed25519-jcs",
+            "public_key_hex": "712651f450ba05b63898b99ef5f7ba45632e8e2527f7f715cd671ec4024cc51e"
+          },
+          {
+            "kid": "issuer-key-2",
+            "alg": "ed25519-jcs",
+            "public_key_hex": "dcb38143815f465d8d8d262812260ade8e721b3fe15da833ad477dd711ebc10f"
+          }
+        ]
+      },
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-retired",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "28c7a0c1b1c63464f0475560e2f9c3e61479505812b525e34026eecb3f59e0ff0711cfe70b74cfc504d3c8ab25cef40c5ebd1a70f9f4198c73215e998b811e06"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_unverified",
+        "error_includes": "no trust-root key for kid=issuer-key-retired"
+      }
+    },
+    {
+      "name": "no-trust-roots",
+      "note": "Unknown, NOT negative: the host caches no key for this issuer.",
+      "trust_roots": {
+        "keys": []
+      },
+      "attestation": {
+        "typ": "capsule-identity-attestation",
+        "spec_version": "0.7",
+        "alg": "ed25519-jcs",
+        "issuer": "https://capsules.example",
+        "kid": "issuer-key-1",
+        "claims": {
+          "signer_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signer_role": "originator",
+          "subject": {
+            "clerk_user_id": "user_1",
+            "org_role": "admin"
+          },
+          "issued_at": "2026-05-07T12:00:00Z",
+          "expires_at": "2027-05-07T12:00:00Z",
+          "capsule_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "signature": "107d15a9d1f3b21989382caa80e78ec09a7fbfb6b1a79b3cf49a802624d9a214b649851cd4c74ec66160b3aa39d90de607a6fd8d225284522fd3ea48785fa10a"
+      },
+      "expected": {
+        "ok": false,
+        "status": "attestation_unverified",
+        "error_includes": "no trust-root key"
+      }
+    }
+  ]
+}

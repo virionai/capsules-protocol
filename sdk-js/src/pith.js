@@ -1,4 +1,4 @@
-// Pith — context-style discipline for capsule narrative fields.
+// Pith — authoring-layer normalizer for capsule narrative fields.
 //
 // This is a *normalizer*, not "compression" in the
 // information-theoretic sense. It deterministically rewrites a small
@@ -12,8 +12,17 @@
 // that fields written without LLM judgment still come out terse and
 // regular.
 //
-// Applied automatically by CapsuleBuilder.appendEvent() to event
-// payload fields commonly used for narrative:
+// Pith is OPT-IN at the builder: pass { pith: true } to the
+// CapsuleBuilder constructor (or per event) to have appendEvent()
+// normalize the narrative payload fields below. An author who writes
+// prose gets their prose — lossy normalization is never a default,
+// because the rewrite lands inside the hash chain where the original
+// is not preserved (ROADMAP: Pith is an authoring/profile discipline,
+// not a protocol requirement). When normalization DID change a field,
+// the builder records it in the event's `pith_normalized_fields`
+// member (spec/chain.md), so the rewrite is discoverable, not silent.
+//
+// Narrative fields the normalizer targets:
 //   - payload.summary
 //   - payload.statement
 //   - payload.note
@@ -21,10 +30,22 @@
 //   - payload.decisions[].text
 //   - payload.milestones[].text
 //
-// Pass { pith: false } to appendEvent() to opt out, or call
-// compressEventPayload() / compressText() directly.
+// MEANING PRESERVATION. The v0.6 splitter treated every [.!?] as a
+// sentence boundary, so a dot inside an identifier (ledger.entry_audit)
+// or a decimal (12.4k) fragmented the sentence, burned the sentence
+// budget, and silently deleted trailing sentences — technical prose
+// was corrupted inside the hash chain. The scanner below only ends a
+// sentence at a terminator that is followed by whitespace (or end of
+// input), never mid-token, and errs toward keeping text: dropping a
+// real boundary merges two sentences (more text survives); inventing
+// one deletes content. Selection cuts the original string at sentence
+// ends — kept text is byte-identical to the input.
 
-export const PITH_VERSION = "0.6";
+import { CURRENT_VERSION } from "./versions.js";
+
+// Pith is versioned with the spec (never a separate literal — a second
+// copy is exactly how a bump leaves a stale era behind).
+export const PITH_VERSION = CURRENT_VERSION;
 const DEFAULT_MAX_CHARS = 280;
 const DEFAULT_MAX_SENTENCES = 3;
 const ELLIPSIS = "…";
@@ -55,20 +76,42 @@ export function compressText(input, options = {}) {
 }
 
 /**
+ * Deep-clone `payload`, normalize the known narrative fields, and report
+ * which top-level payload members actually changed.
+ *
+ * Returns { payload, normalizedFields } where normalizedFields is a list
+ * of paths in the spec/chain.md payload-path grammar ("payload.summary",
+ * "payload.open_items", ...) naming exactly the members whose text the
+ * normalizer rewrote. Non-narrative fields (numbers, IDs, hashes, JSON
+ * structures) are preserved verbatim and never reported.
+ */
+export function normalizeEventPayload(payload, options = {}) {
+  const copy = cloneJson(payload);
+  const normalizedFields = [];
+  if (!isRecord(copy)) return { payload: copy, normalizedFields };
+  for (const key of ["summary", "statement", "note"]) {
+    if (compressStringField(copy, key, options)) normalizedFields.push(`payload.${key}`);
+  }
+  for (const [listKey, textKey] of [
+    ["open_items", "item"],
+    ["decisions", "text"],
+    ["milestones", "text"],
+  ]) {
+    if (compressTextListField(copy, listKey, textKey, options)) {
+      normalizedFields.push(`payload.${listKey}`);
+    }
+  }
+  return { payload: copy, normalizedFields };
+}
+
+/**
  * Return a deep-cloned copy of `payload` with known narrative fields
  * normalized. Non-narrative fields (numbers, IDs, hashes, JSON
- * structures) are preserved verbatim.
+ * structures) are preserved verbatim. (normalizeEventPayload without
+ * the change report.)
  */
 export function compressEventPayload(payload, options = {}) {
-  const copy = cloneJson(payload);
-  if (!isRecord(copy)) return copy;
-  compressStringField(copy, "summary", options);
-  compressStringField(copy, "statement", options);
-  compressStringField(copy, "note", options);
-  compressTextListField(copy, "open_items", "item", options);
-  compressTextListField(copy, "decisions", "text", options);
-  compressTextListField(copy, "milestones", "text", options);
-  return copy;
+  return normalizeEventPayload(payload, options).payload;
 }
 
 // ---------- internals ----------
@@ -82,21 +125,113 @@ function normalizeWhitespace(input) {
     .join(" ");
 }
 
+// Fullwidth terminators end a sentence unconditionally: they never
+// appear inside identifiers, decimals, or abbreviations.
+const CJK_TERMINATORS = new Set(["。", "！", "？", "｡"]); // 。 ！ ？ ｡
+// Closing quotes/brackets that stay attached to the sentence they close.
+const SENTENCE_CLOSERS = new Set(['"', "'", ")", "]", "}", "»", "’", "”"]);
+// Opening punctuation stripped from a token before the abbreviation check.
+const TOKEN_OPENERS = new Set(['"', "'", "(", "[", "{", "«", "‘", "“"]);
+// Common abbreviations whose trailing dot is not a sentence boundary.
+// Kept deliberately small and technical-prose-oriented; a miss merely
+// merges two sentences (keeps more text), never deletes content.
+const ABBREVIATIONS = new Set([
+  "e.g", "i.e", "eg", "ie", "etc", "vs", "cf", "ca", "al", "approx",
+  "no", "nr", "fig", "figs", "eq", "sec", "ver", "rev", "resp",
+  "dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "dept", "inc", "ltd", "co",
+]);
+
+const LOWERCASE_LETTER = /\p{Ll}/u;
+
+function isWhitespace(ch) {
+  return /\s/u.test(ch);
+}
+
+/**
+ * Exclusive end offsets of each sentence in `input` (whitespace-
+ * normalized text). A sentence ends at:
+ *   - a fullwidth CJK terminator (plus any attached closers), always; or
+ *   - an ASCII [.!?]+ run (plus any attached closers) that is followed
+ *     by whitespace or end of input, where the next non-space character
+ *     is not a lowercase letter, and — for a single '.' — the preceding
+ *     token is neither a known abbreviation nor a single-letter initial.
+ * A dot inside a token (identifier, decimal, version, URL) is never
+ * followed by whitespace, so it can never end a sentence.
+ */
+function sentenceEndOffsets(input) {
+  const offsets = [];
+  const n = input.length;
+  let i = 0;
+  while (i < n) {
+    const ch = input[i];
+    if (CJK_TERMINATORS.has(ch)) {
+      let j = i + 1;
+      while (j < n && (CJK_TERMINATORS.has(input[j]) || SENTENCE_CLOSERS.has(input[j]))) j++;
+      offsets.push(j);
+      i = j;
+      continue;
+    }
+    if (ch === "." || ch === "!" || ch === "?") {
+      let j = i + 1;
+      while (j < n && (input[j] === "." || input[j] === "!" || input[j] === "?")) j++;
+      const runLength = j - i;
+      let k = j;
+      while (k < n && SENTENCE_CLOSERS.has(input[k])) k++;
+      if (k < n && !isWhitespace(input[k])) {
+        i = j; // mid-token dot (a.b, 12.4, v0.7, example.com) — not a boundary
+        continue;
+      }
+      let m = k;
+      while (m < n && isWhitespace(input[m])) m++;
+      if (m < n && LOWERCASE_LETTER.test(String.fromCodePoint(input.codePointAt(m)))) {
+        i = j; // lowercase continuation — err toward keeping one sentence
+        continue;
+      }
+      if (runLength === 1 && ch === "." && precedingTokenBlocksBoundary(input, i)) {
+        i = j; // abbreviation ("e.g.", "etc.") or initial ("J.")
+        continue;
+      }
+      offsets.push(k);
+      i = k;
+      continue;
+    }
+    i++;
+  }
+  if (offsets.length === 0 || offsets[offsets.length - 1] < n) {
+    offsets.push(n); // trailing unterminated text is the final sentence
+  }
+  return offsets;
+}
+
+/** True when the token ending at `dotIndex` is an abbreviation or initial. */
+function precedingTokenBlocksBoundary(input, dotIndex) {
+  let start = dotIndex;
+  while (start > 0 && !isWhitespace(input[start - 1])) start--;
+  let token = input.slice(start, dotIndex);
+  while (token.length > 0 && TOKEN_OPENERS.has(token[0])) token = token.slice(1);
+  if (token.length === 0) return false;
+  if (/^[A-Z]$/.test(token)) return true; // "J." in "J. Smith"
+  return ABBREVIATIONS.has(token.toLowerCase());
+}
+
 function firstSentences(input, maxSentences) {
   if (input.length === 0) return input;
-  const matches = input.match(/[^.!?]+(?:[.!?]+|$)/g);
-  if (!matches) return input;
-  const sentences = matches.map((s) => s.trim()).filter((s) => s.length > 0);
-  if (sentences.length <= maxSentences) return input;
-  return sentences.slice(0, maxSentences).join(" ");
+  const ends = sentenceEndOffsets(input);
+  if (ends.length <= maxSentences) return input;
+  // Cut the ORIGINAL string at the Nth sentence end: kept text is
+  // byte-identical to the input (no re-joining, no inserted spaces).
+  return input.slice(0, ends[maxSentences - 1]).trimEnd();
 }
 
 function truncateAtWordBoundary(input, maxChars) {
   if (input.length <= maxChars) return input;
-  if (maxChars <= ELLIPSIS.length) return ELLIPSIS.slice(0, maxChars);
+  // maxChars is a positive integer and ELLIPSIS is one UTF-16 code unit,
+  // so this branch is only reachable with maxChars === 1: there is no room
+  // for content, only the ellipsis itself.
+  if (maxChars <= ELLIPSIS.length) return ELLIPSIS;
 
   const limit = maxChars - ELLIPSIS.length;
-  const prefix = input.slice(0, limit);
+  const prefix = sliceAtCodePointBoundary(input, limit);
   const trimmedPrefix = prefix.trimEnd();
   const lastSpace = trimmedPrefix.lastIndexOf(" ");
   const minimumUsefulBoundary = Math.floor(limit * 0.6);
@@ -110,21 +245,44 @@ function truncateAtWordBoundary(input, maxChars) {
   return `${cleaned.length > 0 ? cleaned : trimmedPrefix}${ELLIPSIS}`;
 }
 
+/**
+ * `input.slice(0, limit)` cuts UTF-16 code units. When the code unit at
+ * `limit - 1` is a high surrogate its low surrogate lives at `limit`, so a
+ * naive slice ends in a lone surrogate — text that is no longer well-formed
+ * Unicode and that the JCS acceptance boundary rejects at seal time
+ * (spec/canonicalization.md). Drop the straddling unit instead.
+ *
+ * `limit` is always >= 1 here because the maxChars <= ELLIPSIS.length case
+ * returns earlier.
+ */
+function sliceAtCodePointBoundary(input, limit) {
+  if (limit >= input.length) return input;
+  const unit = input.charCodeAt(limit - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) return input.slice(0, limit - 1);
+  return input.slice(0, limit);
+}
+
 function positiveIntegerOrDefault(value, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+/** Normalize record[key] in place; true when the text actually changed. */
 function compressStringField(record, key, options) {
-  if (typeof record[key] !== "string") return;
-  record[key] = compressText(record[key], options).text;
+  if (typeof record[key] !== "string") return false;
+  const before = record[key];
+  record[key] = compressText(before, options).text;
+  return record[key] !== before;
 }
 
+/** Normalize entry[textKey] across a list; true when any entry changed. */
 function compressTextListField(record, listKey, textKey, options) {
   const list = record[listKey];
-  if (!Array.isArray(list)) return;
+  if (!Array.isArray(list)) return false;
+  let changed = false;
   for (const entry of list) {
-    if (isRecord(entry)) compressStringField(entry, textKey, options);
+    if (isRecord(entry) && compressStringField(entry, textKey, options)) changed = true;
   }
+  return changed;
 }
 
 function cloneJson(value) {

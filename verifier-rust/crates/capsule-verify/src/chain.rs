@@ -13,10 +13,107 @@
 
 use crate::crypto::{bytes_to_hex, hex_to_bytes, sha256};
 use crate::jcs::jcs;
-use crate::schemas::ChainEvent;
+use crate::schemas::ParsedEvent;
 
 /// Genesis previous-hash: 32 zero bytes.
 const GENESIS_PREV: [u8; 32] = [0u8; 32];
+
+/// The closed `kind` enum from `chain.md` "Field rules". Readers reject
+/// unknown kinds and the reference builders refuse to append them — in
+/// every tier, because a custom kind is not a weaker claim, it is
+/// unreadable to the foreign LLM reader the format serves.
+pub const EVENT_KINDS: [&str; 5] = [
+    "decision",
+    "observation",
+    "mutation",
+    "session",
+    "checkpoint",
+];
+
+/// True when `kind` is one of the five values `chain.md` allows.
+pub fn is_valid_event_kind(kind: &str) -> bool {
+    EVENT_KINDS.contains(&kind)
+}
+
+/// The CLOSED actor-id namespace set from `manifest.md` "Field rules":
+/// `participants[].actor_id` must match `human:<id>`, `ai:<id>`,
+/// `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+pub const ACTOR_NAMESPACES: [&str; 4] = ["human", "ai", "system", "capsule"];
+
+/// True when `actor_id` is `<namespace>:<id>` with a known namespace and
+/// non-empty id. Case-sensitive; no surrounding whitespace allowed.
+/// Pinned by the `chain-rules/invalid-actor-namespace` vector.
+pub fn is_valid_actor_id(actor_id: &str) -> bool {
+    match actor_id.split_once(':') {
+        Some((namespace, id)) => ACTOR_NAMESPACES.contains(&namespace) && !id.is_empty(),
+        None => false,
+    }
+}
+
+/// Validate declared `participants[]` entries against the manifest.md
+/// field rules. Returns problem strings prefixed `participants[i]` (empty
+/// = well-formed); callers add their own context (`manifest.` at the top
+/// level, `L3 inner: manifest.` for the inner manifest). Mirrors the JS
+/// reference's `participantActorIdProblems` message-for-message:
+///
+///   - an entry with no interpretable string `actor_id` — an object
+///     without the member, a non-string value, or a non-object/non-string
+///     entry — is a DECLARED participant no reader can bind ("must be a
+///     string" diagnosis, conformance vector
+///     chain-rules/participant-missing-actor-id);
+///   - an interpretable id outside the closed namespace grammar gets the
+///     "does not match" diagnosis (chain-rules/invalid-actor-namespace).
+///
+/// Advisory members (`role`, `label`) are never inspected here — they are
+/// not verification inputs (chain-rules/advisory-members-any-type).
+pub(crate) fn participant_actor_id_problems(
+    participants: &[crate::schemas::Participant],
+) -> Vec<String> {
+    const GRAMMAR: &str = "(human:, ai:, system:, capsule:)";
+    let mut problems = Vec::new();
+    for (i, p) in participants.iter().enumerate() {
+        match p.actor_id.as_deref() {
+            None => problems.push(format!(
+                "participants[{i}].actor_id must be a string in an allowed namespace {GRAMMAR}"
+            )),
+            Some(id) if !is_valid_actor_id(id) => problems.push(format!(
+                "participants[{i}].actor_id {id:?} does not match an allowed namespace {GRAMMAR}"
+            )),
+            Some(_) => {}
+        }
+    }
+    problems
+}
+
+/// The normative `untrusted_payload_fields` path grammar from `chain.md`
+/// "Untrusted content":
+///
+/// ```text
+/// path    = "payload" 1*( "." segment )
+/// segment = 1*( ALPHA / DIGIT / "_" / "-" )
+/// ```
+///
+/// A marking outside the grammar has no defined resolution — a host cannot
+/// tell which payload member the author marked untrusted — so verifiers
+/// reject it fail-closed (vector `chain-rules/invalid-untrusted-path`).
+pub fn is_valid_untrusted_payload_path(path: &str) -> bool {
+    let mut segments = path.split('.');
+    if segments.next() != Some("payload") {
+        return false;
+    }
+    let mut any = false;
+    for seg in segments {
+        any = true;
+        if seg.is_empty()
+            || !seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return false;
+        }
+    }
+    any
+}
 
 /// One human-readable error from a chain walk. The message is prefixed with
 /// the event sequence number to match the JS reference's error shape, which
@@ -68,11 +165,17 @@ pub fn hash_event_value(event_minus_hash: &serde_json::Value) -> Option<[u8; 32]
 /// Mirrors `verifyChain` in `sdk-js/src/chain.js`. The error messages here are
 /// kept verbatim with the JS strings except for substitution syntax (Rust
 /// `{}` vs JS template literal).
-pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
+///
+/// Structural checks (seq, prev_hash linkage, hash shape) read the typed
+/// view; the hash recompute canonicalises the PRESERVED raw tree minus
+/// `hash`, so unknown members an event carries are included exactly as the
+/// signer hashed them — never a struct round-trip, which would drop them.
+pub fn verify_chain(events: &[ParsedEvent]) -> Vec<ChainErr> {
     let mut errors: Vec<ChainErr> = Vec::new();
     let mut prev: [u8; 32] = GENESIS_PREV;
 
-    for (i, event) in events.iter().enumerate() {
+    for (i, parsed) in events.iter().enumerate() {
+        let event = &parsed.event;
         let expected_seq = (i as u64) + 1;
         let seq_for_msg = if event.seq == 0 { expected_seq } else { event.seq };
 
@@ -110,20 +213,24 @@ pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
             continue;
         }
 
-        // Recompute the hash. Strip `hash` from the serialized form, then
-        // hash `prev_raw || JCS(rest)`.
-        let mut event_value = match serde_json::to_value(event) {
-            Ok(v) => v,
-            Err(e) => {
-                errors.push(ChainErr {
-                    seq: seq_for_msg,
-                    message: format!("recompute failed: {e}"),
-                });
-                continue;
-            }
-        };
+        // Recompute the hash. Strip `hash` from the PRESERVED raw tree,
+        // then hash `prev_raw || JCS(rest)`. The raw tree (not the typed
+        // struct) is the canonicalization input so unknown members and
+        // absent optional fields round-trip exactly as sealed.
+        let mut event_value = parsed.raw.clone();
         if let Some(map) = event_value.as_object_mut() {
             map.remove("hash");
+        }
+        // I-JSON acceptance boundary (spec/canonicalization.md). Reported as
+        // its own error rather than folded into a hash mismatch, so an
+        // out-of-range number reads as a canonicalization refusal instead of
+        // looking like tampering.
+        if let Err(message) = crate::jcs::check_ijson(&event_value) {
+            errors.push(ChainErr {
+                seq: seq_for_msg,
+                message,
+            });
+            continue;
         }
         let recomputed = match hash_event_value(&event_value) {
             Some(h) => h,
@@ -168,10 +275,10 @@ pub fn verify_chain(events: &[ChainEvent]) -> Vec<ChainErr> {
 /// `None` when empty. Mirrors `firstAndEntryHash` in the JS SDK except that
 /// emptiness is reported via `Option` rather than a thrown error — the
 /// top-level verifier already special-cases empty chains.
-pub fn first_and_entry_hash(events: &[ChainEvent]) -> Option<(&str, &str)> {
+pub fn first_and_entry_hash(events: &[ParsedEvent]) -> Option<(&str, &str)> {
     let first = events.first()?;
     let last = events.last()?;
-    Some((first.hash.as_str(), last.hash.as_str()))
+    Some((first.event.hash.as_str(), last.event.hash.as_str()))
 }
 
 #[cfg(test)]
@@ -203,13 +310,13 @@ mod tests {
         let events = parse_chain_jsonl(jsonl).unwrap();
 
         let (first, last) = first_and_entry_hash(&events).expect("non-empty chain");
-        assert_eq!(first, events[0].hash);
-        assert_eq!(last, events.last().unwrap().hash);
+        assert_eq!(first, events[0].event.hash);
+        assert_eq!(last, events.last().unwrap().event.hash);
     }
 
     #[test]
     fn first_and_entry_hash_empty() {
-        let events: Vec<ChainEvent> = Vec::new();
+        let events: Vec<ParsedEvent> = Vec::new();
         assert!(first_and_entry_hash(&events).is_none());
     }
 
@@ -219,13 +326,38 @@ mod tests {
         let map = unpack_zip(&bytes).unwrap();
         let jsonl = map.get("chain/events.jsonl").unwrap();
         let mut events = parse_chain_jsonl(jsonl).unwrap();
-        // Bump first event's seq from 1 → 99. The hash recompute will also
-        // fail (the canonical bytes change), so we expect AT LEAST a seq
-        // error; matching JS, both "seq" and "hash mismatch" lines show up.
-        events[0].seq = 99;
+        // Bump first event's seq from 1 → 99 in both the typed view and the
+        // preserved tree (as an on-disk mutation would). The hash recompute
+        // will also fail (the canonical bytes change), so we expect AT LEAST
+        // a seq error; matching JS, both "seq" and "hash mismatch" lines
+        // show up.
+        events[0].event.seq = 99;
+        events[0].raw["seq"] = serde_json::json!(99);
         let errors = verify_chain(&events);
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e.message.starts_with("seq 99 expected 1")));
+        assert!(errors.iter().any(|e| e.message.starts_with("hash mismatch")));
+    }
+
+    #[test]
+    fn rejects_event_payload_outside_ijson_acceptance_boundary() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let jsonl = map.get("chain/events.jsonl").unwrap();
+        let mut events = parse_chain_jsonl(jsonl).unwrap();
+        // A nanosecond timestamp: plausible payload, 19 digits, > 2^53 - 1.
+        events[0].raw["payload"] = serde_json::json!({ "ts_ns": 1_700_000_000_000_000_000u64 });
+        let errors = verify_chain(&events);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer outside IEEE-754 exact range")),
+            "expected an I-JSON acceptance error, got: {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.message.starts_with("hash mismatch")),
+            "a canonicalization refusal must not also be reported as tampering: {errors:?}"
+        );
     }
 
     #[test]
@@ -234,14 +366,69 @@ mod tests {
         let map = unpack_zip(&bytes).unwrap();
         let jsonl = map.get("chain/events.jsonl").unwrap();
         let mut events = parse_chain_jsonl(jsonl).unwrap();
-        // Mutate one byte of the first event's payload by replacing the
-        // payload entirely with an empty object. The chain hash MUST then
-        // fail to recompute.
-        events[0].payload = serde_json::json!({});
+        // Replace the first event's payload with an empty object in the
+        // PRESERVED tree — the tree is the hash recompute's input, matching
+        // an on-disk mutation. The chain hash MUST then fail to recompute.
+        events[0].raw["payload"] = serde_json::json!({});
         let errors = verify_chain(&events);
         assert!(
             errors.iter().any(|e| e.message.starts_with("hash mismatch")),
             "expected a hash-mismatch error, got: {errors:?}"
+        );
+    }
+
+    /// The hash preimage must be rebuilt from the ORIGINAL stored line,
+    /// never from a re-serialization of the typed [`crate::schemas::ChainEvent`].
+    /// `untrusted_payload_fields` carries `#[serde(default)]` and no
+    /// `skip_serializing_if`, so a struct round-trip re-emits an event whose
+    /// stored bytes omit the key with `"untrusted_payload_fields":[]`
+    /// injected — different JCS bytes, and a spurious hash mismatch on a
+    /// chain that is intact (amendment M06: such events pass the JS, Python
+    /// and Swift lanes). Regression pin for F41; the recompute reads
+    /// `ParsedEvent::raw`.
+    #[test]
+    fn recomputes_hash_from_stored_line_not_typed_struct() {
+        // Stored event bytes: note the absence of `untrusted_payload_fields`.
+        let mut event = serde_json::json!({
+            "seq": 1,
+            "event_id": "evt_001",
+            "actor": "system:host",
+            "kind": "observation",
+            "action": "session_ended",
+            "target": "capsule",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "payload": {},
+            "prev_hash": "0".repeat(64)
+        });
+        let hash = bytes_to_hex(&hash_event_value(&event).expect("event is hashable"));
+        event["hash"] = serde_json::Value::String(hash);
+        let line = format!("{}\n", serde_json::to_string(&event).expect("serialize"));
+
+        let events = parse_chain_jsonl(line.as_bytes()).expect("chain parses");
+        let errors = verify_chain(&events);
+        assert!(
+            errors.is_empty(),
+            "an event whose stored bytes omit untrusted_payload_fields must still \
+             verify; got: {errors:?}"
+        );
+    }
+
+    /// An unknown member added to an event's preserved tree changes the
+    /// recomputed hash — proving unknown members are canonicalised, i.e.
+    /// they sit inside the integrity envelope rather than being dropped.
+    #[test]
+    fn unknown_member_mutation_breaks_hash() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let jsonl = map.get("chain/events.jsonl").unwrap();
+        let mut events = parse_chain_jsonl(jsonl).unwrap();
+        assert!(verify_chain(&events).is_empty(), "clean chain must walk");
+
+        events[0].raw["x-acme-review-ticket"] = serde_json::json!("ACME-9999");
+        let errors = verify_chain(&events);
+        assert!(
+            errors.iter().any(|e| e.message.starts_with("hash mismatch")),
+            "post-seal unknown-member injection must break the event hash; got: {errors:?}"
         );
     }
 }

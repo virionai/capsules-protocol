@@ -12,25 +12,39 @@ pub mod decrypt;
 pub mod envelope;
 pub mod jcs;
 mod l3;
+pub mod lineage;
 pub mod manifest;
+pub mod profiles;
 pub mod schemas;
 pub mod verifier;
+pub mod versions;
 pub mod zip_reader;
 
 #[cfg(test)]
 mod test_support;
 
+pub use chain::{is_valid_actor_id, is_valid_event_kind, ACTOR_NAMESPACES, EVENT_KINDS};
 pub use crypto::{
     bytes_to_hex, ed25519_verify, hex_to_bytes, sha256, sha256_hex, CryptoError,
 };
 pub use decrypt::{decrypt_inner_zip, DecryptError, DecryptionMetadata, KeyBundle};
-pub use jcs::jcs;
+pub use jcs::{check_ijson, jcs, parse_json_strict};
+pub use lineage::{
+    predecessors_problems, verification_error_count, LineageCheck, LineageEntry,
+    PredecessorArtifact, LINEAGE_HOP_CAP,
+};
+pub use profiles::{
+    classify_profile, is_valid_profile_id, is_valid_profile_version, ProfileClassification,
+    ProfileStatus, DEFAULT_PROFILE, SUPPORTED_PROFILES,
+};
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
-    Envelope, FormatBlock, Manifest, Originator, Participant, Signer,
+    Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,
+    SignerCommitmentEntry,
 };
 pub use verifier::{
-    verify_capsule, ChainCheck, ContentIndexCheck, EnvelopeCheck, SignerOutcome, TopError,
-    TopErrorCategory, TopErrorScope, VerifyOptions, VerifyResult,
+    verify_capsule, ActorSetCheck, ChainCheck, ContentIndexCheck, EnvelopeCheck, FormatVersionCheck,
+    ProfileCheck, SignerOutcome, SignerSetCheck, SkillTrustCheck, TopError, TopErrorCategory,
+    TopErrorScope, Verdict, VerifyOptions, VerifyResult, QUALIFIERS,
 };
 pub use zip_reader::{unpack_zip, PathReason, ZipError, MAX_ENTRIES, MAX_TOTAL_BYTES};

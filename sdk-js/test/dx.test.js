@@ -91,6 +91,27 @@ test("invalid allowlist entries fail trust closed without throwing", async () =>
   assert.ok(result.notes.some((note) => note.includes("ignored invalid allowlist[0]")));
 });
 
+test("supplied-but-unmatched allowlist gets an explicit advisory note", async () => {
+  const keys = generateEd25519();
+  const stranger = generateEd25519();
+  const bytes = await new CapsuleBuilder({ originator: keys })
+    .setProgram("# Trust config\n")
+    .appendEvent({ actor: "human:me", action: "created_note" })
+    .seal({ signers: keys, signedAt: "2026-07-20T12:00:01Z" });
+
+  const result = await verifyCapsule(bytes, { allowlist: [stranger.publicKeyHex] });
+  // Integrity is unaffected — the SDK reports facts, it never decides
+  // trust policy. But a trust set that matched nothing must say so
+  // (wording identical to verifier-rust's F44 advisory), because the
+  // mismatch case must never get LESS warning than the no-policy case.
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.equal(result.trustedSignerCount, 0);
+  assert.ok(
+    result.notes.some((n) => n.includes("allowlist provided but matched no signer")),
+    `expected an unmatched-allowlist note; got ${JSON.stringify(result.notes)}`,
+  );
+});
+
 test("verifyCapsule on garbage bytes fails closed, no throw", async () => {
   const result = await verifyCapsule(Buffer.from("this is not a capsule"));
   assert.equal(result.ok, false);

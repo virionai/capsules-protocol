@@ -23,10 +23,11 @@ use std::collections::BTreeMap;
 use crate::crypto::hex_to_bytes;
 use crate::decrypt::decrypt_inner_zip;
 use crate::manifest::{compute_capsule_id, content_index_exclusions, manifest_hash};
-use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
+use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
 use crate::verifier::{
-    chain_walk_into, verify_content_index, verify_envelope_signatures, ChainCheck,
-    ContentIndexCheck, EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope, VerifyOptions,
+    anchor_or_null, chain_walk_into, check_signer_set, originator_binding_error,
+    verify_content_index, verify_envelope_signatures, ChainCheck, ContentIndexCheck,
+    EnvelopeCheck, TopError, TopErrorCategory, TopErrorScope,
 };
 use crate::zip_reader::unpack_zip;
 
@@ -64,11 +65,12 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     outer_envelope: &Envelope,
     outer_manifest: &Manifest,
     outer_files: &BTreeMap<String, Vec<u8>>,
-    options: &VerifyOptions,
+    allowlist: &[String],
     chain_check: &mut ChainCheck,
     inner_envelope_check: &mut Option<EnvelopeCheck>,
     inner_content_index_check: &mut Option<ContentIndexCheck>,
     errors: &mut Vec<TopError>,
+    notes: &mut Vec<String>,
     level: &mut String,
 ) {
     // Step 1: decrypt content.enc.
@@ -103,9 +105,13 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // Step 3: parse inner manifest, envelope, chain. All three are required;
     // any missing or unparseable one is a single Encryption error so the user
     // sees a concise root cause.
-    let inner_manifest: Manifest = match inner_files.get("manifest.json") {
-        Some(b) => match serde_json::from_slice(b) {
-            Ok(m) => m,
+    //
+    // Same preserved-tree-then-view parse as the outer pipeline: the Value
+    // trees are the hashing inputs (unknown members included); the typed
+    // structs are field-access views projected from the same parse.
+    let inner_manifest_value: serde_json::Value = match inner_files.get("manifest.json") {
+        Some(b) => match crate::jcs::parse_json_strict(b) {
+            Ok(v) => v,
             Err(e) => {
                 errors.push(TopError::inner(
                     TopErrorCategory::Encryption,
@@ -122,26 +128,47 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             return;
         }
     };
-    let inner_envelope: Envelope = match inner_files.get("provenance/envelope.json") {
-        Some(b) => match serde_json::from_slice(b) {
-            Ok(e) => e,
-            Err(e) => {
-                errors.push(TopError::inner(
-                    TopErrorCategory::Encryption,
-                    format!("L3: inner provenance/envelope.json parse failed: {e}"),
-                ));
-                return;
-            }
-        },
-        None => {
+    let inner_manifest: Manifest = match serde_json::from_value(inner_manifest_value.clone()) {
+        Ok(m) => m,
+        Err(e) => {
             errors.push(TopError::inner(
                 TopErrorCategory::Encryption,
-                "L3: inner ZIP missing provenance/envelope.json",
+                format!("L3: inner manifest.json parse failed: {e}"),
             ));
             return;
         }
     };
-    let inner_events: Vec<ChainEvent> = match inner_files.get("chain/events.jsonl") {
+    let inner_envelope_value: serde_json::Value =
+        match inner_files.get("provenance/envelope.json") {
+            Some(b) => match crate::jcs::parse_json_strict(b) {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(TopError::inner(
+                        TopErrorCategory::Encryption,
+                        format!("L3: inner provenance/envelope.json parse failed: {e}"),
+                    ));
+                    return;
+                }
+            },
+            None => {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Encryption,
+                    "L3: inner ZIP missing provenance/envelope.json",
+                ));
+                return;
+            }
+        };
+    let inner_envelope: Envelope = match serde_json::from_value(inner_envelope_value.clone()) {
+        Ok(e) => e,
+        Err(e) => {
+            errors.push(TopError::inner(
+                TopErrorCategory::Encryption,
+                format!("L3: inner provenance/envelope.json parse failed: {e}"),
+            ));
+            return;
+        }
+    };
+    let inner_events: Vec<ParsedEvent> = match inner_files.get("chain/events.jsonl") {
         Some(b) => match parse_chain_jsonl(b) {
             Ok(events) => events,
             Err(e) => {
@@ -161,29 +188,118 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         }
     };
 
-    // Step 3a-i (v0.5): inner format/version check. Mirrors the outer
-    // pipeline's step 3 — `inner_manifest.format.version` and
-    // `inner_envelope.version` must both be exactly "0.6". Failures surface
-    // via top-level `errors` with `category: FormatVersion` and the
-    // `"L3 inner: "` message prefix so callers can disambiguate via
-    // substring match on the message.
-    if inner_manifest.format.version != "0.6" {
+    // Step 3a-i: inner format/version gate. Mirrors the outer pipeline's
+    // stage 3 (spec/versioning.md): any KNOWN version proceeds under that
+    // era's rules; an unknown or grammar-violating one fails closed HERE,
+    // before any inner recompute can manufacture hash-mismatch noise
+    // indistinguishable from tampering. Failures surface via top-level
+    // `errors` with `category: FormatVersion` and the `"L3 inner: "`
+    // message prefix so callers can disambiguate via substring match.
+    let inner_version = inner_manifest.format.version.clone();
+    let inner_status = crate::versions::classify_version(&inner_version);
+    if inner_status != crate::versions::VersionStatus::Known {
         errors.push(TopError::inner(
             TopErrorCategory::FormatVersion,
-            format!(
-                "L3 inner: unsupported manifest format.version: {}",
-                inner_manifest.format.version
-            ),
+            if inner_status == crate::versions::VersionStatus::Invalid {
+                format!(
+                    "L3 inner: manifest.format.version: not a '<major>.<minor>' version string, got {inner_version:?}"
+                )
+            } else {
+                format!(
+                    "L3 inner: {}",
+                    crate::versions::unsupported_version_message(
+                        "manifest.format.version",
+                        &inner_version,
+                        inner_status,
+                    )
+                )
+            },
         ));
+        return;
     }
-    if inner_envelope.version != "0.6" {
+    if inner_envelope.version != inner_version {
+        let env_status = crate::versions::classify_version(&inner_envelope.version);
         errors.push(TopError::inner(
             TopErrorCategory::FormatVersion,
-            format!(
-                "L3 inner: unsupported envelope version: {}",
-                inner_envelope.version
-            ),
+            if env_status == crate::versions::VersionStatus::Known {
+                format!(
+                    "L3 inner: envelope.version '{}' does not match manifest.format.version '{}'",
+                    inner_envelope.version, inner_version
+                )
+            } else {
+                format!(
+                    "L3 inner: {}",
+                    crate::versions::unsupported_version_message(
+                        "envelope.version",
+                        &inner_envelope.version,
+                        env_status,
+                    )
+                )
+            },
         ));
+        return;
+    }
+
+    // Step 3a-iii: inner profile gate (spec/profiles.md obligation 11).
+    // The outer layer's effective profile governs L2 and the decryption
+    // flow; the INNER capsule declares its own profile and is gated
+    // independently here — there is deliberately no inner/outer equality
+    // rule, because a KMS-wrapped outer over a plain default inner is a
+    // legitimate authorial shape. Refusal exclusivity applies to the
+    // inner: the profile diagnosis is the only inner error, and no inner
+    // recompute runs under rules this verifier did not apply.
+    //
+    // The `profile` channel and the derived verdict describe the OUTER
+    // capsule, which is what this lane's single aggregate result is
+    // about, so an inner refusal surfaces the same way an inner unknown
+    // VERSION already does: `ok: false` with the inner-scope diagnosis
+    // carrying the distinction. Promoting an inner limitation to the
+    // aggregate verdict would need its own channel and its own vectors —
+    // no builder in any lane can seal an alternate-profile inner today.
+    let inner_profile = crate::profiles::classify_profile(
+        inner_manifest_value
+            .get("format")
+            .and_then(|f| f.get("profile")),
+        inner_envelope_value.get("profile"),
+    );
+    match inner_profile.status {
+        crate::profiles::ProfileStatus::Default | crate::profiles::ProfileStatus::Supported => {}
+        crate::profiles::ProfileStatus::Invalid => {
+            for problem in &inner_profile.problems {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Profile,
+                    format!("L3 inner: {problem}"),
+                ));
+            }
+            return;
+        }
+        crate::profiles::ProfileStatus::Mismatched => {
+            let (manifest_pair, envelope_pair) = inner_profile
+                .normalized
+                .as_ref()
+                .expect("a mismatched classification carries both normalized pairs");
+            errors.push(TopError::inner(
+                TopErrorCategory::Profile,
+                format!(
+                    "L3 inner: {}",
+                    crate::profiles::profile_mismatch_message(manifest_pair, envelope_pair)
+                ),
+            ));
+            return;
+        }
+        _ => {
+            errors.push(TopError::inner(
+                TopErrorCategory::Profile,
+                format!(
+                    "L3 inner: {}",
+                    crate::profiles::unsupported_profile_message(
+                        inner_profile.observed.as_deref().unwrap_or_default(),
+                        inner_profile.observed_version.as_deref().unwrap_or_default(),
+                    )
+                ),
+            ));
+            return;
+        }
     }
 
     // Step 3a-ii (v0.5): inner capsule_id derivation. Mirrors the outer
@@ -193,7 +309,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // error tagged `CapsuleId` with the `"L3 inner: "` prefix.
     match hex_to_bytes(&inner_manifest.originator.public_key) {
         Ok(pk) if pk.len() == 32 => {
-            match compute_capsule_id(&pk, &inner_manifest.first_event_hash) {
+            match compute_capsule_id(&pk, inner_manifest.first_event_hash.as_deref(), &inner_version) {
                 Ok(expected_id) => {
                     if expected_id != inner_manifest.id {
                         errors.push(TopError::inner(
@@ -240,7 +356,35 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // as the outer envelope. We set `inner_envelope_check` BEFORE Step 4 so
     // that even if the chain walk or cross-checks push errors, the
     // inner-envelope verification still surfaces in `result.inner_envelope`.
-    let inner_check = verify_envelope_signatures(&inner_envelope, &options.allowlist);
+    let inner_check =
+        verify_envelope_signatures(&inner_envelope, &inner_envelope_value, allowlist);
+    // Inner signer-set invariants, mirroring outer steps 10-10c with the
+    // "L3 inner: " message prefix. Inner commitment absence is reported
+    // (not failed) by the signer-set semantics; inner duplicate signers
+    // and a broken inner originator binding fail closed.
+    if let Some(note) = inner_check.note.as_ref() {
+        if note.starts_with("duplicate signer entry") {
+            errors.push(TopError::inner(
+                TopErrorCategory::SignerSet,
+                format!("L3 inner: {note}"),
+            ));
+        }
+    }
+    let inner_signer_set = check_signer_set(&inner_manifest_value, &inner_envelope_value);
+    for e in &inner_signer_set.errors {
+        errors.push(TopError::inner(
+            TopErrorCategory::SignerSet,
+            format!("L3 inner: {e}"),
+        ));
+    }
+    if let Some(msg) =
+        originator_binding_error(&inner_manifest.originator.public_key, &inner_check.signers)
+    {
+        errors.push(TopError::inner(
+            TopErrorCategory::OriginatorBinding,
+            format!("L3 inner: {msg}"),
+        ));
+    }
     *inner_envelope_check = Some(inner_check);
 
     // Step 3c (v0.5): recompute the inner manifest_hash and compare to the
@@ -249,7 +393,7 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
     // `category: ManifestHash`, and we mirror that for inner with the
     // `"L3 inner: "` message prefix so the renderer can disambiguate via
     // substring match on the message.
-    let recomputed_inner_manifest_hash = manifest_hash(&inner_manifest);
+    let recomputed_inner_manifest_hash = manifest_hash(&inner_manifest_value);
     if recomputed_inner_manifest_hash != inner_envelope.manifest_hash {
         errors.push(TopError::inner(
             TopErrorCategory::ManifestHash,
@@ -285,11 +429,68 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
         &inner_envelope,
         &mut new_chain,
         errors,
+        notes,
         TopErrorScope::Inner,
     );
+    let walked_empty = new_chain.note.is_some();
     *chain_check = new_chain;
-    // The chain was actually verified — clear any L2 deferred note.
-    chain_check.note = None;
+    if !walked_empty {
+        // The chain was actually walked — clear the L2 deferred note.
+        // (A zero-event inner chain keeps its own empty-chain note: the
+        // honest report that nothing was walked.)
+        chain_check.note = None;
+    }
+
+    // The inner manifest's DECLARED participants must carry interpretable
+    // actor ids in the closed namespace set, exactly like the outer
+    // manifest's at L2 (manifest.md field rules, A06 + P2). The JS
+    // reference re-runs the full manifest checks on the decrypted inner
+    // capsule; mirror the entry rule here so an inner-only violation
+    // cannot hide behind a clean outer sidecar manifest.
+    for problem in crate::chain::participant_actor_id_problems(&inner_manifest.participants) {
+        errors.push(TopError::inner(
+            TopErrorCategory::ActorId,
+            format!("L3 inner: manifest.{problem}"),
+        ));
+    }
+
+    // The inner manifest's own lineage declaration is evaluated at L3
+    // (spec/lineage.md "Encrypted successors": L2 evaluates the outer
+    // declaration, L3 the inner). Standalone checks only — the linkage
+    // pool belongs to the outer verification. Both obligations are gated
+    // on the INNER capsule's own era: `predecessors` is a claim member,
+    // inert in eras whose rules do not define it, whether the capsule is
+    // a verification subject, a hop, or an encrypted inner layer.
+    let inner_era_lineage = crate::lineage::era_defines_lineage(&inner_manifest.format.version);
+    if inner_era_lineage {
+        if let Some(inner_predecessors) = inner_manifest.predecessors.as_ref() {
+            for problem in crate::lineage::predecessors_problems(inner_predecessors) {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Lineage,
+                    format!("L3 inner: manifest.{problem}"),
+                ));
+            }
+        }
+        // Inner/outer equality, fail-closed ONLY when BOTH manifests
+        // carry the member: single-layer presence is a weaker claim made
+        // honestly (a private or a public-only citation, the author's
+        // disclosure choice), but a capsule asserting one origin to the
+        // world and another to its recipients is lying about itself
+        // across layers. JCS byte equality, so case- or order-variant
+        // spellings never pass.
+        if let (Some(inner_declared), Some(outer_declared)) = (
+            inner_manifest.predecessors.as_ref(),
+            outer_manifest.predecessors.as_ref(),
+        ) {
+            if crate::jcs::jcs(inner_declared) != crate::jcs::jcs(outer_declared) {
+                errors.push(TopError::inner(
+                    TopErrorCategory::Lineage,
+                    "L3: manifest.predecessors differs between the inner and outer manifests — \
+                     the capsule asserts one origin to the world and another to its recipients",
+                ));
+            }
+        }
+    }
 
     // Step 5: L3 cross-checks: inner manifest/envelope anchors must match
     // the outer envelope. Each mismatch is its own ChainAnchor error so
@@ -308,7 +509,8 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             TopErrorCategory::ChainAnchor,
             format!(
                 "L3: inner.first_event_hash mismatch: inner {}, outer {}",
-                inner_envelope.first_event_hash, outer_envelope.first_event_hash
+                anchor_or_null(&inner_envelope.first_event_hash),
+                anchor_or_null(&outer_envelope.first_event_hash)
             ),
         ));
     }
@@ -317,29 +519,33 @@ pub(crate) fn l3_attempt_decrypt_and_verify(
             TopErrorCategory::ChainAnchor,
             format!(
                 "L3: inner.entry_hash mismatch: inner {}, outer {}",
-                inner_envelope.entry_hash, outer_envelope.entry_hash
+                anchor_or_null(&inner_envelope.entry_hash),
+                anchor_or_null(&outer_envelope.entry_hash)
             ),
         ));
     }
-    // Also cross-check inner first/entry events against the outer envelope
+    // Also cross-check inner first/entry events against the inner envelope
     // anchors — guards against an inner envelope whose anchors disagree with
-    // its own chain.
+    // its own chain. (The zero-event inner case is handled by
+    // `chain_walk_into` above: anchors must be null, fail-closed.)
     if let (Some(first), Some(last)) = (inner_events.first(), inner_events.last()) {
-        if first.hash != inner_envelope.first_event_hash {
+        if inner_envelope.first_event_hash.as_deref() != Some(first.event.hash.as_str()) {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner first event hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    first.hash, inner_envelope.first_event_hash
+                    first.event.hash,
+                    anchor_or_null(&inner_envelope.first_event_hash)
                 ),
             ));
         }
-        if last.hash != inner_envelope.entry_hash {
+        if inner_envelope.entry_hash.as_deref() != Some(last.event.hash.as_str()) {
             errors.push(TopError::inner(
                 TopErrorCategory::ChainAnchor,
                 format!(
                     "L3: inner entry hash mismatch with inner envelope: chain {}, inner envelope {}",
-                    last.hash, inner_envelope.entry_hash
+                    last.event.hash,
+                    anchor_or_null(&inner_envelope.entry_hash)
                 ),
             ));
         }

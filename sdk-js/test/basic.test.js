@@ -7,6 +7,7 @@ import {
   verifyCapsule,
   generateEd25519,
   generateX25519,
+  CURRENT_VERSION,
 } from "../src/index.js";
 
 const TS = "2026-05-07T12:00:00Z";
@@ -41,7 +42,7 @@ test("plain seal → read → verify roundtrip", async () => {
   });
   const reader = await CapsuleReader.fromBytes(bytes);
   assert.equal(reader.isEncrypted(), false);
-  assert.equal(reader.manifest().format.version, "0.6");
+  assert.equal(reader.manifest().format.version, CURRENT_VERSION);
   assert.equal(reader.manifest().originator.public_key, ed.publicKeyHex);
   assert.match(reader.program(), /Loan Application/);
   const result = await verifyCapsule(reader, { allowlist: [ed.publicKeyHex] });

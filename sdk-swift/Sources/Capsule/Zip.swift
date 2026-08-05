@@ -7,10 +7,25 @@ public enum CapsuleZip {
     private static let DOS_TIME: UInt16 = 0
     private static let DOS_DATE: UInt16 = 0x0021 // 1980-01-01
     private static let MAX_ENTRIES = 10_000
+    /// Reader-side total-uncompressed-size cap (spec/format.md
+    /// "File-count and total-uncompressed-size limits"): 1 GiB, matching
+    /// sdk-js's MAX_TOTAL_BYTES and verifier-rust's MAX_TOTAL_BYTES.
+    private static let MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+    private static let EOCD_MIN = 22
+    private static let MAX_COMMENT = 0xFFFF
+    private static let EOCD_SIG: UInt32 = 0x0605_4b50
+    private static let CDH_SIG: UInt32 = 0x0201_4b50
+    private static let LFH_SIG: UInt32 = 0x0403_4b50
+    /// DOS "directory" attribute, the low bit some ZIP readers (JSZip in
+    /// the JS reference lane) use to decide directory-ness instead of the
+    /// entry name.
+    private static let DOS_DIR_ATTR: UInt32 = 0x10
 
     public static func pack(_ files: [(path: String, data: Data)]) -> Data {
         precondition(files.count <= MAX_ENTRIES, "zip: too many entries")
-        let entries = files.sorted { $0.path < $1.path }
+        // Entry order is this container's determinism guarantee; use the
+        // same UTF-16 code-unit comparator every other lane uses.
+        let entries = files.sorted { JCS.utf16Less($0.path, $1.path) }
         for e in entries { try! assertSafePath(e.path) }
         var out = Data()
         var localOffsets: [UInt32] = []
@@ -71,52 +86,198 @@ public enum CapsuleZip {
         return out
     }
 
+    /// Unpack a STORED-only ZIP.
+    ///
+    /// This function NEVER traps on input bytes. Every offset taken from
+    /// the archive is attacker-controlled, so each one is bounds-checked
+    /// before it indexes the byte array: a Swift out-of-range subscript is
+    /// a `fatalError`, which no `do`/`catch` in `CapsuleVerifier` can
+    /// contain, and would take the host process down with it. All
+    /// structural violations throw `CapsuleError.malformed`.
+    ///
+    /// Mirrors `scanCentralDirectory` + `assertStrictEntries` in
+    /// `sdk-js/src/zip.js`: the central directory is walked by its declared
+    /// byte size (not by the attacker-controlled EOCD record count, which is
+    /// cross-checked afterwards), ZIP64 sentinels are refused outright, and
+    /// the spec/format.md reader limits (10,000 entries, 1 GiB total) are
+    /// enforced here on the read path, not only in `pack`. Parser-differential
+    /// shapes are rejected on the RAW central directory: duplicate names,
+    /// local/central file-name disagreement, the DOS directory attribute on a
+    /// non-"/" name, and "/"-terminated names carrying content. Well-formed
+    /// zero-size directory markers are skipped, matching the reference lanes.
     public static func unpack(_ bytes: Data) throws -> [(path: String, data: Data)] {
-        guard bytes.count >= 22 else { throw CapsuleError.malformed("zip too small") }
-        // Find EOCD signature scanning from the end.
+        let b = [UInt8](bytes)
+        guard b.count >= EOCD_MIN else { throw CapsuleError.malformed("zip too small") }
+
+        // The EOCD is the LAST record; scan back over a possible trailing
+        // comment. A signature-shaped byte sequence inside the comment is
+        // not an EOCD unless its declared comment length lands exactly at
+        // end-of-file.
         var eocd = -1
-        let sig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
-        let bytesArr = [UInt8](bytes)
-        if bytesArr.count >= 22 {
-            var i = bytesArr.count - 22
-            while i >= 0 {
-                if bytesArr[i] == sig[0] && bytesArr[i+1] == sig[1] &&
-                   bytesArr[i+2] == sig[2] && bytesArr[i+3] == sig[3] {
-                    eocd = i; break
-                }
-                i -= 1
+        let lowest = max(0, b.count - EOCD_MIN - MAX_COMMENT)
+        var scan = b.count - EOCD_MIN
+        while scan >= lowest {
+            if peek32(b, scan) == EOCD_SIG,
+               let commentLen = peek16(b, scan + 20),
+               scan + EOCD_MIN + Int(commentLen) == b.count
+            {
+                eocd = scan
+                break
             }
+            scan -= 1
         }
         guard eocd >= 0 else { throw CapsuleError.malformed("zip: EOCD not found") }
-        let cdCount = Int(read16(bytesArr, eocd + 10))
-        let cdOffset = Int(read32(bytesArr, eocd + 16))
-        var p = cdOffset
-        var out: [(String, Data)] = []
-        for _ in 0..<cdCount {
-            guard read32(bytesArr, p) == 0x02014b50 else {
-                throw CapsuleError.malformed("zip: bad CD signature")
+        // Two EOCD signatures make the archive ambiguous across readers
+        // (which record wins is library-dependent). Fail closed, as sdk-js
+        // does, rather than pick one.
+        var q = b.count - 4
+        while q > eocd {
+            if peek32(b, q) == EOCD_SIG {
+                throw CapsuleError.malformed("zip: multiple end-of-central-directory records")
             }
-            let compression = read16(bytesArr, p + 10)
-            let compSize = Int(read32(bytesArr, p + 20))
-            let uncompSize = Int(read32(bytesArr, p + 24))
-            let nameLen = Int(read16(bytesArr, p + 28))
-            let extraLen = Int(read16(bytesArr, p + 30))
-            let commentLen = Int(read16(bytesArr, p + 32))
-            let localOff = Int(read32(bytesArr, p + 42))
-            guard compression == 0 else { throw CapsuleError.malformed("zip: only STORED supported") }
-            guard compSize == uncompSize else { throw CapsuleError.malformed("zip: STORED size mismatch") }
-            let name = String(decoding: Array(bytesArr[(p + 46)..<(p + 46 + nameLen)]), as: UTF8.self)
-            try assertSafePath(name)
-            p += 46 + nameLen + extraLen + commentLen
+            q -= 1
+        }
 
-            guard read32(bytesArr, localOff) == 0x04034b50 else {
-                throw CapsuleError.malformed("zip: bad LFH signature")
+        let cdCount = Int(try read16(b, eocd + 10))
+        let cdSize = Int(try read32(b, eocd + 12))
+        let cdOffset = Int(try read32(b, eocd + 16))
+        // ZIP64 sentinels: a capsule can never legitimately need ZIP64
+        // under the 10,000-entry / 1 GiB caps, so refuse rather than parse.
+        guard cdCount != 0xFFFF, cdSize != 0xFFFF_FFFF, cdOffset != 0xFFFF_FFFF else {
+            throw CapsuleError.malformed("zip: ZIP64 archives are not supported")
+        }
+        guard cdCount <= MAX_ENTRIES else {
+            throw CapsuleError.malformed("zip: too many entries (\(cdCount))")
+        }
+        // Central-directory geometry must close exactly on the EOCD; this
+        // is what makes every subsequent record offset in-bounds.
+        guard cdOffset <= eocd, cdSize <= eocd, cdOffset + cdSize == eocd else {
+            throw CapsuleError.malformed("zip: central directory does not end at EOCD")
+        }
+
+        let cdEnd = eocd
+        var out: [(String, Data)] = []
+        var totalBytes = 0
+        // Number of central-directory records walked (including directory
+        // markers, which carry no data and are not returned). Cross-checked
+        // against the EOCD's declared count after the walk.
+        var recordCount = 0
+        // Entry-name and entry-shape checks run on the name as stored in the
+        // central directory, before any map/dictionary collapse — a reader
+        // that dedupes on load silently accepts archives other readers reject
+        // (spec/format.md "Container properties").
+        var seen = Set<String>()
+        var p = cdOffset
+        while p < cdEnd {
+            guard p + 46 <= cdEnd else {
+                throw CapsuleError.malformed(
+                    "zip: truncated central-directory record \(recordCount)")
             }
-            let lfhNameLen = Int(read16(bytesArr, localOff + 26))
-            let lfhExtraLen = Int(read16(bytesArr, localOff + 28))
+            let sig = try read32(b, p)
+            guard sig == CDH_SIG else {
+                throw CapsuleError.malformed("zip: bad CD signature at record \(recordCount)")
+            }
+            let compression = try read16(b, p + 10)
+            let compSize = Int(try read32(b, p + 20))
+            let uncompSize = Int(try read32(b, p + 24))
+            let nameLen = Int(try read16(b, p + 28))
+            let extraLen = Int(try read16(b, p + 30))
+            let commentLen = Int(try read16(b, p + 32))
+            let externalAttrs = try read32(b, p + 38)
+            let localOff = Int(try read32(b, p + 42))
+            guard compression == 0 else {
+                throw CapsuleError.malformed("zip: only STORED supported")
+            }
+            guard compSize == uncompSize else {
+                throw CapsuleError.malformed("zip: STORED size mismatch")
+            }
+            guard compSize != 0xFFFF_FFFF, localOff != 0xFFFF_FFFF else {
+                throw CapsuleError.malformed("zip: ZIP64 archives are not supported")
+            }
+            let next = p + 46 + nameLen + extraLen + commentLen
+            guard next <= cdEnd else {
+                throw CapsuleError.malformed(
+                    "zip: truncated central-directory record \(recordCount)")
+            }
+            let name = String(decoding: b[(p + 46)..<(p + 46 + nameLen)], as: UTF8.self)
+            try assertSafePath(name)
+            // Duplicate names are a parser differential (ZIP libraries
+            // disagree on which copy wins), so a signed capsule must never
+            // contain one.
+            guard !seen.contains(name) else {
+                throw CapsuleError.malformed("zip: duplicate entry: \(name)")
+            }
+            seen.insert(name)
+            recordCount += 1
+            guard recordCount <= MAX_ENTRIES else {
+                throw CapsuleError.malformed("zip: too many entries (\(recordCount))")
+            }
+            p = next
+
+            // Local header must live entirely before the central directory.
+            guard localOff + 30 <= cdOffset else {
+                throw CapsuleError.malformed("zip: local header out of range for \(name)")
+            }
+            let lfhSig = try read32(b, localOff)
+            guard lfhSig == LFH_SIG else {
+                throw CapsuleError.malformed("zip: bad LFH signature for \(name)")
+            }
+            let lfhNameLen = Int(try read16(b, localOff + 26))
+            let lfhExtraLen = Int(try read16(b, localOff + 28))
+            guard localOff + 30 + lfhNameLen <= cdOffset else {
+                throw CapsuleError.malformed("zip: truncated local file header for \(name)")
+            }
+            // The central directory is authoritative. Some readers (JSZip in
+            // the JS reference lane) re-key entries by the LOCAL header name,
+            // so any disagreement means two parsers see different entry sets.
+            let localName = String(
+                decoding: b[(localOff + 30)..<(localOff + 30 + lfhNameLen)], as: UTF8.self)
+            guard localName == name else {
+                throw CapsuleError.malformed(
+                    "zip: local/central name mismatch: central \"\(name)\", local \"\(localName)\"")
+            }
+
+            // Directory-ness must be unambiguous: readers disagree about
+            // whether it comes from the DOS attribute bit or the trailing "/".
+            // JSZip derives entry.dir from the attribute bit, so a dir-bit
+            // entry with a plain file name is silently dropped there while
+            // unzip(1) and python zipfile extract it as a file.
+            let isDirName = name.hasSuffix("/")
+            if (externalAttrs & DOS_DIR_ATTR) != 0 && !isDirName {
+                throw CapsuleError.malformed(
+                    "zip: directory attribute on non-directory name: \(name)")
+            }
+            if isDirName {
+                // A "/"-terminated name carrying content is the mirror image
+                // of the same differential: readers that key on the name drop
+                // the body.
+                guard uncompSize == 0, compSize == 0 else {
+                    throw CapsuleError.malformed(
+                        "zip: directory marker with nonzero size: \(name)")
+                }
+                continue // directory marker; carries no data
+            }
+
+            // Unix mode bits live in the high 16 bits of the external attrs.
+            let mode = (externalAttrs >> 16) & 0xFFFF
+            if (mode & 0o170000) == 0o120000 {
+                throw CapsuleError.malformed("zip entry is a symlink: \(name)")
+            }
+
+            // Entry data must live entirely before the central directory.
             let dataOff = localOff + 30 + lfhNameLen + lfhExtraLen
-            let data = Data(bytesArr[dataOff..<(dataOff + compSize)])
-            out.append((name, data))
+            guard dataOff <= cdOffset, compSize <= cdOffset - dataOff else {
+                throw CapsuleError.malformed("zip: entry data out of range for \(name)")
+            }
+            totalBytes += compSize
+            guard totalBytes <= MAX_TOTAL_BYTES else {
+                throw CapsuleError.malformed("zip: total-size limit exceeded")
+            }
+            out.append((name, Data(b[dataOff..<(dataOff + compSize)])))
+        }
+        guard recordCount == cdCount else {
+            throw CapsuleError.malformed(
+                "zip: central-directory entry count mismatch (EOCD \(cdCount), actual \(recordCount))")
         }
         return out
     }
@@ -161,24 +322,61 @@ public enum CapsuleZip {
             UInt8((v >> 24) & 0xFF),
         ])
     }
-    private static func read16(_ b: [UInt8], _ off: Int) -> UInt16 {
-        UInt16(b[off]) | (UInt16(b[off + 1]) << 8)
+    /// Bounds-checked little-endian reads. `peek*` return nil out of
+    /// range (used by the EOCD scan, where misses are expected); `read*`
+    /// throw, so a crafted offset surfaces as a malformed-capsule error
+    /// instead of an array trap.
+    private static func peek16(_ b: [UInt8], _ off: Int) -> UInt16? {
+        guard off >= 0, off + 2 <= b.count else { return nil }
+        return UInt16(b[off]) | (UInt16(b[off + 1]) << 8)
     }
-    private static func read32(_ b: [UInt8], _ off: Int) -> UInt32 {
-        UInt32(b[off])
+    private static func peek32(_ b: [UInt8], _ off: Int) -> UInt32? {
+        guard off >= 0, off + 4 <= b.count else { return nil }
+        return UInt32(b[off])
             | (UInt32(b[off + 1]) << 8)
             | (UInt32(b[off + 2]) << 16)
             | (UInt32(b[off + 3]) << 24)
+    }
+    private static func read16(_ b: [UInt8], _ off: Int) throws -> UInt16 {
+        guard let v = peek16(b, off) else {
+            throw CapsuleError.malformed("zip: read past end of archive at \(off)")
+        }
+        return v
+    }
+    private static func read32(_ b: [UInt8], _ off: Int) throws -> UInt32 {
+        guard let v = peek32(b, off) else {
+            throw CapsuleError.malformed("zip: read past end of archive at \(off)")
+        }
+        return v
     }
 }
 
 public enum CapsuleError: Error, CustomStringConvertible {
     case malformed(String)
     case verification(String)
+    /// A well-formed format version this verifier does not know
+    /// (spec/versioning.md). Deliberately distinct from `.malformed`:
+    /// an operator and an auditor must be able to tell "this verifier
+    /// is too old / the era is unknown" apart from "this capsule is
+    /// corrupt". `observed` is the capsule's declared version; `status`
+    /// is "unknown_newer" or "unknown_older".
+    case unsupportedVersion(observed: String?, status: String, message: String)
+    /// The open-stage profile gate refused (spec/profiles.md). Carries
+    /// the whole classification so a fail-closed verify result can
+    /// populate its profile channel from the error alone. `status` is
+    /// "unsupported" (a limitation of the verifier), "mismatched" (the
+    /// two documents disagree about which rules bind the capsule), or
+    /// "invalid" (a present declaration violating the closed shape or
+    /// the identifier grammar — a malformed document, whose message is
+    /// field-path prefixed like every other shape refusal).
+    case profileRefused(status: String, observed: String?, observedVersion: String?,
+                        declared: Bool, message: String)
     public var description: String {
         switch self {
         case .malformed(let m): return "Capsule malformed: \(m)"
         case .verification(let m): return "Capsule verification failed: \(m)"
+        case .unsupportedVersion(_, _, let m): return m
+        case .profileRefused(_, _, _, _, let m): return m
         }
     }
 }

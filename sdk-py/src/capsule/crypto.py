@@ -27,6 +27,12 @@ class Ed25519KeyPair:
     private_key: bytes  # 32 raw bytes
     public_key_hex: str
     private_key_hex: str
+    # Curve tag (finding A04). Ed25519 and X25519 keypair objects are
+    # otherwise structurally identical, and X25519 ECDH "succeeds"
+    # against an Ed25519 public key — sealing content no one can ever
+    # decrypt. The tag lets to_signer/to_recipient reject the mix-up at
+    # the API boundary instead.
+    curve: str = "ed25519"
 
 
 def generate_ed25519() -> Ed25519KeyPair:
@@ -48,19 +54,63 @@ def ed25519_sign(private_key_raw: bytes, message: bytes) -> bytes:
     return sk.sign(message)
 
 
+# Ed25519 group/field constants used for pre-verification key and
+# signature validation.
+_ED25519_P = 2**255 - 19
+_ED25519_L = 2**252 + 27742317777372353535851937790883648493
+
+# The 8 points whose order divides 8, as canonical y encodings with the
+# x-sign bit already cleared: the identity (y=1), the two order-4 points
+# (y=0), the order-2 point (y=p-1), and the four order-8 points (two y
+# values, two x signs each). Masking the sign bit means each entry covers
+# both x signs.
+_ED25519_SMALL_ORDER_Y = frozenset(
+    {
+        bytes.fromhex("0000000000000000000000000000000000000000000000000000000000000000"),
+        bytes.fromhex("0100000000000000000000000000000000000000000000000000000000000000"),
+        bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
+        bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),
+        bytes.fromhex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+    }
+)
+
+
+def ed25519_public_key_is_acceptable(public_key_raw: bytes) -> bool:
+    """True when a 32-byte Ed25519 public key is canonical and not small-order.
+
+    OpenSSL (and therefore `cryptography`) accepts both non-canonical
+    encodings (masked y >= p) and small-order keys. A small-order key is a
+    no-private-key forgery: pick `edff…ff7f`, send a 64-byte all-zero
+    signature, and vary any signed field until the cofactored verification
+    equation happens to hold (~1 message in 4). We reject both classes
+    before delegating.
+    """
+    if len(public_key_raw) != 32:
+        return False
+    masked = public_key_raw[:31] + bytes([public_key_raw[31] & 0x7F])
+    if int.from_bytes(masked, "little") >= _ED25519_P:
+        return False
+    return masked not in _ED25519_SMALL_ORDER_Y
+
+
+def ed25519_signature_s_is_reduced(signature: bytes) -> bool:
+    """True when a 64-byte signature's S component is canonical (S < L).
+
+    RFC 8032 §5.1.7 requires it; enforcing it here removes one source of
+    signature malleability regardless of what the backend does.
+    """
+    if len(signature) != 64:
+        return False
+    return int.from_bytes(signature[32:], "little") < _ED25519_L
+
+
 def ed25519_verify(public_key_raw: bytes, message: bytes, signature: bytes) -> bool:
     try:
-        if len(public_key_raw) != 32:
-            return False
         if len(signature) != 64:
             return False
-        # Reject the all-zeros public key. Python's `cryptography` library
-        # spuriously verifies all-zero pubkey + all-zero signature — an
-        # Ed25519 low-order-point quirk that RFC 8032 strict mode catches
-        # but the lib does not. This guard closes that path and matches
-        # the JS reference's behavior. Full low-order-point hardening
-        # (rejecting all 8 known small-subgroup points) is v0.2 work.
-        if public_key_raw == b"\x00" * 32:
+        if not ed25519_public_key_is_acceptable(public_key_raw):
+            return False
+        if not ed25519_signature_s_is_reduced(signature):
             return False
         pk = Ed25519PublicKey.from_public_bytes(public_key_raw)
         pk.verify(signature, message)
@@ -80,6 +130,8 @@ class X25519KeyPair:
     private_key: bytes  # 32 raw bytes
     public_key_hex: str
     private_key_hex: str
+    # Curve tag — see Ed25519KeyPair.curve.
+    curve: str = "x25519"
 
 
 def generate_x25519() -> X25519KeyPair:

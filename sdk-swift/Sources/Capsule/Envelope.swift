@@ -3,7 +3,10 @@
 import Foundation
 
 public enum Envelope {
-    static let VERSION = "0.6"
+    /// The version a NEW envelope declares — always the sealing version
+    /// (computed, never a stored literal, so a version bump cannot leave
+    /// the envelope declaring a stale era).
+    static var VERSION: String { CapsuleVersions.current }
     static let SUPPORTED_CIPHERS: Set<String> = ["none", "ChaCha20-Poly1305"]
 
     public struct Signer {
@@ -45,19 +48,30 @@ public enum Envelope {
     }
 
     /// Returns JCS bytes of the envelope minus the `signers` field.
-    static func canonicalPayload(_ envelope: JCSValue) -> Data {
+    /// Throws when the envelope cannot be canonicalized (attacker bytes
+    /// can contain integers outside ±(2^53 − 1)) or is not an object.
+    static func canonicalPayload(_ envelope: JCSValue) throws -> Data {
         guard case .object(let pairs) = envelope else {
-            preconditionFailure("envelope is not an object")
+            throw CapsuleError.malformed("envelope is not an object")
         }
         let withoutSigners = pairs.filter { $0.0 != "signers" }
-        return JCS.bytes(.object(withoutSigners))
+        return try JCS.bytes(.object(withoutSigners))
     }
 
-    /// `domain_sep || canonical(envelope_minus_signers)` — the signing input.
-    static func signingInput(_ envelope: JCSValue, role: String) -> Data {
+    /// `domain_sep || canonical(envelope_minus_signers)` — the signing
+    /// input. The domain embeds the envelope's DECLARED version — keyed
+    /// selection per spec/versioning.md, so an older era's signatures
+    /// stay verifiable under that era's domain forever. (Whether the
+    /// declared version is one this verifier knows is gated earlier.)
+    static func signingInput(_ envelope: JCSValue, role: String) throws -> Data {
         precondition(!role.isEmpty)
-        let domain = Data("capsule-provenance-v\(VERSION):\(role)\0".utf8)
-        return Bytes.concat(domain, canonicalPayload(envelope))
+        var version = CapsuleVersions.current
+        if case .object(let pairs) = envelope,
+           case .string(let v)? = pairs.first(where: { $0.0 == "version" })?.1 {
+            version = v
+        }
+        let domain = CapsuleVersions.provenanceDomain(version, role: role)
+        return Bytes.concat(domain, try canonicalPayload(envelope))
     }
 
     public static func sign(_ envelope: inout JCSValue, signers: [Signer]) throws {
@@ -70,7 +84,7 @@ public enum Envelope {
 
         var signed: [JCSValue] = []
         for s in signers {
-            let input = signingInput(envelope, role: s.role)
+            let input = try signingInput(envelope, role: s.role)
             let sig = try s.keyPair.sign(input)
             signed.append(.object([
                 ("role", .string(s.role)),
@@ -89,10 +103,25 @@ public enum Envelope {
     }
 
     public static func verifySignatures(_ envelope: JCSValue) -> VerifyResult {
+        // Any KNOWN version verifies under its own era's domain strings;
+        // an unknown one fails closed with the standard distinguishable
+        // diagnosis (spec/versioning.md), never a tamper-flavored one.
         guard case .object(let pairs) = envelope,
               let versionPair = pairs.first(where: { $0.0 == "version" }),
-              case .string(let v) = versionPair.1, v == VERSION
+              case .string(let v) = versionPair.1
         else { return VerifyResult(ok: false, signers: [], note: "unsupported version") }
+        switch CapsuleVersions.classify(v) {
+        case .known:
+            break
+        case .invalid:
+            return VerifyResult(ok: false, signers: [], note: "unsupported version")
+        case let status:
+            return VerifyResult(
+                ok: false, signers: [],
+                note: CapsuleVersions.unsupportedMessage(
+                    field: "envelope.version", observed: v, status: status)
+            )
+        }
 
         guard let cipherPair = pairs.first(where: { $0.0 == "cipher" }),
               case .string(let c) = cipherPair.1, SUPPORTED_CIPHERS.contains(c)
@@ -101,6 +130,28 @@ public enum Envelope {
         guard let signersPair = pairs.first(where: { $0.0 == "signers" }),
               case .array(let signersArr) = signersPair.1, !signersArr.isEmpty
         else { return VerifyResult(ok: false, signers: [], note: "no signers") }
+
+        // Duplicate (role, public_key) entries are malformed: counting rows
+        // instead of distinct members lets one key satisfy an M-of-N policy.
+        // Same key under different roles is permitted (distinct members).
+        var seen = Set<String>()
+        for s in signersArr {
+            guard case .object(let sp) = s else { continue }
+            let role = sp.first(where: { $0.0 == "role" }).flatMap {
+                if case .string(let r) = $0.1 { return r } else { return nil }
+            } ?? ""
+            let pk = sp.first(where: { $0.0 == "public_key" }).flatMap {
+                if case .string(let k) = $0.1 { return k } else { return nil }
+            } ?? ""
+            let member = role + "\u{0000}" + pk.lowercased()
+            if seen.contains(member) {
+                return VerifyResult(
+                    ok: false, signers: [],
+                    note: "duplicate signer entry (role=\(role), public_key=\(pk))"
+                )
+            }
+            seen.insert(member)
+        }
 
         var allValid = true
         var out: [(String, String, Bool)] = []
@@ -122,7 +173,14 @@ public enum Envelope {
                 out.append((role, pkHex, false))
                 continue
             }
-            let input = signingInput(envelope, role: role)
+            // An envelope that cannot be canonicalized has no signing
+            // input — the signature cannot be valid. Fail closed, never
+            // trap: these bytes are attacker-controlled.
+            guard let input = try? signingInput(envelope, role: role) else {
+                allValid = false
+                out.append((role, pkHex, false))
+                continue
+            }
             let valid = Ed25519.verify(
                 publicKey: pkBytes,
                 message: input,

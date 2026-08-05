@@ -1,6 +1,6 @@
-# verifier-rust — second independent Capsule v0.6 verifier
+# verifier-rust — second independent Capsule v0.7 verifier
 
-A Rust verifier for Capsule v0.6 capsules (plain and encrypted-outer).
+A Rust verifier for Capsule v0.7 capsules (plain and encrypted-outer; v0.6 capsules stay supported forever per spec/versioning.md).
 Written from the spec, not ported from the JS reference. Byte-compatible
 with the JS SDK (`sdk-js/`) on the canonical shared vector corpus
 (`spec/vectors/tamper-detection/`).
@@ -22,6 +22,79 @@ JS SDK reaches, with the failure attributed to the same check. As of
 v0.3 the verifier covers both L2 (envelope-only) and L3 (decrypted
 inner chain) — pass `--decryption-key` to promote an encrypted capsule
 from L2 to L3.
+
+## What's new in v0.7.1
+
+- **Profile gate (`spec/profiles.md`).** A capsule may declare the
+  verification rule set that governs it (`manifest.format.profile` /
+  `envelope.profile`). The gate runs after the version gate and before
+  anything else: absence means the default profile `v0.6-suite`/`1.0`
+  permanently; normalized declarations that disagree refuse with
+  `profile_mismatch` (a capsule defect) before any table lookup; a
+  declared `(id, version)` outside this verifier's exact-match table
+  refuses with `unsupported_profile` — **a limitation of the verifier,
+  not corruption of the capsule** — and a shape or grammar violation is
+  a malformed document, never "unsupported". Refusal exclusivity: no
+  hash recompute, no signature check, no chain walk past a refusal, and
+  the reported `format_version.suite` nulls, because a suite claim about
+  rules this verifier refused to apply would be false. The inner capsule
+  of an encrypted one is gated independently at L3 (there is no
+  inner/outer equality rule).
+- **`VerifyResult.profile: ProfileCheck`** — `observed`,
+  `observed_version`, `declared`, `effective`, `effective_version`,
+  `supported`, `status`, `accepted_by_policy` — present on EVERY result,
+  including refusals, because the observed declaration is what lets an
+  auditor route a capsule to a capable verifier instead of concluding it
+  is corrupt. New `TopErrorCategory::Profile`; new `Profile:` line in
+  the plain CLI output.
+- **Normalized verdict surface (`spec/results.md`):**
+  `VerifyResult.verdict` (`valid | invalid | unsupported`, with
+  `ok == (verdict == valid)` as an invariant), `verdict_reason`
+  (non-null iff `unsupported`), and `qualifiers` — the weaker-claim
+  facts a renderer must not hide beside a valid verdict. All three are
+  `#[serde(default)]`, so pre-v0.7.1 result JSON still deserializes into
+  the fail-closed shape. `QUALIFIERS` is the closed TEN-name vocabulary:
+  the seven base names plus the three lineage names below. The CLI
+  Result block is verdict-first and enumerates every qualifier in plain
+  language; an unqualified valid states its trust basis explicitly.
+- **Lineage (`spec/lineage.md`, `manifest.predecessors`):** the verify
+  side, in full. `VerifyResult.lineage` reports
+  `{declared, ok, verified_depth, entries}`; the standalone shape /
+  null-coherence / era-keyed identity-coherence checks fail closed under
+  the new `TopErrorCategory::Lineage`; the supplied-bytes linkage walk
+  (`VerifyOptions::predecessors`, CLI `--predecessor`, repeatable) is
+  REPORT-ONLY — it can falsify `lineage.ok` but never the capsule's own
+  `ok`, so a host handing the verifier the wrong file cannot brand an
+  honest successor a forgery. Each supplied artifact is verified under
+  ITS declared version's rules and matched on RECOMPUTED values only;
+  a verified hop's own declaration joins the walk (`verified_depth`).
+  Its three qualifiers — `lineage_declared_unverified`,
+  `lineage_mismatch`, `lineage_predecessor_invalid` — ride the same
+  `qualifiers` array as the seven base names, each meaning "valid
+  verdict, custody claim not clean". Payload-carrying facts stay in the
+  `lineage` channel.
+- **`--accept-versions` (host version policy).** The one mandated fact
+  that no CLI could previously reach: reported, never decided.
+- **CLI custody policy:** `--predecessor` sets a policy the way
+  `--allowlist` and `--accept-versions` do. Without it, declared lineage
+  never affects the exit code; with it, exit 1 unless every supplied
+  artifact matched a declared entry and verified. Declared entries left
+  unsupplied are reported, never a policy failure — an operator may hold
+  one branch of a merge.
+- **Exit-code/report coherence fix.** The trust policy behind exit 0 now
+  counts distinct trusted signers across BOTH envelopes, the same
+  outer-or-inner fact the `no_trusted_signer` qualifier and its advisory
+  note are derived from. Previously an encrypted capsule opened with
+  `--decryption-key`, whose only allowlisted signer sealed the INNER
+  envelope, printed `Result: VALID` with no qualifier and still exited 1
+  — a failed policy with nothing rendered to explain it.
+- The registry consumer (`tests/spec_registry.rs`) now runs
+  `spec/vectors/profile-declaration/`, `spec/vectors/result-vocabulary/`
+  and `spec/vectors/lineage/`, and asserts `expected.verdict` /
+  `verdict_reason` / `qualifiers` (one exact array over all ten names) /
+  `profile.*` / `suite` / `lineage.*` / `capsule_id`, with the per-vector
+  `predecessors` pool and `accept_versions` policy, across every
+  collection that pins them.
 
 ## What's new in v0.6
 
@@ -111,7 +184,13 @@ the recipient's X25519 private key is supplied:
 
 - ZIP container parse and safety checks (STORED-only at our layer; size
   / entry caps; rejects path traversal, absolute paths, symlinks).
-- `capsule_id` derivation: `SHA-256("capsule-id-v0.6\x00" || originator_pubkey || first_event_hash)`.
+- Version gate then profile gate, before any other check: an unknown era
+  or an unimplementable declared profile fails closed with a diagnosis
+  distinct from tampering, and nothing else runs under rules this
+  verifier did not apply. Every result reports the observed version, the
+  observed profile declaration, the derived verdict, and the qualifiers
+  that weaken it.
+- `capsule_id` derivation: `SHA-256("capsule-id-v<version>\x00" || originator_pubkey || first_event_hash)`, keyed by the capsule's declared version.
 - `manifest_hash` over the JCS-canonical manifest minus the
   self-referential field.
 - `content_index` re-hashing: every committed file's bytes, the
@@ -129,6 +208,12 @@ the recipient's X25519 private key is supplied:
 - Encryption-state check: cipher whitelist (`none`,
   `ChaCha20-Poly1305`); for encrypted outers, `content.enc` SHA-256
   recomputed and compared against `envelope.encrypted_blob_hash`.
+- Lineage (`manifest.predecessors`): the standalone shape,
+  null-coherence and era-keyed identity-coherence checks fail closed on
+  a present declaration; with `--predecessor` artifacts supplied, each
+  is verified under its own era and matched against the declaration on
+  recomputed values, reported in `result.lineage` — report-only, so the
+  pool never changes the capsule's own verdict.
 - L3 (with `--decryption-key`): `content.enc` is decrypted via
   ChaCha20-Poly1305 with the AEAD key derived through X25519 ECDH +
   HKDF-SHA256, the inner ZIP is unpacked, the inner chain is walked
@@ -146,7 +231,11 @@ the recipient's X25519 private key is supplied:
 
 ## What it does *not* do (yet)
 
-- **No capsule building or signing.** Verifier only.
+- **No capsule building or signing.** Verifier only. That includes
+  **rewrap**: this lane verifies a successor's `manifest.predecessors`
+  declaration but cannot write one, so a Rust-only operator can check a
+  custody claim and not perform a hand-off (`spec/lineage.md` writer
+  obligations live in the builder lanes).
 - **No FFI.** No WASM, no C ABI, no Python bindings. Yet.
 
 ## Build and test
@@ -154,7 +243,7 @@ the recipient's X25519 private key is supplied:
 ```sh
 cd verifier-rust
 cargo build --workspace
-cargo test --workspace          # 104 tests, all pass
+cargo test --workspace          # 218 tests, all pass
 cargo run -p capsule-verify-cli -- verify <FILE.capsule>
 ```
 
@@ -172,7 +261,10 @@ verify <FILE>
   --json                       Pretty-printed VerifyResult instead of plain text.
   --allowlist <HEX> [<HEX>...]  Trusted Ed25519 pubkeys (lowercase 64-char hex).
                                 A signer is trusted only if its key is in the
-                                allowlist AND its signature verifies.
+                                allowlist AND its signature verifies. Supplying
+                                the flag REQUESTS a trust policy: an allowlist
+                                that matched no signer keeps the `valid`
+                                verdict but exits 1.
   --decryption-key <KEY>        Recipient's X25519 private key for L3
                                 verification. <KEY> is either a 64-char
                                 lowercase hex string OR a path to a file
@@ -182,9 +274,41 @@ verify <FILE>
                                 inner ZIP and walks the inner chain). On
                                 plain capsules, the flag is silently
                                 ignored.
+  --accept-versions <V> [<V>...] Format versions this deployment ACCEPTS
+                                (spec/versioning.md "Host policy").
+                                Reported, never decided: a capsule
+                                outside the set still verifies and its
+                                verdict carries the
+                                `version_not_accepted_by_policy`
+                                qualifier — but since the policy was
+                                requested here, failing it exits 1.
+  --predecessor <FILE>          Candidate predecessor artifact for lineage
+                                linkage (spec/lineage.md). Repeatable.
+                                Inside the library the pool is REPORT-ONLY
+                                — it can never flip the capsule's own
+                                verdict — but supplying it here sets a
+                                POLICY, exactly as --allowlist does: every
+                                supplied file must match a declared entry
+                                and verify under its own era, or the run
+                                exits 1. Declared entries left unsupplied
+                                are reported, never a policy failure.
 ```
 
-Exit codes: `0` PASS, `1` FAIL, `2` I/O or argument error.
+Exit codes (spec/results.md, identical in both reference CLIs): `0`
+VALID and every requested policy satisfied, `1` INVALID / UNSUPPORTED /
+a requested policy failed, `2` usage or I/O error. An unknown format
+version or an unsupported profile exits `1`, never `2`: it is a verdict
+about the capsule-verifier pair, not an operator error.
+
+`--allowlist`, `--accept-versions`, and `--predecessor` are REQUESTED
+policies, and an unmet one exits `1`. That is not the verifier deciding
+trust: the `VerifyResult` still reports per-signer `valid` and never
+`trusted` (spec/trust.md), reports lineage linkage without letting it
+touch `ok`, and the verdict beside the failed policy stays `valid`. The
+host is the one deciding — and on this command line the host is the
+operator who typed the flag, so a demand the capsule did not meet must
+fail the run rather than pass in silence. Every failed policy is also
+RENDERED: the exit code never disagrees with the report.
 
 ## Layout
 
@@ -200,12 +324,17 @@ verifier-rust/
 │   │       ├── schemas.rs      Manifest / Envelope / ChainEvent
 │   │       ├── manifest.rs     capsule_id, content_index, manifest_hash
 │   │       ├── chain.rs        chain walk + per-event hash recompute
+│   │       ├── lineage.rs      manifest.predecessors checks + linkage walk
 │   │       ├── envelope.rs     canonical payload, signing input, sig verify
 │   │       ├── decrypt.rs      L3: ChaCha20-Poly1305 + X25519 + HKDF-SHA256
+│   │       ├── versions.rs     known-version table + version-keyed domains
+│   │       ├── profiles.rs     profile table, grammar, declaration gate
 │   │       ├── verifier.rs     top-level orchestrator (L2 + L3 promotion)
 │   │       └── lib.rs          re-exports
 │   └── capsule-verify-cli/     binary
-│       └── src/main.rs         clap CLI: verify <FILE> [--json] [--allowlist ...] [--decryption-key ...]
+│       └── src/main.rs         clap CLI: verify <FILE> [--json] [--allowlist ...]
+│                               [--decryption-key ...] [--accept-versions ...]
+│                               [--predecessor ...]
 └── tests/
     └── parity_against_js_sdk.rs    integration test vs tamper-detection fixtures
 ```
@@ -243,29 +372,30 @@ verifier-rust/
 
 Below is the full output of running the CLI against each tamper-detection
 fixture, captured from the working build. This is the moat-strengthening
-deliverable: the Rust verifier reaches the same PASS/FAIL the JS SDK
+deliverable: the Rust verifier reaches the same verdict the JS SDK
 reaches on each of the six fixtures, and the failure (where there is
 one) is attributed to the same check. With v0.3, both L2 and L3 paths
 are exercised against the encrypted fixtures.
 
 | Fixture | No key (L2) | With recipient key (L3) |
 |---|---|---|
-| `clean.capsule` | PASS @ L2 | PASS @ L2 (key silently ignored — plain) |
-| `tampered-payload.capsule` | FAIL @ `content_index` | (same — plain capsule, key ignored) |
-| `tampered-chain.capsule` | FAIL @ `content_index` + `chain` | (same — plain capsule, key ignored) |
-| `tampered-envelope.capsule` | FAIL @ `envelope_signature` | (same — plain capsule, key ignored) |
-| `clean-encrypted.capsule` | PASS @ L2 (chain deferred to L3) | **PASS @ L3 (chain fully verified; `inner_envelope.ok=true`, 1 inner signer valid; `inner_content_index.ok=true`)** |
-| `tampered-blob.capsule` | FAIL @ `encryption_state` | FAIL @ decryption (auth tag mismatch) |
+| `clean.capsule` | VALID @ L2 | VALID @ L2 (key silently ignored — plain) |
+| `tampered-payload.capsule` | INVALID @ `content_index` | (same — plain capsule, key ignored) |
+| `tampered-chain.capsule` | INVALID @ `content_index` + `chain` | (same — plain capsule, key ignored) |
+| `tampered-envelope.capsule` | INVALID @ `envelope_signature` | (same — plain capsule, key ignored) |
+| `clean-encrypted.capsule` | VALID @ L2, qualified `encrypted_outer_only` | **VALID @ L3 (chain fully verified; `inner_envelope.ok=true`, 1 inner signer valid; `inner_content_index.ok=true`)** |
+| `tampered-blob.capsule` | INVALID @ `encryption_state` | INVALID @ decryption (auth tag mismatch) |
 
 Full transcript (no `--decryption-key`):
 
 ```
 === clean.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/clean.capsule (4493 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/clean.capsule (2708 bytes)
+Capsule ID:             3e9dd801d3de…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -273,75 +403,83 @@ Checks:
   [✓] content_index
   [✓] chain
   [✓] envelope_signature
+  [✓] signer_set
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: PASS
+Result: VALID
+  qualifiers:
+    - trust not evaluated: no allowlist supplied
 
 === tampered-payload.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/tampered-payload.capsule (4493 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/tampered-payload.capsule (2708 bytes)
+Capsule ID:             3e9dd801d3de…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
   [✓] capsule_id / manifest_hash
   [✗] content_index
-        file hash mismatch: program.md: stored b3ea10a3261b9484d761b509aa7059e293e4f4287526a5f2226b5c06ae2b9a04 vs recomputed 9b8b2c71c8acb0bdd1a96d8127f0a797431e4de486ec653c2729c3192af6b89a
-        manifest.content_index.index_hash mismatch: stored 1e8b657ba3422c4433a93a1241d977d057e6f2369fce90b1d9029bf48798f4f6 vs recomputed 21f6087cb4a8f1ff817249767bef755091e5c9b7eaacb230cbe62e6766617b18
-        envelope.content_index_hash mismatch: 1e8b657ba3422c4433a93a1241d977d057e6f2369fce90b1d9029bf48798f4f6 vs recomputed 21f6087cb4a8f1ff817249767bef755091e5c9b7eaacb230cbe62e6766617b18
+        file hash mismatch: program.md: stored b1dad3e029e172beae7c5d47f26197824f5fea47f66042a3d7d3f701d443afb0 vs recomputed cf1ad15cb9cfc558c7e2ef5bba4e886dd6ef9c0d4fe2f44820af109aff63ef61
+        manifest.content_index.index_hash mismatch: stored f42f0eb348c41f4edec7b90d4dee8a5df2bf5d88536fd1dc44f2bb493c66e9d4 vs recomputed 5c30e700250d88cf5b3774b57a2e4970a633ea90164b53f227d5ea286a394cb2
+        envelope.content_index_hash mismatch: stored f42f0eb348c41f4edec7b90d4dee8a5df2bf5d88536fd1dc44f2bb493c66e9d4 vs recomputed 5c30e700250d88cf5b3774b57a2e4970a633ea90164b53f227d5ea286a394cb2
   [✓] chain
   [✓] envelope_signature
+  [✓] signer_set
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: FAIL
+Result: INVALID
 
 === tampered-chain.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/tampered-chain.capsule (4495 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/tampered-chain.capsule (2708 bytes)
+Capsule ID:             3e9dd801d3de…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
   [✓] capsule_id / manifest_hash
   [✗] content_index
-        file hash mismatch: chain/events.jsonl: stored bcc729bdd6af7267189f3bf1d6e96dad67ae7ccd75f0a5b2783e9b121eefb2ea vs recomputed 6bd5b29e37e773027d54dda1a5d1cd04e827fed84df1f8ca7c2b52f15250470a
-        manifest.content_index.index_hash mismatch: stored 1e8b657ba3422c4433a93a1241d977d057e6f2369fce90b1d9029bf48798f4f6 vs recomputed 6d9633975182006672440fd1de2500a86d29bb6f9f1a7cb43f1ce6ba7d8ada8f
-        envelope.content_index_hash mismatch: 1e8b657ba3422c4433a93a1241d977d057e6f2369fce90b1d9029bf48798f4f6 vs recomputed 6d9633975182006672440fd1de2500a86d29bb6f9f1a7cb43f1ce6ba7d8ada8f
+        file hash mismatch: chain/events.jsonl: stored a59cbdfc456813b9a25499ffae444e4ed79ebfedae63f9c4d7a9ccff61a2914f vs recomputed 4a61c02617165a675c2fc5c4d4a0314b13e47bee92b8e4f5b00076d1f7571ab9
+        manifest.content_index.index_hash mismatch: stored f42f0eb348c41f4edec7b90d4dee8a5df2bf5d88536fd1dc44f2bb493c66e9d4 vs recomputed fe3bedf1308600a2441927a3ca045493d89b311f601c60b16576b80a094101e3
+        envelope.content_index_hash mismatch: stored f42f0eb348c41f4edec7b90d4dee8a5df2bf5d88536fd1dc44f2bb493c66e9d4 vs recomputed fe3bedf1308600a2441927a3ca045493d89b311f601c60b16576b80a094101e3
   [✗] chain
-        seq 1: hash mismatch: stored 577a1933292463b7ecf8f3a5b32dbc970804fef418aab805b8a94fccf819d076, recomputed c3b2e62d0ffc1ba0517c88550ca29fc204cab9a5e761e6e5c1a2ef7a42945467
+        seq 1: hash mismatch: stored 6c0ca4d536c9e19b4f14163520ca47fa8c7623e0cb201e929964d10e9956c4ad, recomputed c9e66a79586bd62aed7bcb3f0df2a468dfce02053826f8304af99192aff726a3
   [✓] envelope_signature
+  [✓] signer_set
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: FAIL
+Result: INVALID
 
 === tampered-envelope.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/tampered-envelope.capsule (4493 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/tampered-envelope.capsule (2708 bytes)
+Capsule ID:             3e9dd801d3de…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -349,23 +487,26 @@ Checks:
   [✓] content_index
   [✓] chain
   [✗] envelope_signature
-        signer originator (c172289fcacf…) signature did not verify
+        signer originator (9a0ad2b05c92…) signature did not verify
+  [✗] signer_set
+        originator binding: manifest.originator.public_key 9a0ad2b05c9276891dcd3e183946660bcfe895adb3e63f6911a9514d666b7249 has no valid envelope signature with role 'originator'
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=false  trusted=false
+  - originator   9a0ad2b05c92…  valid=false  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: FAIL
+Result: INVALID
 
 === clean-encrypted.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (5587 bytes)
+Capsule ID:             b4b1792c79b3…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -374,22 +515,27 @@ Checks:
   [✓] chain
         deferred to L3 (encrypted outer)
   [✓] envelope_signature
+  [✓] signer_set
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: PASS
+Result: VALID
+  qualifiers:
+    - content is encrypted and was not read (L2 outer only; chain deferred to L3)
+    - trust not evaluated: no allowlist supplied
 
 === tampered-blob.capsule ===
-File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (7320 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (5587 bytes)
+Capsule ID:             b4b1792c79b3…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -398,16 +544,17 @@ Checks:
   [✓] chain
         deferred to L3 (encrypted outer)
   [✓] envelope_signature
+  [✓] signer_set
   [✗] encryption_state
-        envelope.encrypted_blob_hash mismatch: stored 4ac3fb41626ffbb69a26d75cd346fcfd17203b267af248b55715d42a05346d16 vs recomputed e7c4251f24aa0e9d9053296c84d65eae43bd9e2ca2e7d4ff1f38a0c8d177c08c
+        envelope.encrypted_blob_hash mismatch: stored f3283b5803e595ece1c8b9c0846bdc807cd0a17f9854c11013cbafe90f2accc5 vs recomputed 9126b3ef7e4badf58c85d30b7950015a26471eef9245de43a1ec294c58a9039e
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: FAIL
+Result: INVALID
 ```
 
 `clean-encrypted.capsule` passes at L2: the envelope, manifest,
@@ -421,11 +568,12 @@ L3 transcript (with `--decryption-key`):
 
 ```
 === clean-encrypted.capsule (with --decryption-key) ===
-File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (7320 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/clean-encrypted.capsule (5587 bytes)
+Capsule ID:             b4b1792c79b3…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L3
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -433,27 +581,31 @@ Checks:
   [✓] content_index
   [✓] chain
   [✓] envelope_signature
+  [✓] signer_set
   [✓] inner_envelope_signature
   [✓] inner_content_index
   [✓] encryption_state
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Inner signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: PASS
+Result: VALID
+  qualifiers:
+    - trust not evaluated: no allowlist supplied
 
 === tampered-blob.capsule (with --decryption-key) ===
-File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (7320 bytes)
-Capsule ID:             d6d73f94c78e…
-Originator (Ed25519):   c172289fcacf…
-Sealed at:              2026-05-07T12:00:00Z
+File:                   ../spec/vectors/tamper-detection/output/tampered-blob.capsule (5587 bytes)
+Capsule ID:             b4b1792c79b3…
+Originator (Ed25519):   9a0ad2b05c92…
+Sealed at:              2026-05-08T12:00:00Z
 Level:                  L2
+Profile:                v0.6-suite (default, undeclared)
 
 Checks:
   [✓] format / version
@@ -462,17 +614,18 @@ Checks:
   [✓] chain
         deferred to L3 (encrypted outer)
   [✓] envelope_signature
+  [✓] signer_set
   [✗] encryption_state
-        envelope.encrypted_blob_hash mismatch: stored 4ac3fb41626ffbb69a26d75cd346fcfd17203b267af248b55715d42a05346d16 vs recomputed e7c4251f24aa0e9d9053296c84d65eae43bd9e2ca2e7d4ff1f38a0c8d177c08c
+        envelope.encrypted_blob_hash mismatch: stored f3283b5803e595ece1c8b9c0846bdc807cd0a17f9854c11013cbafe90f2accc5 vs recomputed 9126b3ef7e4badf58c85d30b7950015a26471eef9245de43a1ec294c58a9039e
         L3: decryption failed: content decrypt failed (ChaCha20-Poly1305 auth tag invalid for content.enc)
 
 Signers:
-  - originator   c172289fcacf…  valid=true  trusted=false
+  - originator   9a0ad2b05c92…  valid=true  trusted=false
 
 Notes:
   - no allowlist provided; trusted=false for all signers regardless of signature validity
 
-Result: FAIL
+Result: INVALID
 ```
 
 With the recipient's X25519 key supplied, `clean-encrypted.capsule`

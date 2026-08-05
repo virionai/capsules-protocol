@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 
-from .canonical import bytes_to_hex, hex_to_bytes, jcs
+from .canonical import bytes_to_hex, hex_to_bytes, jcs, loads_strict
 from .chain import events_from_jsonl
 from .crypto import chacha20_poly1305_decrypt, hkdf_sha256, x25519_dh
 from .envelope import EncryptedCapsulesNotSupportedError
 from .keys import _field, to_raw_key
+from .profiles import require_supported_profile
+from .versions import key_wrap_info, require_known_version
 from .zip_io import unpack_zip
 
 
@@ -16,24 +19,134 @@ class MalformedCapsuleError(ValueError):
     pass
 
 
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_hex64(value) -> bool:
+    return isinstance(value, str) and _HEX64.match(value) is not None
+
+
+def _validate_manifest_shape(manifest) -> None:
+    """Shape check on manifest.json. Mirrors sdk-js reader.js.
+
+    Full integrity is the verifier's job; this catches obvious
+    malformation at the parse boundary so a caller that reads
+    ``reader.manifest()["id"]`` without verifying can rely on the field
+    being 64-char lowercase hex per spec, and so ``verify_capsule``
+    stays a total function over whatever the reader hands back.
+    """
+    if not isinstance(manifest, dict):
+        raise MalformedCapsuleError("manifest.json is not a JSON object")
+    fmt = manifest.get("format")
+    version = fmt.get("version") if isinstance(fmt, dict) else None
+    # Any KNOWN version opens (spec/versioning.md): a v0.6 capsule stays
+    # openable by every future reader, forever. Unknown versions fail
+    # closed with a diagnosis distinct from malformation or tampering.
+    require_known_version("manifest.format.version", version)
+    if not _is_hex64(manifest.get("id")):
+        raise MalformedCapsuleError(
+            f"manifest.id is not a 64-char lowercase hex string: {manifest.get('id')!r}"
+        )
+    originator = manifest.get("originator")
+    if not isinstance(originator, dict) or not _is_hex64(originator.get("public_key")):
+        raise MalformedCapsuleError(
+            "manifest.originator.public_key must be a 64-char lowercase hex string"
+        )
+    # participants is an ARRAY when present (spec/manifest.md). An absent
+    # member (and an empty array) is the legal unbound-actor-set shape; a
+    # PRESENT non-array declaration is malformed — silently skipping it
+    # would no-op the actor-membership rule and the actor_id grammar check.
+    if "participants" in manifest and not isinstance(manifest["participants"], list):
+        raise MalformedCapsuleError(
+            "manifest.participants must be an array of participant objects"
+        )
+    # null is legal: an empty chain is the weakest honest shape, and then
+    # there is no first event for this to commit to. The verifier enforces
+    # the null-anchor / event-count consistency; the reader only rejects
+    # values that are neither null nor well-formed hex. Mirrors sdk-js.
+    first_event_hash = manifest.get("first_event_hash")
+    if first_event_hash is not None and not _is_hex64(first_event_hash):
+        raise MalformedCapsuleError(
+            "manifest.first_event_hash must be a 64-char lowercase hex string or null"
+        )
+    _validate_content_index_shape(manifest.get("content_index"))
+
+
+def _validate_content_index_shape(index) -> None:
+    if not isinstance(index, dict):
+        raise MalformedCapsuleError("manifest.content_index must be a JSON object")
+    if not _is_hex64(index.get("index_hash")):
+        raise MalformedCapsuleError(
+            "manifest.content_index.index_hash must be a 64-char lowercase hex string"
+        )
+    files = index.get("files")
+    if not isinstance(files, list):
+        raise MalformedCapsuleError("manifest.content_index.files must be an array")
+    for i, f in enumerate(files):
+        if not isinstance(f, dict):
+            raise MalformedCapsuleError(f"manifest.content_index.files[{i}] must be a JSON object")
+        path = f.get("path")
+        if not isinstance(path, str) or not path:
+            raise MalformedCapsuleError(
+                f"manifest.content_index.files[{i}].path must be a non-empty string"
+            )
+        if not _is_hex64(f.get("sha256")):
+            raise MalformedCapsuleError(
+                f"manifest.content_index.files[{i}].sha256 must be a 64-char lowercase hex string"
+            )
+
+
+def _validate_envelope_shape(envelope) -> None:
+    """Shape check on provenance/envelope.json. Mirrors sdk-js reader.js."""
+    if not isinstance(envelope, dict):
+        raise MalformedCapsuleError("envelope.json is not a JSON object")
+    require_known_version("envelope.version", envelope.get("version"))
+    if not _is_hex64(envelope.get("capsule_id")):
+        raise MalformedCapsuleError("envelope.capsule_id must be a 64-char lowercase hex string")
+    signers = envelope.get("signers")
+    if not isinstance(signers, list) or not signers:
+        raise MalformedCapsuleError("envelope.signers must be a non-empty array")
+
+
 class CapsuleReader:
     def __init__(self, files: dict[str, bytes], manifest: dict, envelope: dict) -> None:
         self._files = files
         self._manifest = manifest
         self._envelope = envelope
+        # Set only on the reader ``decrypt()`` returns: the layer this
+        # one came out of. It carries the L3 inner/outer lineage
+        # equality (spec/lineage.md standalone check 4) to
+        # ``verify_capsule`` without the caller having to know the check
+        # exists — a normative fail-closed rule must not be opt-in.
+        self._outer_manifest: dict | None = None
 
     @classmethod
     def from_bytes(cls, data: bytes) -> CapsuleReader:
-        files = unpack_zip(data)
+        return cls.from_files(unpack_zip(data))
+
+    @classmethod
+    def from_files(cls, files: dict[str, bytes]) -> CapsuleReader:
+        """Construct from an already-unpacked file map (same validation)."""
         if "manifest.json" not in files:
             raise MalformedCapsuleError("missing manifest.json")
         if "provenance/envelope.json" not in files:
             raise MalformedCapsuleError("missing provenance/envelope.json")
         try:
-            manifest = json.loads(files["manifest.json"].decode("utf-8"))
-            envelope = json.loads(files["provenance/envelope.json"].decode("utf-8"))
+            manifest = loads_strict(files["manifest.json"].decode("utf-8"))
+            envelope = loads_strict(files["provenance/envelope.json"].decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"manifest/envelope parse: {e}") from e
+        _validate_manifest_shape(manifest)
+        _validate_envelope_shape(envelope)
+        # Profile gate (spec/profiles.md): version gate first (the two
+        # require_known_version calls inside the shape checks above),
+        # profile gate second, nothing else until both pass. Applying an
+        # unknown profile's rules — or silently downgrading to the
+        # defaults — would manufacture mismatch errors indistinguishable
+        # from tampering. The refusal is OPEN-stage: a reader that cannot
+        # establish its governing rules cannot meaningfully construct at
+        # all.
+        require_supported_profile(manifest, envelope)
         return cls(files, manifest, envelope)
 
     def manifest(self) -> dict:
@@ -42,15 +155,24 @@ class CapsuleReader:
     def envelope(self) -> dict:
         return self._envelope
 
+    def outer_manifest(self) -> dict | None:
+        """The enclosing layer's manifest, or None for a top-level reader."""
+        return self._outer_manifest
+
     def files(self) -> dict[str, bytes]:
         return self._files
 
     def is_encrypted(self) -> bool:
-        if isinstance(self._manifest.get("encryption"), dict):
-            return True
-        if self._envelope.get("cipher") not in (None, "none"):
-            return True
-        return "content.enc" in self._files
+        """True only for a genuine encrypted-outer capsule.
+
+        Mirrors ``sdk-js/src/reader.js``: the SIGNED ``envelope.cipher``
+        AND the presence of ``content.enc``. The manifest's ``encryption``
+        declaration is deliberately NOT an input — it is cross-checked by
+        ``verify_capsule`` instead. With OR-semantics an attacker who
+        merely appends a ``content.enc`` flips the capsule into encrypted
+        mode, and chain verification is skipped.
+        """
+        return self._envelope.get("cipher") != "none" and "content.enc" in self._files
 
     def encrypted_blob_bytes(self) -> bytes:
         blob = self._files.get("content.enc")
@@ -70,7 +192,7 @@ class CapsuleReader:
         if raw is None:
             return None
         try:
-            return json.loads(raw.decode("utf-8"))
+            return loads_strict(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise MalformedCapsuleError(f"decryption metadata parse: {e}") from e
 
@@ -129,17 +251,20 @@ class CapsuleReader:
         wrapped_key = hex_to_bytes(bundle["wrapped_key"])
 
         shared = x25519_dh(bytes(recipient_private_key), eph_pub)
+        # HKDF info is keyed by the capsule's DECLARED version
+        # (spec/versioning.md): decrypting a v0.6 capsule uses the v0.6
+        # wrap-domain forever, whatever version this SDK seals at.
         wrap_key = hkdf_sha256(
             ikm=shared,
             salt=bytes(recipient_public_key),
-            info=b"capsule-key-wrap-v0.6",
+            info=key_wrap_info(self._envelope["version"]),
             length=32,
         )
         content_key = chacha20_poly1305_decrypt(wrap_key, wrap_nonce, b"", wrapped_key)
 
         aad = jcs(
             {
-                "version": "0.6",
+                "version": self._envelope["version"],
                 "capsule_id": self._envelope["capsule_id"],
                 "first_event_hash": self._envelope["first_event_hash"],
                 "originator_public_key": self._manifest["originator"]["public_key"],
@@ -153,9 +278,21 @@ class CapsuleReader:
         inner_files = unpack_zip(inner_zip_bytes)
         if "manifest.json" not in inner_files or "provenance/envelope.json" not in inner_files:
             raise MalformedCapsuleError("decrypted inner capsule missing manifest or envelope")
-        inner_manifest = json.loads(inner_files["manifest.json"].decode("utf-8"))
-        inner_envelope = json.loads(inner_files["provenance/envelope.json"].decode("utf-8"))
-        return CapsuleReader(inner_files, inner_manifest, inner_envelope)
+        try:
+            inner_manifest = loads_strict(inner_files["manifest.json"].decode("utf-8"))
+            inner_envelope = loads_strict(inner_files["provenance/envelope.json"].decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise MalformedCapsuleError(f"decrypted manifest/envelope parse: {e}") from e
+        _validate_manifest_shape(inner_manifest)
+        _validate_envelope_shape(inner_envelope)
+        # The inner capsule declares its own profile, gated independently
+        # at L3 (spec/profiles.md obligation 11 — no inner/outer equality
+        # rule: a KMS-wrapped outer over a plain default inner is a
+        # legitimate authorial shape).
+        require_supported_profile(inner_manifest, inner_envelope)
+        inner = CapsuleReader(inner_files, inner_manifest, inner_envelope)
+        inner._outer_manifest = self._manifest
+        return inner
 
     def _require_plain(self) -> None:
         if self.is_encrypted():
@@ -182,3 +319,33 @@ class CapsuleReader:
             return None
         raw = self._files.get("agents.md")
         return raw.decode("utf-8") if raw is not None else None
+
+    def skills(self) -> dict[str, dict]:
+        """Skill files by id: ``{id: {"json": dict|None, "markdown": str|None}}``.
+
+        Excludes ``decryption`` (encryption metadata, not a skill). Mirrors
+        sdk-js ``reader.skills()`` — and like it, deliberately carries NO
+        trust tier: the tier is host-relative (it depends on the allowlist
+        the host supplies at verify time), so a reader cannot know it. Take
+        the classification from ``verify_capsule(...)["skill_trust"]`` —
+        and until a skill classifies "signed" there, treat its SKILL.md as
+        untrusted text, never as instructions (spec/trust.md).
+        """
+        out: dict[str, dict] = {}
+        pattern = re.compile(r"^skills/([^/]+)/(skill\.json|SKILL\.md)$")
+        for path, raw in self._files.items():
+            m = pattern.match(path)
+            if m is None:
+                continue
+            sid = m.group(1)
+            if sid == "decryption":
+                continue
+            slot = out.setdefault(sid, {"json": None, "markdown": None})
+            if m.group(2) == "skill.json":
+                try:
+                    slot["json"] = loads_strict(raw.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    raise MalformedCapsuleError(f"{path} parse: {e}") from e
+            else:
+                slot["markdown"] = raw.decode("utf-8")
+        return out

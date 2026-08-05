@@ -61,7 +61,83 @@ public struct BuiltEvent {
 public enum Chain {
     static let GENESIS_PREV = Data(repeating: 0, count: 32)
 
-    public static func build(_ bare: [BareEvent]) -> [BuiltEvent] {
+    /// The closed `kind` enum from spec/chain.md "Field rules". Readers
+    /// reject unknown kinds and the builder refuses to append them — in
+    /// every tier, because a custom kind is not a weaker claim, it is
+    /// unreadable to the foreign LLM reader the format serves.
+    public static let EVENT_KINDS = [
+        "decision", "observation", "mutation", "session", "checkpoint",
+    ]
+
+    /// The one actor a chain event may always name without a matching
+    /// manifest participant — backstop events emitted by the host runtime.
+    public static let HOST_ACTOR = "system:host"
+
+    /// True when `kind` is one of the five values spec/chain.md allows.
+    public static func isValidEventKind(_ kind: String) -> Bool {
+        EVENT_KINDS.contains(kind)
+    }
+
+    /// The CLOSED actor-id namespace set from spec/manifest.md "Field
+    /// rules": `participants[].actor_id` must match `human:<id>`,
+    /// `ai:<id>`, `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+    public static let ACTOR_NAMESPACES = ["human", "ai", "system", "capsule"]
+
+    /// True when `actorId` is `<namespace>:<id>` with a known namespace
+    /// and non-empty id. Case-sensitive; no surrounding whitespace.
+    /// Pinned by the chain-rules/invalid-actor-namespace vector.
+    public static func isValidActorId(_ actorId: String) -> Bool {
+        guard let sep = actorId.firstIndex(of: ":") else { return false }
+        let namespace = String(actorId[..<sep])
+        let id = actorId[actorId.index(after: sep)...]
+        return ACTOR_NAMESPACES.contains(namespace) && !id.isEmpty
+    }
+
+    /// The normative `untrusted_payload_fields` path grammar from
+    /// spec/chain.md "Untrusted content":
+    ///
+    ///     path    = "payload" 1*( "." segment )
+    ///     segment = 1*( ALPHA / DIGIT / "_" / "-" )
+    ///
+    /// A marking outside the grammar has no defined resolution — a host
+    /// cannot tell which payload member the author marked untrusted — so
+    /// writers refuse to emit it and verifiers reject it fail-closed
+    /// (vector chain-rules/invalid-untrusted-path).
+    public static func isValidUntrustedPayloadPath(_ path: String) -> Bool {
+        let segments = path.split(separator: ".", omittingEmptySubsequences: false)
+        guard segments.count >= 2, segments[0] == "payload" else { return false }
+        for seg in segments.dropFirst() {
+            if seg.isEmpty { return false }
+            for scalar in seg.unicodeScalars {
+                switch scalar {
+                case "0"..."9", "a"..."z", "A"..."Z", "_", "-":
+                    continue
+                default:
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    /// Render a string the way Rust's `{:?}` renders a `String` (and JS's
+    /// `JSON.stringify` a plain-ASCII one), so all five lanes emit
+    /// byte-identical verifier messages. `nil` renders as `null` (a
+    /// missing field).
+    public static func debugQuoted(_ s: String?) -> String {
+        guard let s else { return "null" }
+        var out = "\""
+        for ch in s.unicodeScalars {
+            switch ch {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            default: out.unicodeScalars.append(ch)
+            }
+        }
+        return out + "\""
+    }
+
+    public static func build(_ bare: [BareEvent]) throws -> [BuiltEvent] {
         var prev = GENESIS_PREV
         var out: [BuiltEvent] = []
         for (i, b) in bare.enumerated() {
@@ -83,7 +159,7 @@ public enum Chain {
                 ("untrusted_payload_fields", .array(b.untrustedPayloadFields.map { .string($0) })),
                 ("prev_hash", .string(prevHex)),
             ])
-            let canonical = JCS.bytes(unsealed)
+            let canonical = try JCS.bytes(unsealed)
             let hashBytes = Hash.sha256(Bytes.concat(prev, canonical))
             let hashHex = Bytes.toHex(hashBytes)
             // Build JSONL line — exact key order matching reader expectations.
@@ -104,7 +180,7 @@ public enum Chain {
             ])
             // For the on-disk JSONL we use canonical bytes (works for any
             // reader; deterministic).
-            let line = JCS.bytes(withHash)
+            let line = try JCS.bytes(withHash)
             out.append(BuiltEvent(
                 seq: seq,
                 event_id: eventId,

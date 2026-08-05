@@ -1,6 +1,6 @@
 # Capsule SDK (Kotlin)
 
-Native Kotlin library for Capsule v0.6: a portable, signed, verifiable
+Native Kotlin library for Capsule v0.7: a portable, signed, verifiable
 container for AI work product. Build, read, verify, and sign **plain
 (unencrypted) capsules** on Android (or any JVM); embed skills; expose
 them to your app's LLM through a small documented contract.
@@ -18,7 +18,7 @@ Kotlin encryption path lands.
 
 ## Status
 
-`0.6.0-prototype.1` — the `:core` module compiles and its tests
+`0.7.0-prototype.1` — the `:core` module compiles and its tests
 (round-trip, JS-fixture parity, JCS number vectors) run in CI on every
 push; see the `conformance-kotlin` lane in
 [.github/workflows/conformance.yml](../.github/workflows/conformance.yml).
@@ -51,10 +51,10 @@ In `app/build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("ai.virion.capsule:core:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:skills:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:llm:0.6.0-prototype.1")
-    implementation("ai.virion.capsule:ui:0.6.0-prototype.1")
+    implementation("ai.virion.capsule:core:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:skills:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:llm:0.7.0-prototype.1")
+    implementation("ai.virion.capsule:ui:0.7.0-prototype.1")
 }
 ```
 
@@ -105,6 +105,83 @@ require(v.ok) { v.checks.filterNot { it.ok }.joinToString { "${it.name}: ${it.de
 println("Signers: ${v.signers.map { "${it.role} trusted=${it.trusted}" }}")
 println("Program:\n${parsed.programMd}")
 ```
+
+Every result also carries the normalized verdict surface of
+[spec/results.md](../spec/results.md): `v.verdict`
+(`valid | invalid | unsupported`, with `ok == (verdict == "valid")`),
+`v.verdictReason` (non-null only for `unsupported` — an unknown format
+version, a declared profile this verifier does not implement, or an
+encrypted capsule this lane cannot process: a limitation of the
+verifier, never a claim the capsule is corrupt), and `v.qualifiers` —
+the weaker claims a *valid* capsule made honestly (unbound signer set,
+unbound actor set, unwalked empty chain, no allowlist consulted, a
+declared lineage nobody supplied bytes for, and so on). **If you render
+a verdict, render the qualifiers beside it:** showing a bare "verified"
+for a capsule that carries qualifiers is the report lying by omission,
+and results.md names it non-conforming.
+
+```kotlin
+when (v.verdict) {
+    "valid" -> render("verified", qualifiers = v.qualifiers)
+    "unsupported" -> render("cannot verify here: ${v.verdictReason}")
+    else -> render("verification failed")
+}
+```
+
+`trust_not_evaluated` keys off the *effective* allowlist: an entry that
+is not 64-char hex is dropped with an `ignored invalid allowlist entry`
+note, so a typo cannot masquerade as a consulted policy.
+
+`v.profile` reports the declared verification profile
+([spec/profiles.md](../spec/profiles.md)) — `status` `default` for the
+capsules every mainstream reader verifies, `effective` naming the rule
+set actually applied. `CapsuleVerifier.verify` also accepts the
+report-only host policies `acceptVersions` and `acceptProfiles`. Gate
+order is version → profile → everything else; on a refusal at either
+gate the diagnosis is the only error the result carries, `v.lineage`
+holds its not-evaluated default, and `v.qualifiers` is empty.
+
+## Quick start — check a lineage declaration
+
+A successor capsule declares the exact sealed artifact(s) it continues
+from in `manifest.predecessors` ([spec/lineage.md](../spec/lineage.md)).
+The standalone checks always run and fail closed; supplying predecessor
+bytes is REPORT-ONLY — it can falsify `lineage.ok`, never `v.ok`, so a
+third party cannot flip a valid capsule's verdict by handing this
+verifier the wrong file.
+
+```kotlin
+val v = CapsuleVerifier.verify(
+    successorBytes,
+    predecessors = listOf(predecessorFile.readBytes()),  // optional pool
+)
+if (v.lineage.declared) {
+    for (e in v.lineage.entries) {
+        // status: unverified | verified | mismatch |
+        //         predecessor_invalid | predecessor_unverifiable
+        println("hop ${e.hop} ${e.capsuleId}: ${e.status} ${e.reason ?: ""}")
+    }
+    println("verified to depth ${v.lineage.verifiedDepth}")
+}
+```
+
+A declaration is the successor's **one-way** claim: the predecessor's
+originator has not countersigned it, and an unchecked entry is
+"declared, not verified". Both statements are in `v.notes`, and a
+host UI must not drop them — that is how a citation gets read as an
+endorsement. `v.qualifiers` carries the same weaker-claim facts as bare
+strings (`lineage_declared_unverified`, `lineage_mismatch`,
+`lineage_predecessor_invalid` — entries 8–10 of the spec-defined order,
+after the seven base names), non-empty only on a valid verdict. The
+payload-carrying facts — `verifiedDepth`, the per-entry statuses and
+reasons — stay in `v.lineage`, never on the bare-string array.
+
+v0.7.1 declarations commit to plain, default-profile predecessors: an
+encrypted or alternate-profile supply is reported
+`predecessor_unverifiable` with a reason, never guessed at and never
+branded a defect. Writing a declaration (rewrap / `continueFrom`) is a
+declared fast-follow in this lane — use the JS or Python SDK to seal a
+successor, then verify it anywhere.
 
 ## Quick start — drop in "+ Capsule" UI
 
@@ -177,9 +254,9 @@ JSON the skill emits — including the optional `webview` field that
 `WebviewSpec` models. The SDK does not bundle host-specific adapters;
 the shared interface keeps those adapters thin.
 
-## What ships in 0.6.0-prototype.1
+## What ships in 0.7.0-prototype.1
 
-- `:core`: full Capsule v0.6 builder, reader, verifier, envelope
+- `:core`: full Capsule v0.7 builder, reader, verifier, envelope
   sign/verify, JCS canonicalization, deterministic ZIP STORED.
 - `:skills`: `CapsuleSkill` model, `ParsedCapsule.skills()` extension,
   trust-tier semantics.
@@ -200,6 +277,11 @@ the shared interface keeps those adapters thin.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `List<Signer>`
   but `CapsuleBuilder.seal` currently signs only with the originator.
   The lower-level `Envelope` API is callable.
+- **Lineage writer surface** (`continueFrom` / `declarePredecessor` /
+  rewrap): verify-side lineage ships in full, but sealing a successor
+  is a declared fast-follow here, as it is in the Swift lane. The
+  asymmetry is recorded in `spec/vectors/registry.json` beside the
+  lineage collection, never left silent.
 
 ## License
 

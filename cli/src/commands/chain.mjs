@@ -2,17 +2,19 @@
 //
 // Walks the chain. Default output is one row per event, compact and
 // readable. --json emits the full event objects. Encrypted capsules
-// without a decryption key reach an early-out — direct the user at
-// `capsule verify --decryption-key=...`.
+// reach an early-out: this CLI does not decrypt (see "What's *not* in
+// this CLI" in cli/README.md), so the error points at the tools that
+// do — the SDK's reader.decrypt() and the Rust capsule-verify-cli.
 
-import { CapsuleReader } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, out, readBytes, truncHex } from "../format.mjs";
 
 const USAGE = "usage: capsule chain <file> [--limit N] [--json]\n";
 
 export async function chainCmd(argv) {
-  const args = parseArgs(argv, { booleans: ["json"], strings: ["limit"] });
+  const args = parseArgs(argv, { booleans: ["json"], strings: ["limit"], maxPositionals: 1 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const file = args._[0];
   if (!file) { process.stderr.write(USAGE); return 2; }
 
@@ -20,7 +22,7 @@ export async function chainCmd(argv) {
   const reader = await CapsuleReader.fromBytes(bytes);
   if (reader.isEncrypted()) {
     throw new CLIError(
-      "capsule is encrypted; chain unavailable without a decryption key. Use `capsule verify <file> --json` after decrypting, or extract first.",
+      "capsule is encrypted; chain unavailable without decryption. This CLI does not decrypt — use the SDK's reader.decrypt(), or the Rust capsule-verify-cli for verified L3 access.",
       2,
     );
   }

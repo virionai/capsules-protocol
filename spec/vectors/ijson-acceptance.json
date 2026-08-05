@@ -1,0 +1,117 @@
+{
+  "meta": {
+    "kind": "ijson-acceptance"
+  },
+  "description": "I-JSON acceptance boundary vectors (spec/canonicalization.md). `input_json` is the raw JSON text an implementation must feed to its own parser plus canonicalizer. `expect: accept` pins the canonical output; `expect: reject` requires the value to be refused, at parse time or at canonicalization time, whichever this lane reaches first. Both are conforming: what is normative is that the value never reaches a hash.",
+  "reasons": {
+    "integer_out_of_range": "A number whose canonical token is a plain integer literal (no '.', no 'e') with |n| > 2^53 - 1.",
+    "unpaired_surrogate": "A string, or an object key, containing a surrogate code point that is not part of a well-formed pair."
+  },
+  "vectors": [
+    {
+      "name": "max-safe-integer",
+      "input_json": "{\"n\":9007199254740991}",
+      "expect": "accept",
+      "canonical": "{\"n\":9007199254740991}"
+    },
+    {
+      "name": "negative-max-safe-integer",
+      "input_json": "{\"n\":-9007199254740991}",
+      "expect": "accept",
+      "canonical": "{\"n\":-9007199254740991}"
+    },
+    {
+      "name": "exponent-form-above-plain-ceiling",
+      "input_json": "{\"n\":1e21}",
+      "expect": "accept",
+      "canonical": "{\"n\":1e+21}"
+    },
+    {
+      "name": "fractional-number",
+      "input_json": "{\"n\":4.35}",
+      "expect": "accept",
+      "canonical": "{\"n\":4.35}"
+    },
+    {
+      "name": "well-formed-astral-pair",
+      "input_json": "{\"s\":\"a\\ud83d\\ude42\"}",
+      "expect": "accept",
+      "canonical": "{\"s\":\"a🙂\"}"
+    },
+    {
+      "name": "non-ascii-passthrough",
+      "input_json": "{\"s\":\"héllo\"}",
+      "expect": "accept",
+      "canonical": "{\"s\":\"héllo\"}"
+    },
+    {
+      "name": "twenty-digit-integer-literal",
+      "input_json": "{\"ts\":10000000000000000000}",
+      "expect": "reject",
+      "reason": "integer_out_of_range"
+    },
+    {
+      "name": "nanosecond-timestamp",
+      "input_json": "{\"ts_ns\":1700000000000000000}",
+      "expect": "reject",
+      "reason": "integer_out_of_range"
+    },
+    {
+      "name": "two-pow-53-plus-one",
+      "input_json": "{\"n\":9007199254740993}",
+      "expect": "reject",
+      "reason": "integer_out_of_range"
+    },
+    {
+      "name": "exponent-input-plain-integer-output",
+      "input_json": "{\"n\":1e19}",
+      "expect": "reject",
+      "reason": "integer_out_of_range"
+    },
+    {
+      "name": "lone-high-surrogate",
+      "input_json": "{\"s\":\"x\\ud83d\"}",
+      "expect": "reject",
+      "reason": "unpaired_surrogate"
+    },
+    {
+      "name": "lone-low-surrogate",
+      "input_json": "{\"s\":\"\\udc00x\"}",
+      "expect": "reject",
+      "reason": "unpaired_surrogate"
+    },
+    {
+      "name": "lone-surrogate-in-object-key",
+      "input_json": "{\"k\\ud800\":1}",
+      "expect": "reject",
+      "reason": "unpaired_surrogate"
+    },
+    {
+      "name": "lone-surrogate-nested-in-payload",
+      "input_json": "{\"payload\":{\"summary\":\"ok \\ud83d\"}}",
+      "expect": "reject",
+      "reason": "unpaired_surrogate"
+    },
+    {
+      "name": "duplicate-member-basic",
+      "input_json": "{\"a\":1,\"a\":2}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "RFC 7493 2.3: objects must not have members with duplicate names. Every mainstream parser silently keeps the last value, so two different byte sequences share one canonical form — a smuggling primitive. Refusal at parse time or at the canonicalization gate both conform."
+    },
+    {
+      "name": "duplicate-member-nested",
+      "input_json": "{\"o\":{\"k\":1,\"k\":2}}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "The rule applies at every depth, not just the top-level object."
+    },
+    {
+      "name": "duplicate-member-escaped-name",
+      "input_json": "{\"a\":1,\"\\u0061\":2}",
+      "expect": "reject",
+      "reason": "duplicate_member",
+      "note": "Names compare AFTER escape processing: \\u0061 is the same member name as a. A text-level duplicate detector that compares raw escape sequences misses this pair."
+    }
+  ]
+}

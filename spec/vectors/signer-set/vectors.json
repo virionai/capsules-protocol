@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "name": "signer-set",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the signer-set binding fixtures (spec/manifest.md 'signer_commitment', spec/envelope.md 'Signer set binding'). PRESENCE BINDS: a present manifest.signer_commitment must equal the normalized envelope signer set exactly, fail-closed. ABSENCE REPORTS: a manifest without one verifies, and the verifier reports the set as unbound machine-readably (expected.signer_set_bound). Duplicate (role, public_key) signer entries are malformed, and manifest.originator.public_key must have a valid envelope signature with role 'originator'. Independent implementations SHOULD reproduce ok, the failing areas, and signer_set_bound below.",
+    "generator": "sdk-js/tools/generate-signer-set-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "bound-two-signers",
+      "capsule_file": "output/bound-two-signers.capsule",
+      "expected": { "ok": true, "signer_set_bound": true },
+      "note": "Positive control: originator + approver, exact-membership commitment present and matched."
+    },
+    {
+      "name": "commitment-absent",
+      "capsule_file": "output/commitment-absent.capsule",
+      "expected": {
+        "ok": true,
+        "signer_set_bound": false,
+        "verdict": "valid",
+        "qualifiers": ["signer_set_unbound"],
+        "notes_includes": "the signer set is not bound by the seal"
+      },
+      "note": "Absence is a weaker claim made honestly: verification succeeds, and the verifier MUST report the signer set as unbound — machine-readably as the signer_set_unbound qualifier on the verdict (spec/results.md) and with the canonical note pinned here. This is what lets unsigned templates and legacy capsules share the format with a fully committed one."
+    },
+    {
+      "name": "commitment-strip",
+      "capsule_file": "output/commitment-strip.capsule",
+      "expected": { "ok": false, "failing": ["signer_set"], "error_includes": "signer_commitment" },
+      "note": "The approver's entry was removed from signers[]. Every remaining signature verifies; the commitment names the missing member."
+    },
+    {
+      "name": "commitment-add",
+      "capsule_file": "output/commitment-add.capsule",
+      "expected": { "ok": false, "failing": ["signer_set"], "error_includes": "signer_commitment" },
+      "note": "A fresh, cryptographically VALID attacker signature appended in role 'notary'. Per-role domain separation does nothing here — only the commitment equality fails it."
+    },
+    {
+      "name": "commitment-duplicate",
+      "capsule_file": "output/commitment-duplicate.capsule",
+      "expected": { "ok": false, "failing": ["envelope"], "error_includes": "duplicate signer" },
+      "note": "An existing originator entry copied verbatim. Duplicate (role, public_key) members are malformed regardless of the commitment: counting rows instead of members lets one key satisfy an M-of-N policy."
+    },
+    {
+      "name": "commitment-role-swap",
+      "capsule_file": "output/commitment-role-swap.capsule",
+      "expected": { "ok": false, "failing": ["signer_set"], "error_includes": "signer_commitment" },
+      "note": "Both committed keys re-signed under each other's roles. Every signature verifies; membership is role-sensitive, so the set no longer equals the commitment."
+    },
+    {
+      "name": "commitment-unsorted",
+      "capsule_file": "output/commitment-unsorted.capsule",
+      "expected": { "ok": false, "failing": ["signer_set"], "error_includes": "sorted" },
+      "note": "Honest membership, wrong member order. The commitment is bound by its stored bytes, so the ascending (public_key, role) order is normative."
+    },
+    {
+      "name": "originator-not-a-signer",
+      "capsule_file": "output/originator-not-a-signer.capsule",
+      "expected": { "ok": false, "failing": ["originator_binding"], "error_includes": "originator binding" },
+      "note": "manifest.originator.public_key signed only under role 'creator' (and committed as such, so signer_set matches). A manifest naming an originator who never signed as 'originator' is the capsule asserting something false about itself — an invariant, not policy."
+    }
+  ]
+}

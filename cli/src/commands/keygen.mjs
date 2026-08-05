@@ -12,7 +12,7 @@
 
 import { mkdir, writeFile, chmod } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { generateEd25519 } from "@capsule/sdk-v0.6-prototype";
+import { generateEd25519 } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { out } from "../format.mjs";
 
@@ -22,8 +22,9 @@ export async function keygenCmd(argv) {
   const args = parseArgs(argv, {
     booleans: ["json"],
     strings: ["out", "label"],
+    maxPositionals: 0,
   });
-  if (args._[0] === "help" || args.help === true) {
+  if (args.help) {
     process.stderr.write(USAGE);
     return 0;
   }

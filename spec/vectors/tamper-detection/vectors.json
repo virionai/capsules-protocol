@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "tamper-detection",
-    "spec_version": "0.6",
+    "spec_version": "0.7",
     "description": "Language-neutral expected verifier outcomes for the tamper-detection fixtures. Independent implementations SHOULD reproduce ok and the failing areas below.",
     "no_warranty": "Conformance fixtures only; not production templates or advice."
   },
@@ -37,6 +37,12 @@
       "name": "tampered-blob",
       "capsule_file": "output/tampered-blob.capsule",
       "expected": { "ok": false, "failing": ["encrypted_blob"], "error_includes": "encrypted_blob_hash" }
+    },
+    {
+      "name": "plain-stray-content-enc",
+      "capsule_file": "output/plain-stray-content-enc.capsule",
+      "expected": { "ok": false, "failing": ["content_index"], "error_includes": "content.enc" },
+      "note": "A signed plain capsule (envelope.cipher=\"none\") carrying an unaccounted-for content.enc blob. spec/manifest.md makes the content-index exclusion of content.enc conditional on the SIGNED envelope.cipher, so the stray blob MUST be indexed and content_index verification MUST fail. The envelope signature stays valid: an attacker who appends the blob cannot re-sign, and cannot flip cipher to force the exclusion."
     }
   ]
 }

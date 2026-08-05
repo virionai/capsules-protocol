@@ -20,10 +20,16 @@ class CapsuleBuilder(
         val label: String = "",
     )
 
+    /**
+     * Builder-side participant declaration. [role] and [label] are
+     * OPTIONAL advisory attribution text (spec/manifest.md field rules):
+     * a participant declared with only an actor id is a weaker claim
+     * made honestly, and the sealed manifest omits the absent members.
+     */
     data class Participant(
         val actorId: String,
-        val role: String,
-        val label: String,
+        val role: String? = null,
+        val label: String? = null,
     )
 
     data class PayloadFile(val path: String, val bytes: ByteArray) {
@@ -50,19 +56,73 @@ class CapsuleBuilder(
     private var agentsMd: String? = null
     private var participants: List<Participant> = emptyList()
     private val bareEvents = mutableListOf<BareEvent>()
-    private val skills = linkedMapOf<String, Triple<ByteArray?, String?, Boolean>>() // id → (json, md, signed)
+    private val skills = linkedMapOf<String, Pair<ByteArray?, String?>>() // id → (json, md)
     private val payload = linkedMapOf<String, ByteArray>()
 
     fun setProgram(md: String) = apply { this.programMd = md }
     fun setAgents(md: String) = apply { this.agentsMd = md }
-    fun setParticipants(ps: List<Participant>) = apply { this.participants = ps }
 
+    /**
+     * Declare the participant set. Throws [IllegalArgumentException]
+     * (spec/manifest.md field rules, finding A06) when any [Participant.actorId]
+     * falls outside the closed namespace grammar — `human:<id>`, `ai:<id>`,
+     * `system:<id>`, `capsule:<id>` with a non-empty `<id>` — because a
+     * capsule declaring an uninterpretable participant fails every
+     * conformant verifier.
+     */
+    fun setParticipants(ps: List<Participant>) = apply {
+        for ((i, p) in ps.withIndex()) {
+            require(Chain.isValidActorId(p.actorId)) {
+                "participants[$i].actor_id ${Chain.debugQuoted(p.actorId)} " +
+                    "does not match an allowed namespace (human:, ai:, system:, capsule:)"
+            }
+        }
+        this.participants = ps
+    }
+
+    /**
+     * Append a chain event. seq, event_id, prev_hash, and hash are
+     * computed at seal time.
+     *
+     * Throws [IllegalArgumentException] (spec/chain.md) when [kind] is
+     * outside the closed enum (always), or when the builder declares a
+     * non-empty participant set and [actor] is neither `"system:host"`
+     * nor a declared actor id. The builder never auto-registers
+     * participants — declaring who may act is the caller's decision. A
+     * builder with NO declared participants accepts any actor: that
+     * capsule makes a visibly weaker claim (verifiers report the actor
+     * set as unbound).
+     */
     fun appendEvent(
         actor: String, kind: String, action: String, target: String,
         timestamp: String? = null,
         payload: JCSValue = JCSValue.Obj(emptyList()),
         untrustedPayloadFields: List<String> = emptyList(),
     ) = apply {
+        require(Chain.isValidEventKind(kind)) {
+            "event kind ${Chain.debugQuoted(kind)} is not one of " +
+                Chain.EVENT_KINDS.joinToString(", ")
+        }
+        require(
+            participants.isEmpty() ||
+                actor == Chain.HOST_ACTOR ||
+                participants.any { it.actorId == actor },
+        ) {
+            "event actor ${Chain.debugQuoted(actor)} is not a declared participant: " +
+                "call setParticipants(...) with actorId ${Chain.debugQuoted(actor)} " +
+                "before appendEvent (only \"system:host\" may appear without one)"
+        }
+        // Writer obligation (spec/chain.md "Untrusted content"): a marking
+        // outside the path grammar has no defined resolution, so refuse it
+        // at the call site that introduced it rather than at some future
+        // reader.
+        for (path in untrustedPayloadFields) {
+            require(Chain.isValidUntrustedPayloadPath(path)) {
+                "appendEvent: untrusted_payload_fields entry ${Chain.debugQuoted(path)} " +
+                    "is not a valid payload path (expected \"payload.<segment>\" " +
+                    "per spec/chain.md)"
+            }
+        }
         bareEvents += BareEvent(
             actor = actor, kind = kind, action = action, target = target,
             timestamp = timestamp ?: createdAt,
@@ -71,11 +131,16 @@ class CapsuleBuilder(
         )
     }
 
-    fun addSkill(id: String, json: ByteArray? = null, markdown: String? = null,
-                 signed: Boolean = false) = apply {
+    /**
+     * Add a skill (skills/<id>/skill.json + SKILL.md). There is no trust
+     * declaration here: skill trust is host-relative and DERIVED at
+     * verify time (CapsuleVerification.skillTrust), so an author cannot
+     * assert it (spec/trust.md "Skill trust").
+     */
+    fun addSkill(id: String, json: ByteArray? = null, markdown: String? = null) = apply {
         require(Regex("^[A-Za-z0-9_-]+$").matches(id)) { "invalid skill id: $id" }
         require(id != "decryption") { "'decryption' is reserved for encryption metadata" }
-        skills[id] = Triple(json, markdown, signed)
+        skills[id] = json to markdown
     }
 
     fun addPayload(file: PayloadFile) = apply {
@@ -92,6 +157,12 @@ class CapsuleBuilder(
                 "note" to JCSValue.Str("host emitted backstop event before seal")
             )),
         )) else bareEvents
+        // I-JSON acceptance boundary (spec/canonicalization.md): refuse to
+        // seal a payload that cannot be canonicalized identically in every
+        // lane, rather than emitting a capsule only this lane can verify.
+        bare.forEachIndexed { i, event ->
+            JCS.assertAcceptable(event.payload, "event[$i].payload")
+        }
         val events = Chain.build(bare)
         val firstHash = events.first().hash
         val entryHash = events.last().hash
@@ -102,16 +173,20 @@ class CapsuleBuilder(
             "chain/events.jsonl" to eventsJsonl,
         )
         agentsMd?.let { innerFiles += "agents.md" to it.toByteArray(Charsets.UTF_8) }
-        val skillTrust = mutableListOf<Pair<String, String>>()
         for ((id, sk) in skills) {
             sk.first?.let { innerFiles += "skills/$id/skill.json" to it }
             sk.second?.let { innerFiles += "skills/$id/SKILL.md" to it.toByteArray(Charsets.UTF_8) }
-            skillTrust += id to (if (sk.third) "signed" else "unsigned")
         }
         for ((path, bytes) in payload) innerFiles += path to bytes
 
         val capsuleId = Manifest.computeCapsuleId(originator.keyPair.publicKeyBytes, firstHash)
         val ci = Manifest.buildContentIndex(innerFiles)
+        // Signer-set commitment: the originator is the sole signer in v0,
+        // so the commitment is a single member. Bound into every envelope
+        // signature via manifest_hash (spec/manifest.md).
+        val signerCommitment = Manifest.buildSignerCommitment(listOf(
+            Manifest.SignerCommitmentMember("originator", originator.keyPair.publicKeyHex)
+        ))
         val manifest = Manifest.build(
             originator = Manifest.Originator(originator.keyPair.publicKeyHex, originator.label),
             participants = participants.map {
@@ -119,7 +194,7 @@ class CapsuleBuilder(
             },
             contentIndex = ci,
             firstEventHash = firstHash,
-            skillTrust = skillTrust,
+            signerCommitment = signerCommitment,
             createdAt = createdAt,
             capsuleId = capsuleId,
         )

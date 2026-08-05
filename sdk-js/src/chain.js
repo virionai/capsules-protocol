@@ -1,8 +1,123 @@
 // Event chain: hashing with raw bytes, no hex strings as inputs.
 
-import { bytesToHex, concatBytes, hexToBytes, jcs, sha256 } from "./canonical.js";
+import { bytesToHex, concatBytes, hexToBytes, jcs, parseJsonStrict, sha256 } from "./canonical.js";
 
 const GENESIS_PREV = Buffer.alloc(32, 0);
+
+/**
+ * The closed `kind` enum from spec/chain.md "Field rules": readers reject
+ * unknown kinds, and builders refuse to append them. This is not a tier
+ * question — a capsule with a custom event kind is not making a weaker
+ * claim, it is unreadable to the foreign LLM reader the format serves.
+ */
+export const EVENT_KINDS = Object.freeze([
+  "decision",
+  "observation",
+  "mutation",
+  "session",
+  "checkpoint",
+]);
+
+const EVENT_KIND_SET = new Set(EVENT_KINDS);
+
+/**
+ * The one actor a chain event may always name without a matching manifest
+ * participant — backstop events emitted by the host runtime.
+ */
+export const HOST_ACTOR = "system:host";
+
+/** True when `kind` is one of the five values spec/chain.md allows. */
+export function isValidEventKind(kind) {
+  return EVENT_KIND_SET.has(kind);
+}
+
+/**
+ * The CLOSED actor-id namespace set from spec/manifest.md "Field rules":
+ * `participants[].actor_id` must match `human:<id>`, `ai:<id>`,
+ * `system:<id>`, or `capsule:<id>` with a non-empty `<id>`.
+ */
+export const ACTOR_NAMESPACES = Object.freeze(["human", "ai", "system", "capsule"]);
+
+const ACTOR_NAMESPACE_SET = new Set(ACTOR_NAMESPACES);
+
+/** True when `actorId` is `<namespace>:<id>` with a known namespace and
+ *  non-empty id. Case-sensitive; no surrounding whitespace allowed. */
+export function isValidActorId(actorId) {
+  if (typeof actorId !== "string") return false;
+  const sep = actorId.indexOf(":");
+  if (sep <= 0 || sep === actorId.length - 1) return false;
+  return ACTOR_NAMESPACE_SET.has(actorId.slice(0, sep));
+}
+
+/**
+ * Validate a manifest `participants[]` array against the actor-id
+ * namespace grammar. Returns a list of problem strings (empty =
+ * well-formed); each is prefixed `participants[i]` so callers can add
+ * their own context (`manifest.` in the verifier). Accepts the same
+ * shapes participantActorIds does — bare actor-id strings or objects
+ * with `actor_id` — and, unlike it, FLAGS entries it cannot interpret:
+ * a declared set that cannot be interpreted is not a weaker claim, it
+ * is a malformed one, and silently ignoring an entry here would let a
+ * capsule smuggle an unbindable participant past every conformant
+ * check. A non-array (or absent) participants value is outside this
+ * function's scope.
+ */
+export function participantActorIdProblems(participants) {
+  const problems = [];
+  if (!Array.isArray(participants)) return problems;
+  const grammar = "(human:, ai:, system:, capsule:)";
+  participants.forEach((p, i) => {
+    const id = typeof p === "string" ? p : (p != null && typeof p === "object" && !Array.isArray(p) ? p.actor_id : undefined);
+    if (typeof id !== "string") {
+      problems.push(
+        `participants[${i}].actor_id must be a string in an allowed namespace ${grammar}`,
+      );
+    } else if (!isValidActorId(id)) {
+      problems.push(
+        `participants[${i}].actor_id ${JSON.stringify(id)} does not match an allowed namespace ${grammar}`,
+      );
+    }
+  });
+  return problems;
+}
+
+/**
+ * The normative `untrusted_payload_fields` path grammar from spec/chain.md
+ * "Untrusted content":
+ *
+ *   path    = "payload" 1*( "." segment )
+ *   segment = 1*( ALPHA / DIGIT / "_" / "-" )
+ *
+ * A marking outside the grammar has no defined resolution — a host cannot
+ * tell which payload member the author marked untrusted — so writers refuse
+ * to emit it and verifiers reject it fail-closed.
+ */
+const UNTRUSTED_PAYLOAD_PATH = /^payload(\.[A-Za-z0-9_-]+)+$/;
+
+/** True when `path` is a well-formed untrusted-payload path. */
+export function isValidUntrustedPayloadPath(path) {
+  return typeof path === "string" && UNTRUSTED_PAYLOAD_PATH.test(path);
+}
+
+/**
+ * Normalize a manifest `participants[]` array into a Set of actor ids.
+ * Accepts participant objects ({ actor_id }) or bare actor-id strings;
+ * anything else is ignored.
+ */
+export function participantActorIds(participants) {
+  const out = new Set();
+  if (!Array.isArray(participants)) return out;
+  for (const p of participants) {
+    if (typeof p === "string") out.add(p);
+    else if (p && typeof p.actor_id === "string") out.add(p.actor_id);
+  }
+  return out;
+}
+
+// Chain-bound hex is lowercase per spec/chain.md. verifyChain feeds a
+// stored hash straight into hexToBytes to seed the next link, so the
+// canonical-form check has to happen before that call, not inside it.
+const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
  * Compute event hash. event must NOT include "hash"; "prev_hash" must be hex.
@@ -62,24 +177,78 @@ export function eventsFromJsonl(bytes) {
   const lines = text.split("\n").filter((l) => l.length > 0);
   return lines.map((line, i) => {
     try {
-      return JSON.parse(line);
+      // Strict parse: the duplicate-member gate runs over the raw line
+      // (spec/canonicalization.md "Objects") before the value can reach
+      // a hash comparison.
+      return parseJsonStrict(line, "event");
     } catch (err) {
       throw new Error(`chain line ${i + 1}: invalid JSON: ${err.message}`);
     }
   });
 }
 
-/** Verify a chain. Returns { ok, errors: [{ seq, message }] }. */
-export function verifyChain(events) {
+/**
+ * Verify a chain. Returns { ok, errors: [{ seq, message }] }.
+ *
+ * `options.participants` is the manifest's `participants[]` (objects with
+ * `actor_id`, or bare actor-id strings). The spec/chain.md step-6 actor
+ * rule is CONDITIONAL on that claim: when the set is non-empty, every
+ * event actor must be a member or the literal "system:host" (fail-closed);
+ * when it is empty or absent, the manifest binds no actor set and the walk
+ * accepts any actor — the CALLER (verifyCapsule) reports the reduced
+ * assurance. The `kind` enum is enforced unconditionally.
+ */
+export function verifyChain(events, options = {}) {
   const errors = [];
+  const participantIds = participantActorIds(options.participants);
   let prev = GENESIS_PREV;
   events.forEach((e, i) => {
+    if (e == null || typeof e !== "object" || Array.isArray(e)) {
+      errors.push({ seq: i + 1, message: "event is not a JSON object" });
+      return;
+    }
     const seq = e.seq ?? i + 1;
+    // spec/chain.md step 6 — when the manifest declares participants, the
+    // actor must be one of them or the host. An empty set is no claim.
+    if (participantIds.size > 0 && e.actor !== HOST_ACTOR && !participantIds.has(e.actor)) {
+      errors.push({
+        seq,
+        message: `actor ${JSON.stringify(e.actor ?? null)} not in manifest.participants and not system:host`,
+      });
+    }
+    // spec/chain.md "Field rules" — `kind` is a closed enum.
+    if (!EVENT_KIND_SET.has(e.kind)) {
+      errors.push({
+        seq,
+        message: `kind ${JSON.stringify(e.kind ?? null)} is not one of ${EVENT_KINDS.join(", ")}`,
+      });
+    }
     if (e.seq !== i + 1) {
       errors.push({ seq, message: `seq ${e.seq} expected ${i + 1}` });
     }
+    // spec/chain.md "Untrusted content" — when present, every marking must
+    // match the path grammar. An unparseable marking silently unmarks
+    // LLM-authored content for every downstream host.
+    if (e.untrusted_payload_fields !== undefined) {
+      if (!Array.isArray(e.untrusted_payload_fields)) {
+        errors.push({ seq, message: "untrusted_payload_fields must be an array of payload paths" });
+      } else {
+        e.untrusted_payload_fields.forEach((p, idx) => {
+          if (!isValidUntrustedPayloadPath(p)) {
+            errors.push({
+              seq,
+              message: `untrusted_payload_fields[${idx}] is not a valid payload path: ${JSON.stringify(p)}`,
+            });
+          }
+        });
+      }
+    }
     if (typeof e.prev_hash !== "string" || e.prev_hash.length !== 64) {
       errors.push({ seq, message: "prev_hash missing or wrong length" });
+      return;
+    }
+    if (!HEX64.test(e.prev_hash)) {
+      errors.push({ seq, message: "prev_hash is not canonical lowercase hex" });
       return;
     }
     const expectedPrev = bytesToHex(prev);
@@ -91,6 +260,10 @@ export function verifyChain(events) {
     }
     if (typeof e.hash !== "string" || e.hash.length !== 64) {
       errors.push({ seq, message: "hash missing or wrong length" });
+      return;
+    }
+    if (!HEX64.test(e.hash)) {
+      errors.push({ seq, message: "hash is not canonical lowercase hex" });
       return;
     }
     const { hash, ...rest } = e;
@@ -115,8 +288,9 @@ export function verifyChain(events) {
 
 export function firstAndEntryHash(events) {
   if (events.length === 0) throw new Error("chain is empty");
+  const hashOf = (e) => (e != null && typeof e === "object" ? e.hash : undefined);
   return {
-    firstEventHash: events[0].hash,
-    entryHash: events[events.length - 1].hash,
+    firstEventHash: hashOf(events[0]),
+    entryHash: hashOf(events[events.length - 1]),
   };
 }

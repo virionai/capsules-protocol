@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Regenerate `skills/capsule/skill.json` from canonical sources.
 //
-// The Capsule v0.6 skill is the protocol's own self-description: a
-// `skills/capsule/` bundle (SKILL.md + skill.json) that any v0.6 capsule
+// The Capsule v0.7 skill is the protocol's own self-description: a
+// `skills/capsule/` bundle (SKILL.md + skill.json) that any v0.7 capsule
 // can include so a foreign LLM cold-reading the capsule learns what the
 // container is and how to verify it.
 //
@@ -55,14 +55,14 @@ async function buildSkillJson() {
 
   return {
     id: "capsule",
-    version: "0.6.0",
-    title: "Capsule v0.6 — portable verifiable work-product",
+    version: "0.7.0",
+    title: "Capsule v0.7 — portable verifiable work-product",
     description:
       "A portable unit of intelligence: a work product, the context to continue it, " +
       "and a signed append-only audit trail. Verifies offline. Cold-readable by foreign LLMs.",
-    spec_version: "0.6",
+    spec_version: "0.7",
     audience: ["foreign-llm", "auditor", "human-reader"],
-    applies_to: 'manifest.format.version == "0.6"',
+    applies_to: 'manifest.format.version == "0.7"',
     links: {
       manifest: "manifest.json",
       program: "program.md",

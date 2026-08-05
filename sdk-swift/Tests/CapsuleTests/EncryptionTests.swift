@@ -115,7 +115,7 @@ final class EncryptedRoundTripTests: XCTestCase {
             originator: .init(keyPair: origin, label: "test-originator"),
             createdAt: signedAt
         )
-        builder
+        try builder
             .setProgram("# Hello\n\nEncrypted capsule under test.\n")
             .setAgents("# Agents\n")
             .appendEvent(
@@ -129,7 +129,7 @@ final class EncryptedRoundTripTests: XCTestCase {
                 payload: jobj(("decision", "go"))
             )
             .addSkill(id: "demo", json: Data(#"{"id":"demo","actions":[]}"#.utf8),
-                      markdown: "# Demo\n", signed: false)
+                      markdown: "# Demo\n")
             .addPayload(.init(path: "payload/notes.txt", bytes: Data("hello\n".utf8)))
         let result = try builder.seal(
             signedAt: signedAt,
@@ -175,6 +175,10 @@ final class EncryptedRoundTripTests: XCTestCase {
         )
         XCTAssertTrue(l3.ok, "L3 failed: \(l3.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" })")
         XCTAssertEqual(l3.level, "L3")
+        // The whole round trip ran at the CURRENT sealing version — this
+        // is the seal → verify → DECRYPT drill that catches a stale
+        // version literal on either side of the encryption path.
+        XCTAssertEqual(l3.formatVersion.observed, CapsuleVersions.current)
         // Outer + inner each have one originator signer → 2 signers total.
         XCTAssertEqual(l3.signers.count, 2)
         XCTAssertEqual(l3.trustedSignerCount, 2)

@@ -31,16 +31,31 @@ object CapsuleCrypto {
         return sb.toString()
     }
 
+    /**
+     * STRICT LOWERCASE hex decoder, matching the JS reference's hexToBytes
+     * and the Rust verifier's hex_to_bytes: uppercase hex is non-canonical
+     * on every hashed or signed surface (addendum A11; vector
+     * malformed-shape/uppercase-signer-key-hex). Character.digit was the
+     * previous decoder and accepts uppercase AND non-ASCII digits.
+     */
     fun hexToBytes(hex: String): ByteArray {
         require(hex.length % 2 == 0) { "hex: odd length" }
         val out = ByteArray(hex.length / 2)
         for (i in out.indices) {
-            val hi = Character.digit(hex[i * 2], 16)
-            val lo = Character.digit(hex[i * 2 + 1], 16)
-            require(hi >= 0 && lo >= 0) { "hex: non-hex character" }
+            val hi = hexNibble(hex[i * 2])
+            val lo = hexNibble(hex[i * 2 + 1])
+            require(hi >= 0 && lo >= 0) {
+                "hex: non-canonical or non-hex character (lowercase hex required)"
+            }
             out[i] = ((hi shl 4) or lo).toByte()
         }
         return out
+    }
+
+    private fun hexNibble(c: Char): Int = when (c) {
+        in '0'..'9' -> c - '0'
+        in 'a'..'f' -> c - 'a' + 10
+        else -> -1
     }
 
     fun concat(vararg parts: ByteArray): ByteArray {

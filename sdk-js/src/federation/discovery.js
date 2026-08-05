@@ -9,18 +9,31 @@
 // Every network dependency is injected (a `fetchLike` or a directory object),
 // so the reference implementation and its tests run fully offline.
 
+import { normalizeIssuer } from "./issuer.js";
+
 /**
  * Fetch and shallow-validate an issuer metadata document, conventionally at
  * `<issuer>/.well-known/capsule-issuer.json`. `fetchLike` matches the fetch
  * contract: (url) => Promise<{ ok, json() }>.
  */
 export async function fetchIssuerMetadata(fetchLike, issuerBaseUrl) {
+  const expected = normalizeIssuer(issuerBaseUrl);
+  if (!expected) throw new Error(`not a usable issuer base URL: ${issuerBaseUrl}`);
   const url = new URL("/.well-known/capsule-issuer.json", issuerBaseUrl).toString();
   const res = await fetchLike(url);
   if (!res || !res.ok) throw new Error(`issuer metadata fetch failed: ${issuerBaseUrl}`);
   const meta = await res.json();
   if (!meta.issuer) throw new Error("issuer metadata missing 'issuer'");
   if (!Array.isArray(meta.profiles)) throw new Error("issuer metadata missing 'profiles'");
+  // spec/federation.md: `issuer` MUST equal the domain the document was
+  // fetched from; a mismatch is a hard discovery failure
+  // (`issuer_document_invalid`). Without this, a document served anywhere
+  // can name any issuer and the fetch origin means nothing.
+  if (normalizeIssuer(meta.issuer) !== expected) {
+    throw new Error(
+      `issuer metadata 'issuer' (${meta.issuer}) does not match the origin it was fetched from (${expected})`,
+    );
+  }
   return meta;
 }
 
@@ -30,9 +43,18 @@ export async function fetchIssuerMetadata(fetchLike, issuerBaseUrl) {
  * `trust_roots.jwks_uri`. The result is cacheable and small.
  */
 export async function loadTrustRoots(metadata, fetchLike) {
-  const tr = metadata.trust_roots ?? {};
+  const tr = metadata?.trust_roots ?? {};
   if (tr.jwks) return tr.jwks;
   if (tr.jwks_uri) {
+    // Trust roots are the keys everything else is checked against. Fetching
+    // them from an origin the issuer does not control would let a redirected
+    // or attacker-authored metadata document swap the entire trust anchor.
+    const issuer = normalizeIssuer(metadata?.issuer);
+    if (!issuer || normalizeIssuer(tr.jwks_uri) !== issuer) {
+      throw new Error(
+        `trust_roots.jwks_uri (${tr.jwks_uri}) is not on the issuer origin (${metadata?.issuer})`,
+      );
+    }
     const res = await fetchLike(tr.jwks_uri);
     if (!res || !res.ok) throw new Error(`jwks fetch failed: ${tr.jwks_uri}`);
     return await res.json();

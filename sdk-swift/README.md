@@ -1,17 +1,17 @@
 # Capsule SDK (Swift)
 
-Native Swift Package for Capsule v0.6: a portable, signed, verifiable
+Native Swift Package for Capsule v0.7: a portable, signed, verifiable
 container for AI work product. Build, read, verify, and sign capsules
 on iOS or macOS; embed skills; expose them to your app's LLM through a
 small documented contract.
 
-This is one of three implementations of Capsule v0.6 — the JS SDK (Node)
+This is one of three implementations of Capsule v0.7 — the JS SDK (Node)
 is the reference; this Swift SDK and the sibling [Kotlin SDK](../sdk-kotlin)
 make the format real on phones.
 
 ## Status
 
-`v0.6.0-prototype.1` — `swift build` succeeds on macOS and iOS with
+`v0.7.0-prototype.1` — `swift build` succeeds on macOS and iOS with
 zero warnings, and the package's 25 tests pass (round-trip, encryption
 primitives + end-to-end, and cross-implementation parity against
 fixtures produced by the JS SDK). Encryption (X25519 + HKDF-SHA256 +
@@ -49,7 +49,7 @@ import Capsule
 let kp = Ed25519KeyPair.generate()    // or load from Keychain
 let builder = CapsuleBuilder(originator: .init(keyPair: kp, label: "My App"))
 
-builder
+try builder
     .setProgram("# What this capsule is\n\n…\n")
     .setAgents("# Agents\n\n- human:user\n- ai:my-on-device-llm\n")
     .setParticipants([
@@ -84,6 +84,90 @@ guard v.ok else {
 print("Signers: \(v.signers.map { "\($0.role) trusted=\($0.trusted)" })")
 print("Program:\n\(parsed.programMd)")
 ```
+
+## Quick start — checking a successor's lineage
+
+A successor capsule declares the exact sealed artifact(s) it continues
+from in `manifest.predecessors` (spec/lineage.md). The declaration is
+always reported; supplying the predecessor's bytes is what turns it from
+a claim into a verified link.
+
+```swift
+// No bytes supplied: the claim is reported, never silently believed.
+let claim = CapsuleVerifier.verify(successorBytes)
+for entry in claim.lineage.entries {
+    print("predecessor \(entry.capsuleId ?? "-"): \(entry.status)")  // "unverified"
+}
+
+// With the predecessor in hand, every equality is checked against
+// RECOMPUTED values, and deeper hops resolve from further supplied files.
+let linked = CapsuleVerifier.verify(
+    successorBytes, predecessors: [predecessorBytes, grandparentBytes])
+print(linked.lineage.verifiedDepth)   // 2
+print(linked.lineage.ok)              // false if anything CHECKED contradicts
+print(linked.qualifiers)              // e.g. ["lineage_mismatch"]
+```
+
+Two rules a host must not paper over:
+
+- **Linkage is report-only.** A mismatched or invalid predecessor
+  falsifies `lineage.ok` and never `ok` — otherwise anyone could flip a
+  valid capsule's verdict by handing this verifier the wrong file. A
+  malformed *declaration*, by contrast, fails the capsule closed (the
+  `lineage` check).
+- **Lineage is not endorsement.** It is the successor's one-way claim;
+  the predecessor's originator has not countersigned it. Render
+  unverified entries — `notes` carries the pinned "declared, not
+  verified" and "not countersigned" wording — rather than dropping them.
+
+## The verdict surface: what a report must not hide
+
+Every result also carries the normalized vocabulary of
+[../spec/results.md](../spec/results.md), derived from the facts above:
+
+```swift
+v.verdict        // "valid" | "invalid" | "unsupported"
+v.verdictReason  // non-nil iff "unsupported": unsupported_version_newer,
+                 // unsupported_version_older, unsupported_profile,
+                 // unsupported_capability
+v.qualifiers     // e.g. ["signer_set_unbound", "trust_not_evaluated"]
+                 // …and the lineage names above: lineage_declared_unverified,
+                 // lineage_mismatch, lineage_predecessor_invalid
+```
+
+`v.ok == (v.verdict == "valid")` is an invariant. `"unsupported"` names a
+limitation of *this verifier* — an unknown era, or a profile it does not
+implement — never corruption: route the capsule to an implementation
+that has the rules. `qualifiers` names the weaker claims a `valid`
+verdict rests on (an unbound signer set, an unwalked empty chain, an
+unread encrypted body, no allowlist consulted, a declared lineage nobody
+supplied bytes for); show every one of them beside the verdict, so
+"verified" never means more to a reader than the capsule actually
+claimed. `trust_not_evaluated` keys off the *effective* allowlist:
+entries that are not 64-char hex are dropped with an `ignored invalid
+allowlist entry` note, so a typo cannot masquerade as a consulted
+policy.
+
+`v.lineage` is the lineage facts channel
+([../spec/lineage.md](../spec/lineage.md)) — `declared`, `ok`,
+`verifiedDepth`, and the per-entry statuses and reasons. Payload-carrying
+facts live there and never on the bare-string `qualifiers` array.
+
+`v.profile` is the profile declaration channel
+([../spec/profiles.md](../spec/profiles.md)): `observed` /
+`observedVersion` (the declaration as read, reported even when the
+capsule was refused), `declared`, `effective` / `effectiveVersion` (the
+profile actually applied — absence means `v0.6-suite`/`1.0`,
+permanently), `supported`, `status`, and `acceptedByPolicy`. Host policy
+is reported and never decided: `CapsuleVerifier.verify(bytes,
+acceptVersions: [...], acceptProfiles: [...])` fills in the two
+accepted-by-policy facts without changing `ok`.
+
+Gate order is version → profile → everything else. On a refusal at either
+gate the diagnosis is the *only* error the result carries: every other
+channel sits at its fail-closed default (`lineage` not evaluated,
+`profile` `unevaluated` after a version refusal) and `qualifiers` is
+empty.
 
 ## Quick start — seal + open an encrypted capsule
 
@@ -197,14 +281,21 @@ JSON the skill emits, including the optional `webview` field modeled by
 `WebviewSpec`. The SDK does not bundle host-specific adapters; the
 shared protocol keeps those adapters thin.
 
-## What ships in v0.6.0-prototype.1
+## What ships in v0.7.0-prototype.1
 
 - `Capsule`: JCS, Crypto (CryptoKit) — SHA-256, Ed25519, `X25519KeyPair`,
   `HKDF`, `ChaCha20Poly1305`, `Random` — Zip (deterministic STORED),
   Chain, Manifest, Envelope, Builder (plain + multi-recipient encrypted
-  `seal(recipients:)`), Reader (`parse` + `openInner`), Verifier (L2
-  outer-only + L3 decrypted-content), JCSValue value type with
-  literal-syntax sugar (`jobj`, `jarr`).
+  `seal(recipients:)`), Reader (`parse` + `openInner`), Profiles (the
+  supported-profile table + the open-stage profile gate, run again for
+  the decrypted inner package), Verifier (L2 outer-only + L3
+  decrypted-content, with the verdict/qualifier surface, the profile
+  channel and the lineage channel), Lineage (`manifest.predecessors`
+  standalone checks + the report-only `predecessors:` linkage walk,
+  reported as `CapsuleVerification.lineage`), `CapsuleResults` (the
+  renderer floor: one line per qualifier, each carrying its normative
+  minimum substring), JCSValue value type with literal-syntax sugar
+  (`jobj`, `jarr`).
 - `CapsuleSkills`: `CapsuleSkill` model, `ParsedCapsule.skills()`
   extension, trust-tier semantics.
 - `CapsuleLLM`: `CapsuleLocalLLM` + `CapsuleSkillRuntime` protocols,
@@ -219,6 +310,10 @@ shared protocol keeps those adapters thin.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `[Signer]`
   but `CapsuleBuilder.seal` currently signs only with the originator.
   The lower-level `Envelope` API is callable for hosts that need it.
+- **Writer-side lineage (rewrap)**: this lane verifies lineage in full;
+  the builder conveniences that EMIT a declaration
+  (`continueFrom` / `declarePredecessor` / `rewrapCapsule`) are a
+  declared fast-follow, available today in the JS and Python SDKs.
 
 ## License
 

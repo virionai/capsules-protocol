@@ -1,7 +1,7 @@
 {
   "name": "@capsule/cli",
-  "version": "0.6.0",
-  "description": "Command-line tool for inspecting and verifying Capsule v0.6 files.",
+  "version": "0.7.0",
+  "description": "Command-line tool for inspecting and verifying Capsule v0.7 files.",
   "type": "module",
   "bin": {
     "capsule": "bin/capsule.mjs"
@@ -13,13 +13,13 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node test/rewrap.test.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@capsule/sdk-v0.6-prototype": "file:../sdk-js"
+    "@capsule/sdk-v0.7-prototype": "file:../sdk-js"
   },
   "license": "MIT"
 }

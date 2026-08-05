@@ -1,0 +1,124 @@
+{
+  "meta": {
+    "name": "malformed-shape",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected outcomes for capsules whose ZIP container is well-formed but whose manifest or chain documents violate the required field shapes. Independent implementations MUST refuse these capsules: stage 'open' means the reader rejects the document before verification (by error, exception, or fail-closed result, per the host language's idiom); the default verify stage means the capsule opens but verification reports ok=false. No fixture here may make a verifier raise an unhandled exception.",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "generator": "sdk-js/tools/generate-malformed-shape-fixtures.mjs (derived from ../tamper-detection/output/clean.capsule)",
+  "keys_file": "../tamper-detection/output/keys.json",
+  "reasons": {
+    "invalid_manifest_shape": "manifest.json parses as JSON but a required field is absent or has the wrong type/format (not an object, no content_index, content_index.files not an array, a files[] entry without a 64-char lowercase hex sha256)"
+  },
+  "notes": [
+    "The 'reason' field is normative: an implementation must reject the fixture for the named reason category. Exact error strings are implementation-defined.",
+    "uppercase-event-hash and chain-event-not-object open successfully — the shape violation is inside chain/events.jsonl, so it surfaces at the verify stage. A verifier that feeds the stored hash to a strict hex decoder without a canonical-form guard, or indexes into a non-object event, raises instead of reporting, which these vectors exist to catch.",
+    "manifest-hostile-number carries an unknown manifest member whose value is 1e999 (Infinity after JSON parsing). Unknown members are inside the integrity envelope, so the manifest-hash recompute must run over them — and must report the non-canonicalizable number as a verification failure, never raise."
+  ],
+  "vectors": [
+    {
+      "name": "manifest-not-object",
+      "capsule_file": "output/manifest-not-object.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.json is not a JSON object"
+      }
+    },
+    {
+      "name": "missing-content-index",
+      "capsule_file": "output/missing-content-index.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index"
+      }
+    },
+    {
+      "name": "content-index-files-not-array",
+      "capsule_file": "output/content-index-files-not-array.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index.files"
+      }
+    },
+    {
+      "name": "content-index-entry-missing-sha256",
+      "capsule_file": "output/content-index-entry-missing-sha256.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.content_index.files[0].sha256"
+      }
+    },
+    {
+      "name": "uppercase-event-hash",
+      "capsule_file": "output/uppercase-event-hash.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain",
+          "content_index"
+        ]
+      }
+    },
+    {
+      "name": "uppercase-signer-key-hex",
+      "capsule_file": "output/uppercase-signer-key-hex.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "envelope"
+        ]
+      },
+      "note": "The envelope signer's public_key is uppercased post-seal. It decodes to the same 32 key bytes, and signers[] sits outside the canonical payload, so a lane with a case-insensitive hex decoder still sees a valid signature and reports ok=true — the addendum-A11 differential. Canonical hex is lowercase on every hashed or signed surface: verifiers MUST treat a non-canonical signer key as an invalid signature (fail-closed, never an exception)."
+    },
+    {
+      "name": "chain-event-not-object",
+      "capsule_file": "output/chain-event-not-object.capsule",
+      "expected": {
+        "ok": false,
+        "failing": [
+          "chain",
+          "content_index"
+        ],
+        "error_includes": "event is not a JSON object"
+      }
+    },
+    {
+      "name": "manifest-hostile-number",
+      "capsule_file": "output/manifest-hostile-number.capsule",
+      "expected": {
+        "ok": false,
+        "error_includes": "manifest hash recompute failed"
+      }
+    },
+    {
+      "name": "participants-not-array",
+      "capsule_file": "output/participants-not-array.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.participants"
+      },
+      "note": "participants declared as a bare object ({actor_id: 'robot:origin'}). The member is an ARRAY when present (spec/manifest.md); a wrong-type declaration is malformed, never silently skipped — a verifier that skips it no-ops the actor-membership rule and the actor_id namespace grammar while reporting the same shape as an honestly unbound capsule."
+    },
+    {
+      "name": "participants-string",
+      "capsule_file": "output/participants-string.capsule",
+      "expected": {
+        "ok": false,
+        "stage": "open",
+        "reason": "invalid_manifest_shape",
+        "detail": "manifest.participants"
+      },
+      "note": "participants declared as a bare string ('robot:origin'): same wrong-type rule as participants-not-array. Absence and the empty array remain legal (reduced assurance, actor_set unbound) — only a PRESENT non-array declaration is malformed."
+    }
+  ]
+}

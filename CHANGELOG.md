@@ -4,12 +4,1195 @@ All notable changes to the Capsule format, reference SDKs, and tooling
 in this repository will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 protocol uses semantic-version pinning at the format layer (the
-`0.6` in the file format will not silently mean different things —
-incompatible wire changes ship as `0.7`).
+version in the file format will not silently mean different things —
+incompatible wire changes ship as a new format version, as `0.7` did).
 
-## Unreleased
+## v0.7.1 — Unreleased
 
 ### Added
+
+- **Lineage: `manifest.predecessors` — a successor capsule verifiably
+  declares the exact sealed artifact(s) it continues from
+  (`spec/lineage.md`; additive within era 0.7, no version bump, no
+  domain-string or hash changes).** The originator binding stays
+  untouched; the second hop of "open it, validate it, continue the
+  work, and hand it off" now works by verifiable reference instead of
+  the key sharing the format rightly makes impossible. One OPTIONAL
+  manifest member: an array of immediate-parent entries (merges
+  expressible; never an inline ancestry list), each committing to six
+  members — `capsule_id`, `format_version`, `originator_public_key`,
+  `first_event_hash`/`entry_hash` (null together exactly for a
+  zero-event predecessor), and the decisive `manifest_hash` pin.
+  Presence binds, absence reports: a PRESENT malformed declaration
+  fails closed with shared `predecessors[i].<member>` diagnoses (the
+  in-era `participants` precedent — the non-`x-` namespace was already
+  reserved, so zero honestly sealed capsules change verdict, per the
+  new bright-line rule in `spec/versioning.md`); identity coherence is
+  recomputed under the DECLARED predecessor era's domain string and
+  SKIPPED (reported, never failed) for unknown eras. The member is a
+  CLAIM member, not a rule selector, so its interpretation is gated on
+  the capsule's OWN era: inside a pre-lineage-era capsule (0.6) it stays
+  an unknown member — preserved, hashed, never shape-checked, reported
+  in the notes — whether that capsule is the verification subject, a
+  predecessor hop, or an encrypted inner layer. Zero sealed v0.6
+  capsules change verdict. Linkage against a
+  supplied predecessor pool (`predecessors` verify option) is
+  REPORT-ONLY — `result.lineage` {declared, ok, verified_depth,
+  entries} with the closed status vocabulary (unverified | verified |
+  mismatch | predecessor_invalid | predecessor_unverifiable with
+  reasons unsupported_version | encrypted_predecessor |
+  unsupported_profile | unsupported_capability) and an era-keyed
+  recursive walk; a hostile host cannot flip a valid capsule's verdict
+  by supplying the wrong file (pinned by the ok-true-under-mismatch
+  vector). v0.7.1 declarations commit to plain, DEFAULT-PROFILE
+  (`v0.6-suite`) predecessors; encrypted successors may place the
+  member inner, outer, or both (both ⇒ JCS byte equality, fail-closed
+  at L3 — the reader returned by `decrypt()` carries its outer
+  manifest, so this fail-closed rule runs on the documented recipe
+  rather than behind an opt-in verify option). Three lineage qualifiers
+  are EMITTED on valid verdicts — `lineage_declared_unverified`,
+  `lineage_mismatch`, `lineage_predecessor_invalid` — joining the closed
+  ten-name vocabulary of `spec/results.md` as entries 8–10 of the same
+  `qualifiers` array (the seven base names are emitted by the verdict
+  surface below); payload-carrying facts stay in the
+  lineage area. Pinned report phrases: "declared, not verified", "not
+  countersigned", "different sealed state of the declared predecessor".
+  New conformance collection `spec/vectors/lineage/` (25 vectors,
+  consumed by all five lanes), including a byte-identical frozen
+  copy of the v0.6 version-compat capsule as the cross-era citation
+  evidence (generator `--check` asserts the equality and never
+  reseals it) and `predecessors-in-v06-capsule-is-inert`, which pins
+  that the value failing `empty-array` closed under 0.7 verifies
+  untouched inside a 0.6 capsule.
+
+- **Rewrap: continuing a capsule is one operation in the reference
+  builder.** `CapsuleBuilder.continueFrom(predecessor, …)`,
+  `declarePredecessor` / `declarePredecessorEntry` (the explicit-values
+  archivist path — form validated, truth not), `rewrapCapsule` (one-call
+  custody transfer), and `seal({ lineagePlacement })`. Writer
+  obligations W1–W9 (`spec/lineage.md`): entries derived from opened
+  bytes with `capsule_id`/`manifest_hash` RECOMPUTED (never the
+  envelope's claim); refusals as `PredecessorError` with the closed
+  reason vocabulary `verification_failed` (override:
+  `allowInvalidPredecessor`, which changes no emitted byte — the
+  citation stays exact and linkage reports `predecessor_invalid`) |
+  `unsupported_version` (no override — the tool cannot compute the
+  commitment) | `encrypted_predecessor` (decrypt-then-rewrap the inner)
+  | `unsupported_profile`; files carry byte-identically while manifest
+  claims reset (participants are the caller's claim, never inherited;
+  fresh chain — predecessor history stays where it is signed); the
+  pinned `custody_received` genesis event is emitted by default
+  (actor `system:host`, opt-out); successors always seal at the current
+  version. Reproducible bytes under pinned timestamps within one
+  implementation.
+
+- **Lineage + rewrap: sdk-py — the second BUILDER lane.** `verify_capsule`
+  gains the `predecessors=` pool kwarg (raw bytes or `CapsuleReader`s),
+  `result["lineage"]` ({declared, ok, verified_depth, entries} in this
+  lane's snake_case, defaulting to the fail-closed not-evaluated shape a
+  version-gate refusal leaves behind), and contributes the three lineage
+  names to `result["qualifiers"]` on valid verdicts. Standalone checks
+  1–3 live in `manifest.predecessors_problems` and fail the capsule
+  closed with the shared `predecessors[i].<member>` diagnoses; the
+  linkage walk in the new `capsule.lineage` module (recomputed-values
+  matching, seen-set, hop cap 256, era-keyed recursion, per-hop full
+  verification under the artifact's own era) is report-only; check 4 —
+  an encrypted successor's inner/outer JCS equality — runs on this
+  lane's L3 path. Writer side, mirroring the reference builder member
+  for member: `CapsuleBuilder.continue_from`, `declare_predecessor` /
+  `declare_predecessor_entry`, `rewrap_capsule`, and
+  `seal(lineage_placement=...)`, with refusals raised as
+  `PredecessorError` carrying the closed `reason` vocabulary
+  (`allow_invalid_predecessor=True` is the W3 override and changes no
+  emitted byte). New `tests/test_lineage.py` (30 tests) and
+  `tests/test_rewrap.py` (15 tests) are the unit witnesses, and
+  `spec/vectors/lineage/` is now consumed by `test_spec_registry.py`.
+
+- **Lineage verify-side parity: sdk-kotlin.** `CapsuleVerifier.verify`
+  gains the `predecessors` pool parameter, `CapsuleVerification.lineage`
+  (`LineageReport` {declared, ok, verifiedDepth, entries} defaulting to
+  the fail-closed not-evaluated shape), and contributes the three
+  lineage names to `CapsuleVerification.qualifiers` on valid verdicts.
+  Standalone checks 1–3 fail closed as the `lineage` check with the
+  shared `predecessors[i].<member>` diagnoses; the linkage walk
+  (recomputed-values matching, seen-set, hop cap 256, era-keyed
+  recursion) is report-only. `envelope.manifest_hash mismatch: stored X
+  vs recomputed Y` joins this lane's diagnosis wording, matching the
+  other four. `spec/vectors/lineage/` is now consumed by
+  `SpecRegistryTest`; the lane's declared asymmetries — no L3 for the
+  encrypted-successor inner/outer equality, and the builder
+  conveniences as fast-follows — are recorded as registry consumer
+  notes, never silent omissions.
+
+- **Lineage verify-side parity: verifier-rust.** `VerifyOptions` gains
+  the `predecessors` pool, `VerifyResult` gains `lineage: LineageCheck`
+  {declared, ok, verified_depth, entries} — `#[serde(default)]` so
+  pre-lineage JSON still deserializes (the `signer_set`/`actor_set`
+  pattern) and defaulting to the fail-closed not-evaluated shape a
+  version-gate refusal leaves behind — and the three lineage names join
+  the shared `qualifiers` array on valid verdicts.
+  The declaration stays RAW in the typed manifest view — a typed
+  projection would refuse the manifest outright on a malformed member,
+  presenting a spec-invalid declaration as a corrupt container — so
+  standalone checks 1–3 fail closed at check time under the new
+  `TopErrorCategory::Lineage` with the shared
+  `predecessors[i].<member>` diagnoses, and the linkage walk
+  (recomputed-values matching, seen-set, hop cap 256, era-keyed
+  recursion, per-hop full verification under the artifact's own era) is
+  report-only. L3 evaluates the inner declaration plus the both-present
+  JCS equality. The CLI gains repeatable `--predecessor FILE`, a
+  Custody block carrying the pinned phrases, `lineage` in `--json`, and
+  the requested-policy exit rule: exit 1 unless every supplied artifact
+  matched a declared entry and verified — declared entries left
+  unsupplied are reported, never a policy failure. `spec/vectors/
+  lineage/` is now consumed by `verifier-rust/tests/spec_registry.rs`.
+
+- **Lineage verify-side parity: sdk-swift.** Both `CapsuleVerifier.verify`
+  overloads gain the `predecessors:` pool parameter, and
+  `CapsuleVerification` gains `lineage` (`LineageReport` {declared, ok,
+  verifiedDepth, entries}, defaulting to the fail-closed not-evaluated
+  shape an open-stage refusal leaves behind), and contributes the three
+  lineage names to `qualifiers` on valid verdicts. The reader keeps
+  opening capsules over the new OPTIONAL member — it is parsed leniently
+  and diagnosed at CHECK time, so standalone checks 1–3 fail closed as
+  the `lineage` check with the shared `predecessors[i].<member>`
+  diagnoses instead of a lane-specific parse crash; check 4 (an
+  encrypted successor's inner/outer JCS equality) runs on this lane's L3
+  path. The linkage walk (recomputed-values matching, seen-set, hop cap
+  256, era-keyed recursion, per-hop full verification under the
+  artifact's own era) is report-only. `envelope.manifest_hash mismatch:
+  stored X vs recomputed Y` joins this lane's diagnosis wording,
+  matching the other four. `spec/vectors/lineage/` is now consumed by
+  `SpecRegistryTests`, with `LineageTests` as the unit witness; the
+  builder conveniences stay declared fast-follows, recorded as registry
+  consumer notes rather than a silent omission.
+
+- **CLI: `capsule verify --predecessor` and the new `capsule rewrap`
+  command — the hand-off is now runnable end to end from a shell.**
+  `verify --predecessor FILE` (repeatable — merges, and one file per
+  hop) supplies the linkage pool. The SDK stays report-only; supplying
+  the flag is the operator asking for a CUSTODY POLICY, under the same
+  supplied-flag discipline `--allowlist` already documents: exit 1
+  unless every supplied file matched a declared entry, verified valid
+  under its own era, and every equality held, so
+  `capsule verify s --predecessor p && publish` cannot publish on a
+  failed custody check. Declared entries left unsupplied are reported
+  and never fail the exit (an operator may hold one branch of a merge);
+  an unmatched supplied file DOES fail it (a mistyped path must not
+  exit 0), and an unreadable one is a usage error (exit 2). A mismatch
+  or an invalid predecessor moves `ok` and the exit code but never
+  `integrity_ok` — the anti-framing split, visible in the output. The
+  new Custody block renders every declared entry with the pinned
+  phrases ("declared, not verified", "not countersigned", "different
+  sealed state of the declared predecessor", and the era a predecessor
+  was checked under); `--json` gains the `lineage` facts channel
+  (snake_case, with `verified_depth` and per-entry `status`/`reason`)
+  beside a `custody` block carrying this invocation's policy.
+  `capsule inspect` prints the declaration verbatim (human and
+  `--json`), labelled unverified.
+  **`capsule rewrap <predecessor> --key FILE --out FILE`** is the CLI's
+  first writing command: it wraps `rewrapCapsule` and applies exactly
+  one policy — do not build on a predecessor that fails verification
+  (exit 1, nothing written; `--allow-invalid-predecessor` proceeds with
+  a pinned WARNING and changes no emitted byte). An unknown declared era
+  refuses with no override (exit 1, versioning vocabulary); an encrypted
+  or alternate-profile predecessor is refused as an input class this
+  command does not take (exit 2) with the decrypt-then-rewrap pointer,
+  never as a verdict about the artifact. Flags: `--participant`
+  (repeatable — never inherited), `--custody-actor` /
+  `--no-custody-event`, `--label`, `--created-at`/`--signed-at`
+  (byte-reproducible output), `--force`, `--json`. The successor's id
+  line says "new identity" and every successful run prints the "not
+  countersigned" note; the private key is read, used to sign, and never
+  printed. New `cli/test/rewrap.test.mjs` carries the two-actor hand-off
+  as an executable test: Alice seals, the naive continuation fails the
+  originator binding, Bob rewraps, `verify --predecessor` reaches depth
+  1, a continue-then-seal variant evolves the work before sealing, and
+  Carol's re-rewrap reaches depth 2 while declaring only its immediate
+  parent.
+
+- **Profile declaration is on the wire (`spec/profiles.md`), additive
+  within era 0.7.** Two OPTIONAL members — `manifest.format.profile`
+  (`{ id, version, params? }`, closed object) and `envelope.profile`
+  (`{ id, version }`, params single-sourced in the manifest) — let a
+  capsule declare the verification rule set that governs it, making the
+  era's own fail-closed prose (`spec/envelope.md`, `spec/trust.md`)
+  enforceable and testable. Absence means the default profile
+  **`v0.6-suite`/`1.0`**, permanently (the mirror of the
+  algorithm-suite pin); explicit declaration of the default is legal
+  and exactly equivalent to absence, in both documents or (via
+  normalization) in one. The gate runs at OPEN stage, after the version
+  gate: normalized manifest/envelope declarations that disagree refuse
+  with `profile_mismatch` (a capsule defect) BEFORE any table lookup; a
+  declared `(id, version)` outside the verifier's exact-match table
+  refuses with `unsupported_profile` — **a limitation of the verifier,
+  not a defect of the capsule** — with refusal exclusivity (the profile
+  diagnosis is the only error; no channel is evaluated under refused
+  rules, and the reported `formatVersion.suite` fact nulls, since a
+  suite claim about refused rules would be false); shape/grammar
+  violations (including `null`, extra members, and the reserved
+  `critical` name — the object is closed) are malformed documents,
+  never "unsupported". Every verify result gains a `profile` channel
+  (`observed`/`observedVersion`/`declared`/`effective`/
+  `effectiveVersion`/`supported`/`status`/`acceptedByPolicy`, status
+  vocabulary `default | supported | unsupported | mismatched | invalid
+  | unevaluated | unread`), populated even on refusal — the observed
+  declaration is what lets an auditor route a capsule to a capable
+  verifier instead of declaring it corrupt. `spec/profiles.md` also
+  fixes the identifier grammar (1–64 bytes, lowercase, `x-<vendor>-`
+  fence), the Profile Authoring Contract (area-by-area disposition, the
+  invariant core — including `predecessors` interpretation — and the
+  profile-keyed domain-separation MUST that makes dual-valid capsules
+  unconstructible for conforming profiles), offline negotiation
+  (`SUPPORTED_PROFILES` as an API constant + reported facts), and the
+  overlay-vs-profile SHOULD. The in-era fail-closed addition is
+  licensed by the bright-line rule in `spec/versioning.md` ("In-era
+  tightening and cross-era force" — one section covering both of this
+  release's invocations), which also ratifies the
+  rule-selector-vs-claim retroactivity split (selectors like
+  `format.profile` have cross-era era-keyed force; claim members like
+  `predecessors` follow per-era rule sets). sdk-js
+  implements the gate (`src/profiles.js`, reader open-stage gate,
+  `acceptProfiles` report-only policy); reference builders emit absence
+  and expose no profile parameter. Conformance:
+  `spec/vectors/profile-declaration/` (17 vectors, generator
+  `generate-profile-declaration-fixtures.mjs`, `--check` in the
+  harness) — every negative fixture is internally coherent under
+  default rules except the declaration under test, so a lane that
+  skips the gate verifies it `ok: true` and fails the suite, and
+  `default-profile-with-params` pins the positive direction: manifest
+  `params` carrying nested vendor freight are sealed, uninterpreted,
+  and never change the outcome for a reader that does not implement
+  the profile. No domain
+  strings added or changed; capsules already sealed verify
+  byte-identically forever.
+
+- **Normalized verdict surface (`spec/results.md`): every verify result
+  derives `verdict`, `verdict_reason`, and `qualifiers`.** A
+  reporting normalization, not a verification feature — zero new
+  rejection rules, zero capsule-byte changes. `verdict` is
+  `valid | invalid | unsupported` with `ok == (verdict == 'valid')` as
+  a pinned invariant; `unsupported` partitions refusals that are a
+  limitation of the verifier (`unsupported_version_newer/older`,
+  `unsupported_profile`, `unsupported_capability` — one spelling
+  everywhere), with `verdict_reason` non-null iff `unsupported`;
+  profile MISMATCH maps to `invalid` with no verdict_reason (a capsule
+  self-contradiction is a defect, stated once in results.md).
+  `qualifiers` carries the weaker-claim facts a renderer must not hide,
+  as a closed ten-name vocabulary (`signer_set_unbound`,
+  `actor_set_unbound`, `empty_chain_not_walked`,
+  `encrypted_outer_only` (per-result: never on the decrypted inner's
+  L3 result), `version_not_accepted_by_policy`, `trust_not_evaluated`,
+  `no_trusted_signer`, plus the three lineage qualifiers
+  `lineage_declared_unverified`/`lineage_mismatch`/
+  `lineage_predecessor_invalid` emitted by the predecessors machinery)
+  — non-empty only on `valid`, `x-<vendor>-` extension entries
+  allowed, unknown entries surfaced verbatim and never treated as
+  satisfied, a result *lacking* the member vocabulary-unaware rather
+  than unqualified. results.md also fixes the canonical note strings
+  (closing the Python `trusted=False` wording drift and the
+  three-lane-missing "matched no signer" advisory — both repaired in
+  this release, see Fixed), the renderer minimum substrings (a conforming renderer MUST NOT
+  present a valid verdict without every qualifier rendered beside it),
+  and the CLI contract: verdict-first Result block, exit codes 0 =
+  valid + policies satisfied / 1 = invalid, unsupported, or any
+  requested-policy failure / 2 = usage-I/O only — **which makes the
+  Node CLI's unknown-version exit code 2 → 1 a documented breaking
+  change for CI** (the Rust CLI already exited 1; the renderer port
+  ships in this release, see Changed). sdk-js derives the surface in
+  `verifier.js`. Conformance:
+  `spec/vectors/result-vocabulary/` (8 vectors incl. both
+  unsupported-version directions and the inner-L3-drops-
+  `encrypted_outer_only` assertion; generator
+  `generate-result-vocabulary-fixtures.mjs`), additive
+  verdict/qualifier assertions on `signer-set/commitment-absent`,
+  `chain-rules/unbound-actors` + `absent-participants`,
+  `chain-binding/empty-chain-null-anchors`, and `version-compat`
+  (frozen v0.6 fixture: assertions only, bytes untouched), and
+  registry-consumer support for `expected.verdict` /
+  `expected.verdict_reason` / `expected.qualifiers` (exact array,
+  `x-` stripped) / `expected.profile.*` / `expected.suite` /
+  per-vector `accept_versions` (ignore-if-absent for consumers that
+  predate them). All five lanes consume both new collections, so the
+  per-collection registry exemptions the reference lane landed with are
+  replaced by named consumers; the one obligation no fixture can reach
+  (a writer MUST NOT seal a profile it does not implement — reference
+  builders expose no profile parameter, so the guard is unexpressible
+  rather than unimplemented) is recorded as an explicit consumer note in
+  `spec/vectors/registry.json`, never a silent omission.
+
+- **sdk-py implements both surfaces.** `capsule/profiles.py` mirrors
+  the reference lane (`SUPPORTED_PROFILES`/`DEFAULT_PROFILE`, the
+  identifier grammar, `classify_profile`, the cross-lane refusal
+  wording, and typed `ProfileError` subclasses that are `ValueError`s
+  like every other reader refusal, so callers keep one failure path);
+  `CapsuleReader.from_files` runs the open-stage gate after both
+  version-gate checks and `decrypt()` re-runs it for the L3 inner;
+  `verify_capsule` reports the `profile` channel on every result
+  (peek-populated on an open refusal, `unevaluated` under a version
+  refusal), applies refusal exclusivity and suite nulling, accepts the
+  report-only `accept_profiles` policy, and derives
+  `verdict`/`verdict_reason`/`qualifiers` on every result including
+  every fail-closed early return. Two parity repairs land with it: the
+  no-allowlist advisory's `trusted=False` wording becomes the canonical
+  `trusted=false` (P4), and the missing
+  `allowlist provided but matched no signer` advisory is emitted (P3) —
+  an unmatched allowlist must never get LESS warning than no policy at
+  all. `tests/test_spec_registry.py` consumes both new collections
+  (replacing this lane's registry exemptions) and asserts the surface
+  invariants on every vector of every collection it already read;
+  `tests/test_profile_declaration.py` and
+  `tests/test_result_vocabulary.py` mirror the reference lane's tests.
+
+- **sdk-kotlin implements both surfaces, and its plain-only refusal
+  becomes a reported capability limit.** `core/Profiles.kt` mirrors the
+  reference lane (`SUPPORTED`/`DEFAULT`, the identifier grammar,
+  `classify`, the cross-lane refusal wording, and typed
+  `ProfileException` subclasses that extend `CapsuleException`, so
+  callers keep one failure path); `CapsuleReader.parse` runs the
+  open-stage gate after both version-gate checks and BEFORE the cipher
+  refusal, so an alternate-profile capsule is refused for its profile
+  instead of being reported as unknown-cipher tamper noise;
+  `CapsuleVerifier.verify` reports the `profile` channel on every
+  result (peek-populated on an open refusal, `unevaluated` under a
+  version refusal), applies refusal exclusivity and suite nulling,
+  accepts the report-only `acceptProfiles` policy, and derives
+  `verdict`/`verdictReason`/`qualifiers` on every result including the
+  fail-closed early return. **This lane's refusal of encrypted capsules
+  is now `verdict: "unsupported"` with `verdict_reason:
+  "unsupported_capability"`** — it parses the container but has no
+  X25519/ChaCha20 path, and another conforming lane verifies the same
+  bytes, so the refusal is a limitation of the verifier and never a
+  claim that the capsule is corrupt; the conformance registry keeps its
+  `requires: ["encryption"]` gating (the registry gates what the lane
+  RUNS, the verdict is what its API reports). The missing
+  `allowlist provided but matched no signer` advisory is emitted (P3).
+  `SpecRegistryTest.kt` consumes both new collections (replacing this
+  lane's registry exemptions) and asserts the verdict surface and
+  profile channel on every vector of every collection it already read;
+  `ProfileGateTest.kt` and `ResultVocabularyTest.kt` pin the machinery
+  the fixtures cannot reach from a plain-only lane.
+
+- **sdk-swift implements both surfaces, including the L3 inner gate.**
+  `Sources/Capsule/Profiles.swift` mirrors the reference lane
+  (`supportedProfiles`/`defaultProfile`, the identifier grammar with
+  its `x-<vendor>-` fence, `classify` over the declaration dyad, the
+  cross-lane refusal wording, and a typed `CapsuleError.profileRefused`
+  carrying the whole classification, so a fail-closed result can
+  populate its channel from the error alone); `CapsuleReader.parse`
+  runs the open-stage gate after both version-gate checks, and because
+  `openInner` re-parses the decrypted inner package, an encrypted
+  capsule's inner declaration is gated independently at L3 — this lane
+  has the encryption path, and there is no inner/outer equality rule.
+  `CapsuleVerifier` reports the `profile` channel on every result
+  including open refusals, where the observed version and the
+  declaration are now both read best-effort from the STORED manifest
+  rather than only from the error, so an unsupported-profile refusal
+  reports the declaration it refused with the suite fact nulled.
+  Refusal exclusivity, the report-only `acceptProfiles` policy, and the
+  derived `verdict`/`verdictReason`/`qualifiers` land with it; this
+  lane's L3 aggregate derives its qualifiers from the facts it reports
+  — the outer's declarations, the inner walk's empty-chain fact (with
+  its canonical note carried along so note and qualifier cannot
+  disagree), and never `encrypted_outer_only`, since that result read
+  the content. The missing `allowlist provided but matched no signer`
+  advisory is emitted (P3). `SpecRegistryTests.swift` consumes both new
+  collections (replacing this lane's registry exemptions) and asserts
+  the `ok == (verdict == "valid")` invariant plus the verdict, profile
+  and suite expectations on every vector of every collection it already
+  read; `ProfileDeclarationTests.swift` and
+  `ResultVocabularyTests.swift` mirror the reference lane's unit pins.
+  The lane's own renderer follows: `CapsuleResults` carries the
+  renderer floor (one line per qualifier, each containing its normative
+  minimum substring; unknown entries surfaced verbatim), and
+  `CapsuleUI.VerifyBadge` renders the VERDICT — an `unsupported`
+  capsule no longer reads as a failure, and a valid verdict is no
+  longer shown as a bare "verified" with its qualifiers dropped.
+
+- **verifier-rust implements both surfaces (verify-only lane).**
+  `crates/capsule-verify/src/profiles.rs` mirrors the reference lane
+  (`SUPPORTED_PROFILES`/`DEFAULT_PROFILE`, the identifier grammar with
+  its `x-<vendor>-` fence — sharing versions.rs's `<major>.<minor>`
+  parser, since profile versions have the same grammar by definition —
+  the total `classify_profile` over the declaration dyad, and the
+  cross-lane refusal wording). `verify_capsule` runs the gate right
+  after the version gate, reading `format.profile` from the PRESERVED
+  manifest tree (the typed `FormatBlock` ignores unknown members, so
+  the declaration is only visible there), and refuses with a new
+  `TopErrorCategory::Profile` error: refusal exclusivity is total in
+  this lane because the gate returns before every recompute, and the
+  reported `format_version.suite` nulls with it. `VerifyResult` gains
+  `profile: ProfileCheck` — reported on every result, peek-populated on
+  the early-return paths and `unevaluated` under a version refusal —
+  plus the derived `verdict: Verdict` / `verdict_reason` /
+  `qualifiers`, all `#[serde(default)]` so archived pre-v0.7.1 result
+  JSON still deserializes into the fail-closed shape. `l3.rs` gates the
+  decrypted inner capsule independently after the inner version gate
+  (no inner/outer equality rule). `tests/spec_registry.rs` consumes
+  both new collections (replacing this lane's registry exemptions) and
+  asserts `expected.verdict`/`verdict_reason`/`qualifiers` (exact array
+  after stripping `x-` entries), `expected.profile.*` and
+  `expected.suite` on every vector of every collection it already read,
+  including the frozen v0.6 fixture and the per-vector `allowlist` /
+  `accept_versions` host configurations.
+
+### Changed
+
+- **BREAKING (CI-observable): the Node CLI's `capsule verify` renders
+  the normative Result block, and a capsule it cannot open now exits 1
+  instead of 2.** `verify` no longer pre-opens the reader and turns an
+  open refusal into an operator error; it feeds the bytes to the total
+  `verifyCapsule()` and renders the fail-closed result — which is what
+  the Rust `capsule-verify-cli` has always done. An unknown format
+  version, an unsupported declared profile, or a malformed container is
+  a verdict about the capsule/verifier pair (`Result: UNSUPPORTED
+  (<reason>: <diagnosis>)` / `Result: INVALID`, exit 1), never exit 2,
+  which now means only "this invocation was wrong or the file could not
+  be read" (parity bug P7 — the two CLIs disagreed on exactly the
+  diagnosis `spec/versioning.md` works hardest to keep distinct from
+  tamper). The Result line is verdict-first
+  (`VALID` / `INVALID` / `UNSUPPORTED`) and enumerates every qualifier
+  with the renderer minimum substrings of `spec/results.md`, replacing
+  the ad hoc `Result: PASS (…)` line that surfaced the unbound signer
+  set but silently dropped the unbound actor set, the unwalked empty
+  chain, and the encrypted-outer scope (P2); an unqualified pass states
+  its trust basis explicitly (`Result: VALID (no qualifiers; N distinct
+  trusted signers)`). Requested policies that went unmet print their
+  own line under the verdict, so exit 1 beside a `VALID` verdict always
+  says which demand failed. `--json` gains top-level `verdict`,
+  `verdict_reason`, `qualifiers`, the `profile` channel, and a
+  `version_policy` block; `format_version` and `profile` now use the
+  Rust CLI's member names (`accepted_by_policy`, `observed_version`,
+  `effective_version`) instead of the SDK's camelCase — a rename only
+  reachable now that a CLI flag can set the field at all. `ok` still
+  means integrity AND every requested policy, and still matches the
+  exit code.
+
+- **The Node CLI can express a version policy: `--accept-versions`
+  (repeatable).** `formatVersion.acceptedByPolicy` was implemented in
+  all five lanes and reachable from neither CLI — the only fact
+  `spec/versioning.md` mandates ("MUST NOT be silent") with no
+  reference renderer and no way for a vector to exercise it (parity bug
+  P1). The Node CLI now accepts `--accept-versions <major.minor>`,
+  passes it as the SDK's report-only policy, renders the
+  `version_not_accepted_by_policy` qualifier with the
+  `not in the declared accepted set` needle, and — following the
+  `--allowlist` precedent, since the CLI is the policy layer — fails
+  the run with exit 1 when the operator's declared set excludes the
+  capsule's version. Integrity is unaffected: `integrity_ok`/`verdict`
+  stay `true`/`valid`. `capsule inspect` additionally surfaces a raw
+  profile declaration when one is present.
+
+- **The Rust `capsule-verify-cli` renders the normative Result block and
+  gains `--accept-versions`.** `Result: PASS` / `Result: FAIL` become
+  the verdict-first block of `spec/results.md`: `Result: VALID` with
+  every qualifier enumerated in plain language beneath it (each
+  carrying its required minimum substring), `Result: VALID (no
+  qualifiers; N distinct trusted signers)` when there is nothing to
+  qualify, `Result: INVALID`, or `Result: UNSUPPORTED (<reason>:
+  <diagnosis>)`. Output additionally gains a `Profile:` header line
+  beside the level, and a `profile` check line when the gate refused.
+  `--accept-versions <major.minor>...` makes the host version policy
+  reachable in this CLI too (parity bug P1): reported, never decided —
+  integrity is unaffected and the verdict stays `valid` — but because
+  the policy was requested on the command line, an unmet one exits 1
+  (`0` still means VALID and every requested policy satisfied).
+  **Also CI-observable in this lane: `--allowlist` is a requested
+  policy too.** A run whose allowlist matched no signer printed
+  `allowlist matched no signer; trusted=false for all signers` and
+  then exited 0 — the operator's demand rendered and discarded, and a
+  silent disagreement with the Node CLI, which has failed that run
+  since F04. Both reference CLIs now apply the one rule
+  spec/results.md fixes: exit 0 iff VALID and every requested policy
+  satisfied. The verify RESULT is unchanged and still reports
+  per-signer `valid`, never `trusted` (spec/trust.md) — the policy
+  layer is the CLI, where the host is the operator who typed the flag.
+  Unknown-version capsules already exited 1, never 2, in this lane.
+  Anything grepping `Result: PASS` in this lane's output must move to
+  `Result: VALID`.
+
+### Fixed
+
+- **The five-lane reporting-parity ledger the results.md audit produced
+  — P1 through P7 — is closed.** Every one was a place where the same
+  capsule and the same host configuration produced a different report
+  depending on which lane read it, which is the failure mode
+  `spec/results.md` exists to end. **P1**: `accepted_by_policy` was
+  implemented in all five lanes and reachable from neither CLI — both
+  now take `--accept-versions`. **P2**: the Node CLI's Result line
+  surfaced the unbound signer set and dropped the unbound actor set,
+  the unwalked empty chain and the encrypted-outer scope, and the Rust
+  CLI's was a bare PASS/FAIL — both now render the normative
+  verdict-first block with every qualifier's required substring.
+  **P3**: the `allowlist provided but matched no signer` advisory
+  existed in only two of five lanes; sdk-py, sdk-swift and sdk-kotlin
+  emit it now, and `result-vocabulary/allowlist-no-match` pins it.
+  **P4**: sdk-py's no-allowlist advisory said `trusted=False` where the
+  other four said `trusted=false`; the canonical strings are fixed in
+  results.md and pinned by `notes_includes`. **P5**: the empty-chain
+  fact had three encodings across five lanes and no shared typed
+  surface — it is the `empty_chain_not_walked` qualifier now, pinned as
+  an exact array entry. **P6** was re-examined and needs no fix: the
+  *notes* were already byte-identical; only the per-lane `checks[]`
+  detail strings differ, and those are rendering, not vocabulary.
+  **P7**: the two CLIs disagreed on unknown-version capsules (exit 2
+  vs exit 1) — the diagnosis versioning.md works hardest to keep
+  distinct from tamper; both exit 1 now. Cross-lane evidence:
+  `spec/vectors/result-vocabulary/` and
+  `spec/vectors/profile-declaration/` are consumed by all five lanes
+  with `expected.qualifiers` compared as an exact array, so this class
+  of drift now fails CI rather than accumulating.
+  **P8 is deliberately not fixed here**: sdk-swift and sdk-kotlin still
+  expose a flat `checks[]` where sdk-js, sdk-py and verifier-rust
+  expose structured areas. The three new members are the first fully
+  shared typed surface; unifying the area structs is a field-NAME
+  change and is deferred to v0.8 planning with the rest of the legacy
+  naming (see ROADMAP, "Verifier result vocabulary").
+
+- **Malformed allowlist entries no longer split the qualifier verdict
+  across lanes (sdk-swift, sdk-kotlin).** `spec/results.md` defines
+  `trust_not_evaluated` as the EFFECTIVE — well-formed — allowlist being
+  empty. sdk-js, sdk-py and verifier-rust drop entries that are not
+  64-char hex Ed25519 keys, report them, and compute the effective set;
+  sdk-swift and sdk-kotlin tested the RAW set for emptiness, so a host
+  passing `["zz"]` got `trust_not_evaluated` from three lanes and
+  `no_trusted_signer` from the other two — a cross-lane disagreement
+  about the same bytes and the same host configuration, exactly what the
+  qualifier vocabulary exists to prevent. Both lanes now normalize the
+  allowlist before deriving the qualifier and surface each dropped entry
+  in the notes with the shared `ignored invalid allowlist` wording.
+
+- **The Rust CLI's exit code and its rendered qualifier can no longer
+  disagree.** `capsule-verify-cli`'s `verify_exit_code` read
+  `VerifyResult::trusted_signer_count`, which is OUTER-only, while the
+  `no_trusted_signer` qualifier and the matched-no-signer advisory are
+  keyed off the outer-OR-inner fact: an encrypted capsule opened with
+  `--decryption-key`, whose only allowlisted signer sealed the INNER
+  envelope, printed `Result: VALID` with no qualifier and no note and
+  still exited 1 — a failed policy with nothing rendered to explain it,
+  the inverse of what the exit rule exists to prevent. The exit
+  predicate now counts distinct trusted signers across both envelopes,
+  the same fact the printed lines use.
+
+## v0.7.0 — 2026-08-04
+
+### Changed
+
+- **BREAKING: the protocol version is now `0.7` — the bump the
+  version-compatibility policy below was built to make safe.** Every
+  lane's known-version table gains `"0.7"` and `current` moves to it:
+  new capsules declare `manifest.format.version` / `envelope.version`
+  `"0.7"` and are identified, signed, and key-wrapped under the v0.7
+  domain strings (`capsule-id-v0.7`, `capsule-provenance-v0.7:<role>`,
+  `capsule-key-wrap-v0.7`, and the encryption AAD's `version` member).
+  `"0.6"` stays in every known table forever: a v0.6 capsule still
+  opens, verifies, and decrypts under the v0.6 rules, with the observed
+  version reported as a fact (spec/versioning.md). v0.7 introduces no
+  algorithm changes and no agility — the absence of an algorithm
+  identifier in a 0.7 capsule means the same v0.6 suite (Ed25519 /
+  SHA-256 / JCS RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305),
+  and the suite identifier verifiers report for both eras is `v0.6`.
+  The backward-compatibility evidence is FROZEN, not regenerated:
+  `spec/vectors/version-compat/output/known-previous-version-0.6.capsule`
+  is a genuine capsule sealed by the pre-bump v0.6 SDK, byte-pinned by
+  SHA-256 in the generator (which refuses to ever rewrite it), and every
+  lane's registry suite proves a v0.7 verifier opens it and reports
+  `0.6`; a frozen pre-bump identity attestation
+  (`valid-previous-spec-version`) pins the same guarantee for the
+  federation overlay, whose `capsule-identity-attestation-v<V>` signing
+  domain is now keyed by the attestation's DECLARED (and signed)
+  `spec_version` instead of a fixed constant. Current-version
+  conformance fixtures were regenerated at 0.7; `plain-basic.json` and
+  the byte-level pins derived from it (`signing-input.json`) remain
+  frozen v0.6 artifacts, and the signing-input generator now derives
+  its domain strings from the pinned capsule's declared version rather
+  than a hardcoded era. Package metadata moves with the protocol:
+  sdk-js `@capsule/sdk-v0.7-prototype` 0.7.0-prototype.1, cli 0.7.0,
+  sdk-py 0.7.0, sdk-kotlin 0.7.0-prototype.1, and the verifier-rust
+  workspace 0.1.0 → 0.7.0 (release-hygiene finding: the workspace now
+  tracks the protocol version like every other lane). The Swift and
+  Kotlin bump-simulation regression tests now simulate the NEXT era
+  (0.8) so they keep guarding the stale-literal class instead of
+  simulating the version that just became current.
+
+- **BREAKING: Pith is an opt-in authoring layer, and its normalizer no
+  longer corrupts technical prose.** The v0.6 sentence splitter treated
+  every `[.!?]` as a sentence boundary, so a dot inside an identifier
+  (`ledger.entry_audit`), a decimal (`12.4k`), or a version number
+  fragmented the sentence, burned the three-sentence budget on the
+  fragments, and silently deleted trailing sentences — and it ran BY
+  DEFAULT on `payload.summary`/`statement`/`note` of every appended
+  event, permanently, inside the hash chain, where the original is not
+  preserved. Three changes, mirrored in sdk-js and sdk-py
+  (`spec/pith.md` now frames Pith as the roadmap's authoring/profile
+  layer): (1) the sentence scanner only ends a sentence at a terminator
+  followed by whitespace — never mid-token — refuses boundaries before
+  lowercase continuations, after common abbreviations, and after
+  single-letter initials, handles fullwidth CJK terminators without
+  inserting spaces, and cuts the original string at sentence ends so
+  kept text is byte-identical to the input; (2) builders apply the
+  normalizer only when asked (`pith: true`, per-builder or per-event,
+  with the per-event flag now overriding in both directions) — an
+  author who writes prose gets their prose; (3) when the normalizer DID
+  change a field, the event records the affected payload members in the
+  new OPTIONAL advisory `pith_normalized_fields` member
+  (`spec/chain.md`), validated against the untrusted-path grammar at
+  append time and covered by the event hash like any other member —
+  a lossy rewrite in the chain is never silent. New
+  `normalizeEventPayload` / `normalize_event_payload` expose the change
+  report; `compressEventPayload` keeps its old shape. Cross-lane
+  evidence: `spec/vectors/pith-authoring/` (a default-built capsule
+  whose identifier-and-decimal prose is stored byte-identical with no
+  marker, and a pith-enabled capsule carrying the marker) is consumed
+  by all five lanes, and the regenerated `unicode-boundary` fixture now
+  carries the marker on its truncated event.
+
+### Added
+
+- **The version-compatibility policy (`spec/versioning.md`) — the gate
+  for the v0.7 bump.** Every lane previously hard-rejected any
+  `manifest.format.version` / `envelope.version` other than exactly
+  `"0.6"`, so the moment the project bumps to 0.7, every capsule sealed
+  today becomes unopenable by the new verifier — not because the capsule
+  is bad, but because time passed. That is the strictest possible
+  violation of the archival profile (sealed today, opened by an
+  underwriter in three years). The policy, now normative and implemented
+  in all five lanes: a verifier keeps a KNOWN-VERSION table and opens
+  any known version under that era's rules forever; the observed version
+  is a REPORTED fact on the verify result (`formatVersion` /
+  `format_version` channel: observed, supported, status, suite,
+  accepted-by-policy) — even when open is refused; an unknown NEWER
+  version fails closed with a verifier-too-old diagnosis that is
+  machine-distinguishable from tamper detection, an unknown OLDER
+  version with its own reason, and a version violating the
+  `<major>.<minor>` grammar as a malformed document; after refusing an
+  unknown version the verifier applies none of its own era's rules, so
+  the refusal never manufactures hash-mismatch noise; and hosts DECLARE
+  an accepted range (`acceptVersions` / `accept_versions`) whose verdict
+  is reported, never decided — the signer-allowlist shape applied to
+  time. Domain-separation strings (`capsule-id-v<V>`,
+  `capsule-provenance-v<V>:<role>`, `capsule-key-wrap-v<V>`) are now
+  selected BY the capsule's declared version in every lane, never a
+  current-version constant, so the v0.6 strings are retained forever.
+  `spec/versioning.md` also pins the algorithm-suite rule: a sealed v0.6
+  capsule names no signature/hash/KDF/AEAD algorithm anywhere, so the
+  spec now states normatively that the absence of an algorithm
+  identifier means the v0.6 suite (Ed25519 / SHA-256 / JCS RFC 8785 /
+  X25519 + HKDF-SHA-256 + ChaCha20-Poly1305) — a later field cannot
+  retroactively disambiguate capsules sealed today; this statement can.
+  Conformance vectors: `spec/vectors/version-compat/` (known version
+  verifies + reports; coherent unknown-newer/-older refused with the
+  pinned reasons and the observed version still reported; grammar
+  violation refused as malformed; unknown envelope version gated
+  identically), consumed by all five lanes and registered in
+  `spec/vectors/registry.json`. The 0.6 → 0.7 bump itself is NOT
+  performed by this policy change; the release entry above executes it —
+  this policy is what makes it safe.
+
+### Fixed
+
+- **Cross-lane participant parity (P2, supersedes addendum A12): the
+  Rust verifier could not open capsules the reference lane seals.** The
+  typed Rust manifest view required `participants[].role` (and
+  previously `label`) to PARSE, so a spec-valid capsule declaring a
+  participant with only an `actor_id` — which the JS/Python builders
+  emit and every dynamic lane verifies — failed as
+  "failed to parse manifest.json: missing field `role`", presenting an
+  honest capsule as corrupt. The rule is now normative in
+  `spec/manifest.md`: `actor_id` is the ONE participants[] member the
+  spec interprets (closed grammar, fail-closed, cross-lane
+  `participants[i].actor_id` diagnosis — never a parse crash); a bare
+  actor-id string entry is equivalent shorthand for `{actor_id}` and
+  BINDS the actor set (Swift/Kotlin previously grammar-checked the
+  shorthand but silently reported it unbound); `role`/`label` are
+  OPTIONAL advisory attribution text, never verification inputs —
+  verifiers gate nothing on their presence, absence, or type. The same
+  typed-view audit made the other advisory members lenient in Rust
+  (`originator.label`, `created_at`, and the advisory chain-event
+  members `event_id`/`action`/`target`/`timestamp`/`payload`, per the
+  amended `spec/chain.md` field rules), and the Swift/Kotlin builders
+  can now declare a participant without `role`/`label` (absent members
+  are omitted from the sealed manifest, matching the JS reference). Six
+  new chain-rules conformance vectors pin the rule in every lane:
+  `participant-only-actor-id`, `participant-bare-string`,
+  `advisory-members-any-type`, `participant-missing-actor-id`,
+  `absent-advisory-manifest-members`, and `minimal-event-fields`. No
+  wire change: capsules sealed before this fix verify identically.
+
+### Security
+
+- **The Swift builder's encrypted seal path is now version-keyed — a
+  future version bump can no longer silently destroy archival
+  recoverability.** The E3 version-compatibility work keyed every
+  READ-side domain string to the capsule's declared version, but
+  `sdk-swift/Sources/Capsule/Builder.swift` still hardcoded the
+  ChaCha20-Poly1305 AAD's `version` member and the key-wrap HKDF info
+  to `"0.6"`. Performing the 0.6 → 0.7 bump the natural way (extend the
+  known table, move `current`) then produced a capsule that declares
+  0.7, VERIFIES ok=true (AAD and wrap info are not covered by
+  verification), and cannot be decrypted by a conforming 0.7 reader —
+  the same silent fail-open shape this project has shipped before. Both
+  values now derive from `CapsuleVersions.current`, and the remaining
+  seal-path version literals are centralized on that one source of
+  truth in Swift AND Kotlin (`Manifest` format.version, `Envelope`
+  VERSION now computed; the dead `ID_DOMAIN` constants removed). A
+  bump-simulation regression test in both lanes
+  (`CapsuleVersions.simulatingBump`, test-only) seals under a simulated
+  future version table and round-trip decrypts (Swift) / re-verifies
+  (Kotlin), so a stale literal can never again coincide with `current`
+  until the bump. Audit of the other lanes: the JS and Python builders
+  already derive the AAD version, wrap info, manifest.format.version
+  and envelope.version from their versions module's `CURRENT_VERSION`;
+  the Rust lane is a verifier with no seal path and its decrypt path is
+  keyed by the declared version.
+
+- **The derived skill-trust classification now consults the OVERALL
+  verify verdict — a FAILING capsule never classifies its skills as
+  `signed`.** The derivation was exactly `content_index.ok AND
+  envelope.ok AND trusted_signer_count > 0`, so a capsule broken in a
+  way that spares those two channels — demonstrated with a
+  `manifest.signer_commitment` naming a key that never signed
+  (envelope signature valid, content index valid, signer-set binding
+  broken, ok=false) — still reported `skill_trust: {capsule_signed:
+  true, skills: {…: "signed"}}` in every lane when the actual signer
+  was allowlisted. That is precisely the prompt-injection path the
+  derived tier exists to close: a failing capsule still telling the
+  host its skills may be handed to an LLM as trusted instructions.
+  spec/trust.md's normative derivation now reads `capsule_signed =
+  result.ok AND content_index.ok AND envelope.ok AND
+  trusted_signer_count > 0`, implemented in all five lanes (the Swift
+  L3 composite also fail-closes the inner classification when any
+  outer or cross-check fails) and surfaced by the CLI. Conformance
+  vector: `spec/vectors/skill-trust/`
+  (`failing-verdict-never-classifies-signed`, fixture
+  `commitment-phantom-signer.capsule`), consumed by all five lanes and
+  the CLI smoke suite.
+
+- **A non-array `manifest.participants` is now rejected as a malformed
+  shape instead of silently no-opping the actor rules.** A manifest
+  declaring `participants: {actor_id: "robot:origin"}` (bare object)
+  or `participants: "robot:origin"` (bare string) was silently
+  skipped: the actor-membership rule and the actor_id namespace
+  grammar check both no-opped, fail-safe only by accident, and the
+  capsule presented exactly like an honestly unbound one.
+  spec/manifest.md now fixes `participants` as an ARRAY when present;
+  absence and the empty array remain the same honest weaker claim
+  (verify with `actorSet.bound=false` plus a note), and only a PRESENT
+  non-array declaration is malformed, rejected at open in every lane
+  (JS/Python also re-check at verify time for hand-constructed
+  readers). The Rust typed manifest view gains `#[serde(default)]` on
+  `participants`: it silently REQUIRED the member, so a spec-valid
+  capsule with no `participants` at all was refused — absence is not a
+  violation. Conformance vectors: `spec/vectors/malformed-shape/`
+  (`participants-not-array`, `participants-string`, negative) and
+  `spec/vectors/chain-rules/` (`absent-participants`, positive),
+  consumed by all five lanes.
+
+- **Skill trust is now a DERIVED classification — the author-declared
+  `manifest.skill_trust` member is removed from the format (finding
+  A01).** spec/trust.md defines the `signed` tier in terms of the
+  HOST'S allowlist, which exists only at verify time, but the tier was
+  whatever the author passed to `addSkill(..., signed)` and no verifier
+  in any lane cross-referenced it: an attacker-authored capsule, sealed
+  with the attacker's own key at a host that does NOT allowlist it,
+  reported `trust: "signed"` for a SKILL.md full of prompt-injection
+  text — and a host enforcing the tier exactly as documented was
+  enforcing the attacker's own claim. The field was a category error
+  twice over: a build-time member claiming a verify-time, host-relative
+  property (the author cannot know the host's allowlist), with per-skill
+  granularity a single envelope signature cannot back. All five lanes
+  now derive the tier in the verify result — `capsule_signed =
+  content_index.ok AND envelope.ok AND trusted_signer_count > 0`; a
+  skill is `signed` iff `capsule_signed` and its `skill.json` is listed
+  in the content index — reported as `skill_trust: {capsule_signed,
+  skills}` (`skillTrust` in JS/Swift/Kotlin). Reader skill accessors
+  (`reader.skills()`, `CapsuleSkill`) no longer carry a trust member —
+  a reader without the host's allowlist cannot know one — and sdk-py
+  gained the previously missing `skills()` accessor so every lane
+  exposes the same surface. Builders reject the removed `signed`
+  declaration loudly. A capsule from an earlier draft that still
+  carries `skill_trust` verifies (unknown member: preserved, hashed,
+  inert) but the member is NEVER read as a trust input. spec/trust.md's
+  adversary matrix no longer claims the author-declared tier as an
+  author-resistant control; the derived tier genuinely is one.
+  Conformance vectors: `spec/vectors/skill-trust/` (the
+  `declared-signed-not-allowlisted` vector pins the attack), consumed
+  by all five lanes and registered in `spec/vectors/registry.json`;
+  fixtures for signer-set, chain-binding, chain-rules and
+  unknown-fields regenerated without the removed member.
+- **Typed key material: keypair objects now carry a `curve` tag, and
+  the sdk-js/sdk-py API boundary rejects cross-curve key confusion
+  (A04).** `Ed25519KeyPair` and `X25519KeyPair` objects are
+  structurally identical, and this changelog itself advertised the
+  reachable hazard ("keypair objects work as-is as … recipients"):
+  passing an Ed25519 keypair where an X25519 recipient is required was
+  accepted silently — X25519 clamps and accepts any 32-byte
+  u-coordinate, ECDH "succeeds", and the sealed content is
+  unrecoverable by the Ed25519 holder, with nothing erroring until a
+  decryption attempt potentially years later. Seal-time round-trip
+  verification cannot catch it (the sealer holds no recipient private
+  key) and 400/400 sampled X25519 public keys parsed as valid Ed25519
+  points, so the only fix is typing at the boundary:
+  `generateEd25519()`/`generate_ed25519()` now tag `curve: "ed25519"`,
+  `generateX25519()`/`generate_x25519()` tag `curve: "x25519"`,
+  `toSigner`/`to_signer` reject an object tagged with the wrong curve,
+  and `toRecipient`/`to_recipient` additionally reject any
+  keypair-shaped object (private key material present) with NO tag —
+  the branded path is the only object path for keypairs. HONEST
+  LIMITS: raw hex, raw bytes, and public-key-only `{publicKey}` inputs
+  remain untagged and accepted (indistinguishable by construction —
+  the caller extracting bytes asserts the curve), and untagged
+  `{role, publicKey, privateKey}` signer dicts remain accepted because
+  a cross-curve signing mistake fails loudly at first verification
+  rather than silently. sdk-swift is not exposed on the object path
+  (nominal `Curve25519.Signing` vs `.KeyAgreement` key types cannot be
+  interchanged; its `Recipient` takes raw `Data`); sdk-kotlin core has
+  no encryption path. Pinned by `sdk-js/test/key-curve.test.js` and
+  `sdk-py/tests/test_key_curve.py`.
+
+- **The `participants[].actor_id` namespace grammar is now enforced in
+  every lane (A06).** `spec/manifest.md` has always required
+  `human:<id>`, `ai:<id>`, `system:<id>`, or `capsule:<id>`, but no
+  builder or verifier checked it — a capsule declaring `robot:origin`
+  (or any uninterpretable participant entry) sailed through all five
+  verifiers with the actor set reported as bound. The namespace set is
+  now CLOSED normatively (`<id>` any non-empty string,
+  case-sensitive), builders refuse to declare a participant outside
+  the grammar (sdk-js/sdk-py at construction and seal, sdk-swift and
+  sdk-kotlin in `setParticipants`), and all five verifiers reject a
+  declared out-of-grammar entry fail-closed — including entries with a
+  missing or non-string `actor_id`, which the membership check used to
+  skip silently. This is distinct from the empty-participants tier: an
+  EMPTY set is a weaker claim made honestly (still verifies, reported
+  unbound); a DECLARED entry no reader can interpret is malformed. New
+  chain-rules vector `invalid-actor-namespace` (declared and event
+  actor both `robot:origin`, so membership passes and only the grammar
+  decides) is consumed by all five lanes. The repo's own examples and
+  CLI smoke fixtures used `tool:renderer`/`tool:smoke` — themselves
+  spec violations — and are renamed to the `system:` namespace.
+  `capsule:<id>` remains grammar-only: nothing else in the codebase
+  assigns it semantics (composition is future work).
+
+- **The semantic-binding layer: manifest claims are now tied to the
+  signed envelope, the chain, and the files in every lane.**
+  `capsule_id` is derived from `manifest.first_event_hash`, but no lane
+  ever compared that value to `envelope.first_event_hash` or the chain —
+  only the envelope value was checked against the recomputed anchor — so
+  a correctly-signed capsule could carry a `capsule_id` (the identity
+  federation attestations bind to) naming a chain it does not contain.
+  All five verifiers now require
+  `manifest.first_event_hash == envelope.first_event_hash == hash(chain
+  event 1)`, the third term deferred to L3 on an encrypted outer.
+  `manifest.encryption` was never checked against the SIGNED
+  `envelope.cipher` (amendment M05 measured a plain capsule declaring
+  encryption producing four different outcomes across four lanes); it
+  must now be null when the cipher is `none`, agree with the cipher
+  otherwise, and name a `metadata_path` that is present AND covered by
+  the content index. sdk-py's `is_encrypted()` used OR-semantics
+  (manifest claim OR cipher OR blob presence), so an attacker who merely
+  APPENDED a `content.enc` to a plain capsule flipped the reader into
+  encrypted mode and chain verification was silently skipped ("deferred
+  to L3") — `chain.ok` reported True for a broken chain; verifier-rust
+  keyed the same decision off file presence alone. Both now require the
+  signed cipher AND the blob, matching the reference. verifier-rust's
+  decryptor hardcoded `skills/decryption/decryption.json`, rejecting
+  spec-conformant capsules the reference reader decrypts through
+  `manifest.encryption.metadata_path`; it now resolves the declared
+  path. sdk-swift and sdk-kotlin keyed encrypted-mode detection off the
+  manifest's own claim and wrote their envelope-to-chain anchor checks
+  as optional bindings, so a MISSING mandatory anchor became silent
+  success and an empty chain was accepted with claimed anchors
+  unchecked; both now follow the empty-chain null-anchor rule (zero
+  events verify only with all three anchors null, reported honestly via
+  the shared note) and fail closed on missing or null anchors over a
+  non-empty chain. New `spec/vectors/semantic-binding/` registry
+  (7 vectors: manifest/envelope drift, agreed-decoy chain mismatch,
+  false encryption claim, dangling and relocated metadata_path,
+  smuggled blob over a broken chain, plain positive control) consumed
+  by all five lanes; sdk-swift and sdk-kotlin now also consume
+  `spec/vectors/chain-binding/`.
+
+- **Encrypted-blob shape checks are now keyed off blob PRESENCE in
+  every lane, closing two fail-opens the semantic-binding remediation
+  introduced.** The remediation settled encrypted-mode detection on
+  "signed cipher AND `content.enc` present" — correct for choosing
+  whether to walk the chain, but sdk-py, sdk-js, sdk-swift and
+  sdk-kotlin also gated the cipher/blob-hash SHAPE checks behind that
+  conjunction, which is false exactly when the two halves disagree.
+  Consequences: (1) sdk-kotlin verified `ok=true` for a capsule whose
+  SIGNED `envelope.cipher` named a real cipher while carrying no
+  `content.enc` and a plaintext chain — it walked the plaintext chain
+  of a capsule claiming to be encrypted (before the remediation the
+  same bytes were accidentally refused); (2) sdk-py — which had
+  rejected it before the remediation — plus sdk-js, sdk-swift and
+  sdk-kotlin verified `ok=true` for a plain (`cipher='none'`) capsule
+  with a stray `content.enc` appended AND correctly content-indexed,
+  index/manifest-hash/signature re-derived. verifier-rust already had
+  the correct split (`blob_present` for the shape checks, `blob_present
+  && cipher != "none"` only for mode selection); the other four lanes
+  now mirror it: a present blob must be accounted for by the signed
+  cipher and `encrypted_blob_hash`, and an absent blob means plain —
+  `cipher='none'`, `encrypted_blob_hash=null` — unconditionally
+  (integrity invariant: the capsule must not lie about its own bytes;
+  a manifest that merely OMITS the optional `encryption` member is
+  still not a violation). Two new semantic-binding vectors pin it in
+  all five lanes: `cipher-declared-no-blob` (reason
+  `cipher_without_blob`) and `smuggled-blob-indexed` (reason
+  `blob_without_cipher`). Also corrected the sdk-js
+  `CONTENT_INDEX_EXCLUDED`/verifier comments, which claimed indexing a
+  smuggled blob is what fails verification — a fully re-derived index
+  passes the index checks; the blob-shape invariant is what rejects
+  it. The CLI's vendored `@capsule/sdk-v0.6-prototype` was a stale
+  directory copy of sdk-js; it is now an npm `file:` symlink, so the
+  CLI lane exercises the current SDK.
+- **Lane × collection vector coverage is now itself machine-checked
+  (T10).** Registry consumption used to be opt-in per lane, by
+  hardcoded filename — each of sdk-py, verifier-rust, sdk-swift and
+  sdk-kotlin kept its own list of vector files, and nothing asserted
+  the lists were COMPLETE, so a new collection was invisible to four
+  lanes by default (the generator behind the Swift/Kotlin
+  malformed-layout gap, and behind malformed-shape / chain-binding /
+  unknown-fields / signing-input each missing from at least one lane).
+  New `spec/vectors/registry.json` declares, for every collection, its
+  reason/failing vocabulary and the set of lanes required to consume it
+  — as a witness consumer file, a transitive `via`, or an explicit
+  reasoned exemption (e.g. only sdk-js implements federation
+  attestations); silent omission is not expressible. The new required
+  conformance target `vector-registry`
+  (`tools/check-vector-registry.mjs`) fails on an unlisted or missing
+  or EMPTY collection (F40 — an empty `vectors` array used to record
+  nothing and pass; the per-lane loaders now also refuse missing/empty
+  registries instead of silently collecting zero tests), on vocabulary
+  drift in either direction, and on a declared consumer that never
+  references the collection. The gaps the manifest surfaced were
+  closed rather than exempted: Swift and Kotlin now consume
+  malformed-shape, chain-binding, unknown-fields and signing-input
+  (Swift gained the empty-chain null-anchor rules, zero-byte
+  capsule_id derivation, manifest/envelope shape validation at parse,
+  and byte-level signing-input pins; Kotlin the same by construction),
+  and Rust consumes malformed-shape.
+- **Duplicate JSON object members are rejected in every lane (A13).**
+  I-JSON (RFC 7493 §2.3) forbids them; no lane enforced it. Every
+  mainstream parser silently keeps the last value, so `{"a":1,"a":2}`
+  and `{"a":2}` were two different byte sequences with one canonical
+  form — a reviewer/verifier smuggling primitive, one future
+  first-wins parser away from a cross-lane verification split.
+  `spec/canonicalization.md` gains the "Objects" rule (names compare
+  after escape processing); every capsule-document parse path now
+  refuses duplicates (JS text scanner + `parseJsonStrict`, Python
+  `object_pairs_hook`, Rust visitor-based `parse_json_strict`, Swift
+  UTF-16 scanner, Kotlin streaming `JsonReader` re-scan), pinned by
+  three new `ijson-acceptance` vectors with reason `duplicate_member`
+  including the `"\u0061"`-vs-`"a"` escaped-name collision.
+- **Remaining cross-lane parity gaps from the addendum are closed with
+  vectors (A10, A11, A12, A15).** (1) Swift and Kotlin did not enforce
+  contiguous chain sequence numbers — a correctly hashed, signed chain
+  renumbered `seq=2` verified in both; chain.md step 5 is now enforced
+  in all five lanes (`chain-rules/non-contiguous-seq`). (2) Swift and
+  Kotlin accepted UPPERCASE envelope signer-key hex that JS/Python/
+  Rust reject: the key decodes to the same bytes and `signers[]` sits
+  outside the canonical payload, so those lanes saw a valid signature
+  on bytes the strict lanes refuse; both hex decoders are now strict
+  lowercase, and Kotlin's signature path no longer throws on malformed
+  hex (`malformed-shape/uppercase-signer-key-hex`). (3) verifier-rust
+  uniquely required participant `label`, refusing a spec-valid capsule
+  every other lane verified; the typed view now treats `label` as the
+  advisory optional field the spec defines
+  (`chain-rules/participant-without-label`). (4)
+  `untrusted_payload_fields` had no enforceable grammar and no host
+  projection contract — a host could not tell which payload members
+  the author marked untrusted without inventing semantics.
+  `spec/chain.md` now defines the normative path grammar
+  (`payload(.segment)+`, `segment = [A-Za-z0-9_-]+`), the resolution
+  rules (object-member traversal only; unresolved paths mark nothing;
+  hosts never guess), and verification step 8: an out-of-grammar
+  marking is a chain-area failure in every profile, and all four
+  builders refuse it at append time
+  (`chain-rules/invalid-untrusted-path`).
+
+- **The chain.md step-6 actor rule and the closed `kind` enum are now
+  enforced in all five lanes — with the actor rule conditioned on the
+  manifest's own claim.** Only verifier-rust implemented step 6
+  ("actor appears in manifest participants or is `system:host`"): the
+  JS `verifyChain` never even received the manifest, and sdk-py,
+  sdk-swift, and sdk-kotlin had no check at all, so a capsule whose
+  audit-trail events were attributed to actors absent from the audited
+  participant set — the audit-spoofing shape the rule exists to catch —
+  verified `ok=true` with a trusted signer in four lanes while Rust
+  rejected it. The settled rule, normative in `spec/chain.md`: a
+  NON-EMPTY `participants[]` binds every event actor to the declared
+  set or `system:host`, fail-closed in every verifier; an EMPTY
+  `participants[]` is the manifest making no claim about who acted —
+  a weaker claim made honestly (template / open-publication tiers) —
+  so verification succeeds and every verifier REPORTS the unbound
+  actor set machine-readably (`actorSet`/`actor_set`/`actorSetBound` =
+  unbound, plus a note), mirroring the signer-set "presence binds,
+  absence reports" contract. Conditioning on the list is safe because
+  `participants[]` is covered by `manifest_hash` inside the signed
+  payload — an attacker cannot empty it without breaking every
+  envelope signature. Rust's previously unconditional check is
+  relaxed accordingly. Separately, `kind` is a CLOSED enum
+  (`decision | observation | mutation | session | checkpoint`) in
+  every tier — no lane validated it — because a custom kind is not a
+  weaker claim, it is unreadable to the foreign LLM reader; all five
+  verifiers now reject unknown kinds per event (new verification step
+  7). Both reference builders (`appendEvent` / `append_event`, plus
+  the Swift and Kotlin builders) reject at append time: unknown kinds
+  always, undeclared actors whenever participants are declared —
+  never by auto-registering the actor (chain.md gains a "Writer
+  obligations" section; Swift's `appendEvent` is now throwing). Every
+  lane emits the Rust verifier's per-event message shape verbatim.
+  New conformance collection `spec/vectors/chain-rules/`
+  (deterministic generator
+  `sdk-js/tools/generate-chain-rule-fixtures.mjs`, `--check` wired
+  into the conformance harness): `actor-not-participant` and
+  `unknown-kind` MUST fail in the chain area, and the
+  `unbound-actors` positive control (empty participants, named actor)
+  MUST verify with the unbound report — pinned machine-readably via
+  the new `actor_set_bound` registry key, consumed by the JS, Python,
+  Rust, Swift, and Kotlin registry lanes. The CLI reports `actor_set`
+  in `--json` and the human checklist. Wire format unchanged.
+- **The JS CLI's PASS now means exactly what was checked (T9: F03,
+  F04, F47, F48).** `capsule verify` computed its exit code and
+  PASS/FAIL line purely from the SDK's integrity-only verdict, so
+  `--allowlist` had zero effect: a capsule signed by a completely
+  different key than the operator allowlisted printed PASS and exited
+  0 on the documented CI-gating path — and the argument parser treated
+  any unrecognized long flag as a boolean, so a typo'd `--alowlist`
+  (or the `--decryption-key` flag inspect wrongly recommended, or a
+  second file argument) was silently ignored. The CLI is now the
+  explicit policy layer the SDK deliberately is not: supplying
+  `--allowlist` sets the policy "at least one distinct allowlisted key
+  must carry a valid signature" and an unmatched allowlist FAILS with
+  exit 1 and a loud reason; no allowlist means the PASS is qualified
+  `integrity only — signer identity not checked` (absence downgrades
+  reported assurance, never rejects); malformed allowlist entries are
+  exit-2 usage errors (Rust CLI parity); the parser fails closed on
+  unknown flags and unexpected positionals; every command answers
+  `--help`. Exit codes are documented in `cli/README.md`: 0 =
+  integrity verified AND policy satisfied, 1 = either failed, 2 =
+  usage/I-O. JSON output gains `integrity_ok` and a
+  `trust {policy, allowlist_size, trusted_signer_count, satisfied}`
+  block, with `ok` now the overall verdict matching the exit code.
+  `envelope.signed_at` renders as `Sealed at (attested)` — it is
+  signer-supplied with no external time anchor and SKILL.md lists it
+  under "what you must not trust". Encrypted-capsule messages no
+  longer point at the unimplemented `verify --decryption-key`; they
+  name the SDK's `reader.decrypt()` and the Rust `capsule-verify-cli`
+  instead. sdk-js's `verifyCapsule` additionally emits the
+  "allowlist provided but matched no signer" advisory (wording
+  identical to verifier-rust), so the mismatch case never gets less
+  warning than the no-policy case; the Python, Swift, and Kotlin
+  lanes still lack that advisory and are tracked as follow-up. CLI
+  smoke tests: 50 → 91.
+
+- **Empty chains are legal — and then the anchors must be null.** A
+  plain capsule's only envelope-to-chain binding is the
+  `envelope.first_event_hash` / `entry_hash` comparison against the
+  recomputed chain, and every verifier skipped it when the chain had
+  zero events (there was no first event to compare), so a capsule
+  claiming anchors over an empty `chain/events.jsonl` verified with the
+  chain check rendered as an unqualified pass; the JS verifier
+  additionally failed the empty case with an *empty* errors array (a
+  dead `??=` assignment). The settled rule, normative in
+  `spec/chain.md` ("Empty chains"): a zero-event chain is a legitimate
+  weaker shape (templates, drafts — the open tier), and then
+  `manifest.first_event_hash`, `envelope.first_event_hash` and
+  `envelope.entry_hash` MUST all be `null` — claiming any of them over
+  zero events fails closed; `capsule_id` derives with 32 zero bytes
+  (the genesis prev-hash value) standing in for
+  `first_event_hash_raw`; and verifiers report machine-readably
+  (`chain.note` + `notes`) that no events were walked, never a bare
+  pass. A `null` anchor over a non-empty chain keeps failing as a
+  mismatch. Implemented in sdk-js, sdk-py, and verifier-rust (whose
+  CLI now renders the chain note and no longer forces the line to PASS
+  when a note is present); the Swift and Kotlin lanes still skip the
+  comparison and are tracked as follow-up. New conformance collection
+  `spec/vectors/chain-binding/` (deterministic generator
+  `sdk-js/tools/generate-chain-binding-fixtures.mjs`, `--check` wired
+  into the conformance harness) pins the passing null-anchor shape
+  (with a `notes_includes` honest-reporting pin, newly supported by the
+  JS/Python/Rust registry consumers), the failing claimed-anchor shape,
+  and an event-without-`untrusted_payload_fields` positive that
+  witnesses stored-line event hashing.
+
+- **verifier-rust allowlist entries are validated and never fail
+  silently.** A truncated or mangled `--allowlist` value never matched
+  any signer, and because the vector was non-empty the "no allowlist
+  provided" advisory was suppressed too — the run reported PASS with
+  `trusted=false` and an empty notes array. `verify_capsule` now drops
+  any entry that is not exactly 64 hex chars (any case, normalized to
+  lowercase — JS `toKeyHex` parity) with a per-entry
+  `ignored invalid allowlist[i]` note, keys the no-allowlist advisory
+  off the well-formed entries, and adds an
+  "allowlist provided but matched no signer" advisory (outer and L3
+  inner signers considered). The Rust CLI also rejects a malformed
+  `--allowlist` entry up front with exit 2, mirroring
+  `--decryption-key`.
+
+- **The envelope signer set is now bound by the seal
+  (`manifest.signer_commitment`).** The signing input is
+  `JCS(envelope minus signers)`, so `signers[]` was never an input to
+  any signature — and `provenance/envelope.json` is structurally
+  excluded from the content index. Measured on the previous code: a
+  signer could be stripped with no residue (`ok:true`, count 2→1), and
+  anyone holding the bytes could append a fresh valid signature in a
+  role of their choosing (`notary`, `compliance`, …) that verified
+  clean. The fix is the TUF/DSSE-shaped one: the manifest now stores the
+  exact sorted `(role, public_key)` membership of the seal-time signer
+  set, which is transitively signed by every signer via
+  `envelope.manifest_hash`. The rule is **presence binds, absence
+  reports**: a present commitment must equal the normalized signer set
+  exactly (strip / append / role-swap / unsorted / duplicated all fail
+  closed); a manifest without one still verifies, and every verifier
+  reports the set as unbound machine-readably (JS
+  `result.signerSet.bound`, Python `result["signer_set"]["bound"]`,
+  Rust `VerifyResult::signer_set.bound`, Swift/Kotlin
+  `signerSetBound`) — templates and legacy capsules make a weaker claim
+  honestly instead of failing. Two adjacent holes closed in the same
+  change: duplicate `(role, public_key)` signer entries are rejected as
+  malformed and trusted-signer counts are over DISTINCT keys (an M-of-N
+  policy can no longer be satisfied by repeating one key), and
+  `manifest.originator.public_key` must now actually have a valid
+  envelope signature with role `originator` (originator binding — the
+  rule was already in spec/manifest.md but no lane enforced it).
+  Spec: `spec/manifest.md` ("signer_commitment"), `spec/envelope.md`
+  ("Signer set binding"), `spec/trust.md` threat table,
+  `spec/federation.md` quorum step 0. New conformance collection
+  `spec/vectors/signer-set/` (deterministic generator
+  `sdk-js/tools/generate-signer-set-fixtures.mjs`, `--check` wired into
+  the conformance harness) pins a bound positive control, the unbound
+  absent-commitment report, and strip / append / duplicate / role-swap /
+  unsorted / originator-not-a-signer negatives, consumed by the JS
+  (`tools/check-spec-vectors.mjs`), Python (`test_spec_registry.py`),
+  Rust (`spec_registry.rs`), Swift (`SpecRegistryTests.swift`), and
+  Kotlin (`SpecRegistryTest.kt`) lanes. All five SDK builders emit the
+  commitment on every seal (one commitment serves the inner and outer
+  manifests of an encrypted capsule); the tamper-detection and
+  malformed-layout fixtures were re-baselined so their clean capsules
+  carry it.
+
+### Added
+
+- **Unknown-member preservation is normative.** `spec/manifest.md`,
+  `spec/envelope.md`, and `spec/chain.md` now state that unknown members
+  in `manifest.json`, `provenance/envelope.json`, and chain events MUST
+  be preserved verbatim and included in canonicalization/hashing —
+  readers MUST NOT recompute a hash (or reconstruct the signed envelope
+  payload) from a re-serialized typed projection of the document. The
+  reserved vendor namespace is `x-<vendor>-<name>` (future spec versions
+  will never define `x-`-prefixed members), which gives organisations
+  collision-free manifest/envelope/event extensions that are covered by
+  the seal: a signer signs over their own extensions, an attacker cannot
+  inject or mutate one without breaking `manifest_hash`, the envelope
+  signature, or the event hash, and capsules stay verifiable across
+  future spec versions that add members. New conformance collection
+  `spec/vectors/unknown-fields/` (deterministic generator
+  `sdk-js/tools/generate-unknown-fields-fixtures.mjs`) pins a positive
+  capsule carrying `x-` members plus three post-seal tamper negatives,
+  consumed by the JS (`tools/check-spec-vectors.mjs`), Python
+  (`test_spec_registry.py`), Rust (`spec_registry.rs`), Kotlin
+  (`ParityTest.kt`), and Swift (`ParityTests.swift`) lanes.
 
 - **sdk-py onboarding surface.** The Python SDK mirrors the sdk-js
   ergonomics: every key input accepts hex strings (any case) or 32 raw
@@ -49,8 +1232,52 @@ incompatible wire changes ship as `0.7`).
   malformed-layout outcome registries and the signing-input pins
   directly, instead of hand-copied per-fixture assertions.
 
+### Fixed
+
+- **verifier-rust silently dropped unknown manifest/envelope/event
+  members, rejecting legitimately extended capsules.** The Rust verifier
+  deserialized `manifest.json`, `provenance/envelope.json`, and chain
+  events into fixed structs and re-serialized those structs to recompute
+  `manifest_hash`, the signed envelope payload, and per-event chain
+  hashes — silently dropping any member the v0.6 structs did not know
+  (and re-inventing defaults for absent optional fields), so a capsule
+  carrying signed-over extension members failed all three checks. The
+  verifier now parses each document once into a preserved
+  `serde_json::Value` tree, canonicalises THAT for every hash and
+  signature input (outer and L3 inner paths), and keeps the typed
+  structs purely as field-access views (`ParsedEvent` pairs each chain
+  event with its preserved tree; `manifest_hash`,
+  `envelope::canonical_payload`/`signing_input`/`verify_signatures`
+  now take the preserved tree).
+
 ### Changed
 
+- **Federation identity attestations now bind to something.**
+  `verifyIdentityAttestation` requires the caller to supply `capsuleId`,
+  `signerPublicKeyHex`, and `expectedIssuer` (plus `audience` for the JWT
+  profile) and rejects any attestation whose `capsule_id` /
+  `signer_public_key` / `signer_role` binding claims are absent — a raw
+  provider session token, which carries no `cap` object, previously
+  verified with a fully populated subject. `verifyJwt` requires an
+  expected issuer and audience instead of checking `iss` against a field
+  of the same untrusted wrapper. `kid` now selects exactly one trust root
+  or none, instead of falling back to any cached key with a matching
+  `alg`. An Ed25519 OKP JWK is decoded into raw key bytes, so an issuer
+  publishing its native trust root as a standard JWKS is consumable. An
+  unparseable or absent `expires_at` is a rejection rather than "never
+  expires" (and a garbage JWT `exp` no longer crashes the verifier).
+  `evaluateSignerPolicy` takes a required `{ capsuleId }` and drops
+  attestations bound to another capsule. Every result carries a
+  machine-readable `status` from `spec/federation.md`'s own vocabulary
+  (`attestation_verified` / `attestation_unverified` /
+  `attestation_rejected`), pinned by the new
+  `spec/vectors/identity-attestation/` registry, and the subject/claims
+  projection is nested under `identity` — non-null only when verified —
+  so a caller can never read a claim without its basis.
+  `fetchIssuerMetadata` requires `issuer` to match the fetch origin and
+  `loadTrustRoots` requires `jwks_uri` to share it. `spec/federation.md`
+  and `spec/profiles/clerk.md` state these as normative verifier rules.
+  Wire format unchanged; the overlay API is a breaking change.
 - **Container strictness is now uniform and checked against the raw
   central directory.** All readers reject duplicate entry names (a ZIP
   parser differential); the JS reference reader now rejects non-STORED
@@ -68,6 +1295,29 @@ incompatible wire changes ship as `0.7`).
   a signer trusted from malformed configuration.
 - **Malformed-layout fixtures are drift-checked.** The deterministic generator
   supports `--check`, which runs as a required JavaScript conformance target.
+
+### Security
+
+- **The Swift reader no longer traps on hostile containers.**
+  `CapsuleZip.unpack` indexed its byte array with unvalidated EOCD and
+  central-directory offsets, so a 22-byte crafted `.capsule` produced a
+  Swift array trap — a `fatalError`, which the `do`/`catch` in
+  `CapsuleVerifier.verify` cannot contain — and killed the host process.
+  Every offset is now bounds-checked, the central directory must close
+  exactly on the EOCD, ZIP64 sentinels and ambiguous multi-EOCD archives
+  are refused, and the `spec/format.md` reader limits (10,000 entries,
+  1 GiB total) are enforced on the read path rather than only in `pack`.
+  Malformed bytes now surface as `CapsuleError.malformed` / `ok=false`,
+  matching the JS, Python, and Rust lanes.
+- **Swift JCS canonicalization no longer kills the process on
+  out-of-range numbers.** `JCS.canonical` used `precondition` for
+  integers outside ±(2^53 − 1) and non-finite doubles, both reachable
+  from `CapsuleVerifier.verify` on attacker-controlled manifest,
+  envelope, and chain bytes (a manifest of `{"id":9007199254740993}`
+  was a process kill). They now throw `CapsuleError.malformed` and the
+  verifier reports the affected checks as failed — the catchable
+  behaviour Python (`ValueError`) and Kotlin
+  (`IllegalArgumentException`) already had.
 
 ## v0.6.0-prototype.1 — 2026-05-12 (unreleased)
 

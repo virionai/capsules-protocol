@@ -1,6 +1,7 @@
 // capsule CLI dispatcher.
 
 import { verifyCmd } from "./commands/verify.mjs";
+import { rewrapCmd } from "./commands/rewrap.mjs";
 import { inspectCmd } from "./commands/inspect.mjs";
 import { chainCmd } from "./commands/chain.mjs";
 import { manifestCmd } from "./commands/manifest.mjs";
@@ -14,6 +15,7 @@ import { CLIError, err } from "./format.mjs";
 
 const COMMANDS = {
   verify: { fn: verifyCmd, summary: "verify a capsule's signatures, hashes, and chain" },
+  rewrap: { fn: rewrapCmd, summary: "seal a successor capsule that declares this one as predecessor" },
   inspect: { fn: inspectCmd, summary: "one-screen overview of a capsule (header + counts)" },
   chain: { fn: chainCmd, summary: "list chain events" },
   manifest: { fn: manifestCmd, summary: "print manifest.json" },
@@ -25,10 +27,10 @@ const COMMANDS = {
   vectors: { fn: vectorsCmd, summary: "verify cross-implementation parity vectors" },
 };
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 function help() {
-  err("capsule — command-line tool for Capsule v0.6 files");
+  err("capsule — command-line tool for Capsule v0.7 files");
   err("");
   err("usage:  capsule <command> [args...]");
   err("");
@@ -43,9 +45,11 @@ function help() {
   err("  -h, --help          show this help");
   err("");
   err("exit codes:");
-  err("  0  success / verification passed");
-  err("  1  verification failed / vectors mismatch");
-  err("  2  I/O, argument, or environment error");
+  err("  0  success — for verify: verdict VALID AND every requested policy");
+  err("     (--allowlist, --predecessor, --accept-versions) satisfied");
+  err("  1  verdict INVALID or UNSUPPORTED, a requested policy not satisfied,");
+  err("     a rewrap predecessor refusal, or vectors mismatch");
+  err("  2  usage, I/O, or environment error (unknown flag, malformed key, ...)");
 }
 
 export async function run(argv) {

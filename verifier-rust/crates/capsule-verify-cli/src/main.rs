@@ -4,10 +4,17 @@
 //! prints the result either as a human-readable plain-text report or as
 //! pretty-printed JSON.
 //!
-//! Exit codes:
-//!   0  PASS (the capsule verified cleanly)
-//!   1  FAIL (verification ran but rejected the capsule)
-//!   2  I/O / argument error (file not found, permission denied, etc.)
+//! Exit codes (spec/results.md "CLI reference renderer"):
+//!   0  VALID and every requested policy satisfied
+//!   1  INVALID, UNSUPPORTED, or a requested policy failed
+//!   2  usage / I-O error (file not found, permission denied, bad flag value)
+//!
+//! The CLI is the POLICY layer (spec/lineage.md "CLI exit policy",
+//! following the documented `--allowlist` pattern): the library reports
+//! trust, version acceptance, and lineage linkage and never decides, but an
+//! operator who passes `--predecessor` has asked for the custody claim to
+//! hold, so `capsule-verify verify s --predecessor p && publish` must not
+//! publish when it does not.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +22,8 @@ use std::process::ExitCode;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD;
 use base64::Engine;
 use capsule_verify::{
-    verify_capsule, EnvelopeCheck, SignerOutcome, TopErrorCategory, VerifyOptions, VerifyResult,
+    verify_capsule, EnvelopeCheck, LineageCheck, SignerOutcome, TopErrorCategory, Verdict,
+    VerifyOptions, VerifyResult,
 };
 use clap::{Parser, Subcommand};
 
@@ -40,7 +48,9 @@ enum Command {
         /// Trusted Ed25519 public keys (lowercase hex, 64 chars). May be
         /// repeated, or passed as a space-separated list. A signer is
         /// marked `trusted` only when its key appears here AND its
-        /// signature verifies.
+        /// signature verifies. Supplying the flag REQUESTS a trust
+        /// policy: a run whose allowlist matched no signer keeps its
+        /// `valid` verdict — the math is unaffected — but exits 1.
         #[arg(long = "allowlist", num_args = 1.., value_delimiter = ' ')]
         allowlist: Vec<String>,
         /// Recipient's X25519 private key for L3 (decrypted-content)
@@ -52,6 +62,24 @@ enum Command {
         /// capsule, the flag is silently ignored.
         #[arg(long = "decryption-key", value_name = "KEY")]
         decryption_key: Option<String>,
+        /// Format versions this deployment ACCEPTS (spec/versioning.md
+        /// "Host policy"). May be repeated, or passed as a
+        /// space-separated list. Reported, never decided: a capsule
+        /// outside the set still verifies — its verdict carries the
+        /// `version_not_accepted_by_policy` qualifier — but because the
+        /// policy was REQUESTED on this command line, failing it exits 1.
+        #[arg(long = "accept-versions", num_args = 1.., value_delimiter = ' ')]
+        accept_versions: Vec<String>,
+        /// Candidate predecessor artifact for lineage linkage
+        /// (spec/lineage.md). Repeatable. Inside the library the pool is
+        /// REPORT-ONLY — it can never flip the capsule's own verdict —
+        /// but supplying it here sets a POLICY: every supplied file must
+        /// match a declared entry and verify under its own era, or the
+        /// run exits 1. Declared entries left unsupplied are reported,
+        /// never a policy failure (an operator may hold one branch of a
+        /// merge).
+        #[arg(long = "predecessor", value_name = "FILE", action = clap::ArgAction::Append)]
+        predecessor: Vec<PathBuf>,
         /// Emit the full VerifyResult as pretty-printed JSON instead of
         /// the plain-text report. Hashes appear in full hex form in JSON
         /// mode.
@@ -67,26 +95,49 @@ fn main() -> ExitCode {
             file,
             allowlist,
             decryption_key,
+            accept_versions,
+            predecessor,
             json,
-        } => run_verify(&file, allowlist, decryption_key, json),
+        } => ExitCode::from(run_verify(
+            &file,
+            allowlist,
+            decryption_key,
+            accept_versions,
+            predecessor,
+            json,
+        )),
     }
 }
 
 /// Read `path` and run [`verify_capsule`] over its contents. Print either
 /// JSON or a plain-text report and return the appropriate exit code.
+/// Returns the raw code rather than an `ExitCode` so the whole path —
+/// flag handling included — is assertable from a unit test.
 fn run_verify(
     path: &Path,
     allowlist: Vec<String>,
     decryption_key: Option<String>,
+    accept_versions: Vec<String>,
+    predecessor: Vec<PathBuf>,
     json: bool,
-) -> ExitCode {
+) -> u8 {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("error: cannot read {}: {}", path.display(), e);
-            return ExitCode::from(2);
+            return 2;
         }
     };
+
+    // Reject a malformed --allowlist before verification runs: a value
+    // that is not a 32-byte Ed25519 public key can never match a signer,
+    // so the run would otherwise report trusted=false with only a note
+    // buried in the result to explain why.
+    if let Err(msg) = validate_allowlist(&allowlist) {
+        eprintln!("{msg}");
+        return 2;
+    }
+    let allowlist_requested = !allowlist.is_empty();
 
     // Resolve --decryption-key (if given) into a 32-byte X25519 private key.
     // Any parse / length failure exits 2 with a clear stderr message;
@@ -97,36 +148,132 @@ fn run_verify(
             Ok(k) => Some(k),
             Err(msg) => {
                 eprintln!("{msg}");
-                return ExitCode::from(2);
+                return 2;
             }
         },
     };
+
+    // Predecessor pool for lineage linkage. An unreadable path is an I/O
+    // error like any other input file, not a custody verdict.
+    let mut predecessors: Vec<Vec<u8>> = Vec::with_capacity(predecessor.len());
+    for p in &predecessor {
+        match std::fs::read(p) {
+            Ok(b) => predecessors.push(b),
+            Err(e) => {
+                eprintln!("error: cannot read --predecessor {}: {}", p.display(), e);
+                return 2;
+            }
+        }
+    }
+    let supplied_predecessors = predecessors.len();
 
     let result = verify_capsule(
         &bytes,
         &VerifyOptions {
             allowlist,
             recipient_private_key,
+            // Absent flag = no policy declared, which is not the same as
+            // an empty accepted set.
+            accept_versions: (!accept_versions.is_empty()).then_some(accept_versions),
+            predecessors,
         },
     );
+
+    let custody_policy_ok = custody_policy_satisfied(supplied_predecessors, &result.lineage);
 
     if json {
         match serde_json::to_string_pretty(&result) {
             Ok(s) => println!("{s}"),
             Err(e) => {
                 eprintln!("error: failed to serialize VerifyResult to JSON: {e}");
-                return ExitCode::from(2);
+                return 2;
             }
         }
     } else {
-        print_plain(path, bytes.len(), &result);
+        print_plain(path, bytes.len(), &result, supplied_predecessors, custody_policy_ok);
     }
 
-    if result.ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
+    verify_exit_code(&result, allowlist_requested, custody_policy_ok)
+}
+
+/// Distinct signers that are BOTH valid and allowlisted, counted across the
+/// outer envelope and — when L3 ran — the inner one.
+///
+/// `VerifyResult::trusted_signer_count` is deliberately outer-only and its
+/// own documentation tells callers wanting a combined total to sum the two;
+/// this is that caller. The library's advisory note and the
+/// `no_trusted_signer` qualifier are both keyed off the OUTER-OR-INNER
+/// fact, so any CLI predicate that reads the outer count alone can disagree
+/// with the very lines it prints: an encrypted capsule opened with
+/// `--decryption-key` whose only allowlisted signer sealed the inner
+/// envelope would print `Result: VALID` with no qualifier and no note, and
+/// still exit 1 — a failed policy with nothing rendered to explain it,
+/// which is the inverse of what the exit rule exists to prevent. Keys are
+/// deduplicated across the two envelopes so one key sealing both is one
+/// trusted signer.
+fn trusted_signer_total(r: &VerifyResult) -> usize {
+    let inner: &[SignerOutcome] = r
+        .inner_envelope
+        .as_ref()
+        .map_or(&[], |e| e.signers.as_slice());
+    let mut keys: Vec<&str> = Vec::new();
+    for s in r.envelope.signers.iter().chain(inner.iter()) {
+        if s.trusted && !keys.contains(&s.public_key.as_str()) {
+            keys.push(s.public_key.as_str());
+        }
     }
+    keys.len()
+}
+
+/// Exit code for a completed verification (spec/results.md "CLI reference
+/// renderer", spec/lineage.md "CLI exit policy"): `0` iff the verdict is
+/// VALID and every policy this invocation REQUESTED is satisfied, `1`
+/// otherwise.
+///
+/// A failed policy is not corruption — the verdict stays `valid` and the
+/// qualifier says why the exit code does not — but a demand the operator
+/// typed on THIS command line and the capsule did not meet must fail the
+/// run, identically in both reference CLIs (the Node CLI computes the
+/// same policies in `cli/src/commands/verify.mjs`). The report-never-
+/// decide rule of spec/trust.md governs the verify RESULT, which still
+/// reports per-signer `valid` and never `trusted`; the requested-policy
+/// layer lives here, in the CLI.
+///
+/// The trust predicate counts DISTINCT keys that are both valid and
+/// allowlisted (so duplicate signer rows cannot satisfy `--allowlist`)
+/// across BOTH envelopes — the same outer-or-inner fact the library's
+/// `no_trusted_signer` qualifier and its advisory note are derived from, so
+/// the exit code can never contradict the rendered report.
+fn verify_exit_code(r: &VerifyResult, allowlist_requested: bool, custody_policy_ok: bool) -> u8 {
+    let version_policy_ok = r.format_version.accepted_by_policy != Some(false);
+    let trust_policy_ok = !allowlist_requested || trusted_signer_total(r) > 0;
+    if r.verdict == Verdict::Valid && version_policy_ok && trust_policy_ok && custody_policy_ok {
+        0
+    } else {
+        1
+    }
+}
+
+/// The requested custody policy (spec/lineage.md "CLI exit policy").
+///
+/// Without `--predecessor` there is no policy: declared lineage never
+/// affects the exit code (`supplied == 0` and the count of verified
+/// entries is only ever compared against it). With at least one
+/// `--predecessor`, every supplied artifact must have landed on a
+/// declared entry AND left it `verified`. Each artifact is assigned to at
+/// most one entry and each entry receives at most one artifact, so both
+/// failure shapes — an unmatched supply (a mistyped path) and a matched
+/// artifact that mismatched, failed its own verification, or could not be
+/// checked — surface as the same shortfall. Declared entries left
+/// unsupplied never fail the policy: an operator may legitimately hold
+/// one branch of a merge.
+fn custody_policy_satisfied(supplied: usize, lineage: &LineageCheck) -> bool {
+    supplied
+        == lineage
+            .entries
+            .iter()
+            .filter(|e| e.status == "verified")
+            .count()
 }
 
 /// Render a `VerifyResult` to stdout in a human-readable form.
@@ -134,7 +281,13 @@ fn run_verify(
 /// Hashes are truncated for readability via [`short_hash`]; the full hex
 /// is preserved in the embedded error messages and in the JSON output
 /// (which is what forensics use).
-fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
+fn print_plain(
+    path: &Path,
+    byte_len: usize,
+    r: &VerifyResult,
+    supplied_predecessors: usize,
+    custody_policy_ok: bool,
+) {
     // Best-effort lookup of the originator pubkey + signed_at out of the
     // first signer; the structured `VerifyResult` doesn't carry the raw
     // manifest, so we surface what's available without re-parsing.
@@ -156,6 +309,13 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         println!("Sealed at:              {}", r.signed_at);
     }
     println!("Level:                  {}", r.level);
+    // The observed profile declaration is a reported fact on every result
+    // (spec/profiles.md obligation 8) — including refusals, where it is
+    // what lets an operator route the capsule to a capable verifier
+    // instead of concluding it is corrupt.
+    if let Some(line) = profile_line(r) {
+        println!("Profile:                {line}");
+    }
     println!();
 
     println!("Checks:");
@@ -169,6 +329,15 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
     let format_msgs = strings_of(errors_for(r, TopErrorCategory::FormatVersion));
     print_check("format / version", format_msgs.is_empty(), format_msgs);
 
+    // Profile-gate refusals get their own line, carrying the cross-lane
+    // refusal wording verbatim. Rendered only when present: a capsule that
+    // declares nothing makes no claim for this line to report on, and the
+    // `Profile:` header above already states what governed verification.
+    let profile_msgs = strings_of(errors_for(r, TopErrorCategory::Profile));
+    if !profile_msgs.is_empty() {
+        print_check("profile", false, profile_msgs);
+    }
+
     // capsule_id and manifest_hash share a single "identity" line,
     // matching the previous CLI behavior.
     let mut id_msgs = strings_of(errors_for(r, TopErrorCategory::CapsuleId));
@@ -181,24 +350,49 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         r.content_index.errors.clone(),
     );
 
-    // Chain check. For encrypted outers the verifier sets `chain.note`
-    // to record that the chain walk was deferred to L3 — render the line
-    // as a PASS with the note as the indented sub-line, NOT as a failure
-    // and NOT as the verifier's chain.errors. For plain capsules,
-    // `chain.note` is None and we render walk + anchor errors normally.
+    // Chain check. `chain.note` records a walk that legitimately did not
+    // run: "deferred to L3 (encrypted outer)", or a zero-event chain whose
+    // anchors were checked for null instead. The note always renders as
+    // the indented sub-line so a not-walked chain is never presented as an
+    // unqualified pass — but it does NOT force the glyph to PASS: anchor
+    // violations (e.g. a claimed anchor over an empty chain) still render
+    // the line as a failure with their messages underneath.
+    let mut chain_msgs: Vec<String> = Vec::new();
     if let Some(note) = r.chain.note.as_deref() {
-        print_check("chain", true, vec![note.to_string()]);
-    } else {
-        let mut chain_msgs = r.chain.errors.clone();
-        chain_msgs.extend(strings_of(errors_for(r, TopErrorCategory::ChainAnchor)));
-        print_check("chain", r.chain.ok && chain_msgs.is_empty(), chain_msgs);
+        chain_msgs.push(note.to_string());
     }
+    chain_msgs.extend(r.chain.errors.clone());
+    let anchor_msgs = strings_of(errors_for(r, TopErrorCategory::ChainAnchor));
+    let chain_ok = r.chain.ok && r.chain.errors.is_empty() && anchor_msgs.is_empty();
+    chain_msgs.extend(anchor_msgs);
+    print_check("chain", chain_ok, chain_msgs);
 
     print_check(
         "envelope_signature",
         r.envelope.ok,
         format_envelope_messages(r),
     );
+
+    // Signer-set binding: PRESENCE BINDS, ABSENCE REPORTS. An unbound set
+    // renders as a PASS with an explicit sub-line so the lowered assurance
+    // is visible; a bound-but-mismatched set renders the commitment errors
+    // (also present under the SignerSet error category). Originator-binding
+    // failures ride the same section — both are signer-set invariants.
+    let mut signer_set_msgs = r.signer_set.errors.clone();
+    signer_set_msgs.extend(strings_of(errors_for(r, TopErrorCategory::OriginatorBinding)));
+    if !r.signer_set.bound && signer_set_msgs.is_empty() {
+        print_check(
+            "signer_set",
+            r.signer_set.ok,
+            vec!["unbound (manifest.signer_commitment absent)".to_string()],
+        );
+    } else {
+        print_check(
+            "signer_set",
+            r.signer_set.ok && signer_set_msgs.is_empty(),
+            signer_set_msgs,
+        );
+    }
 
     // Inner envelope signature check is rendered ONLY when L3 verification
     // reached the inner envelope and `inner_envelope` was populated. For
@@ -226,6 +420,24 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         );
     }
 
+    // Declared-participant grammar violations (manifest.md actor_id
+    // namespaces). Rendered only when present — a capsule with no
+    // participants makes no claim for this line to report on.
+    let actor_id_msgs = strings_of(errors_for(r, TopErrorCategory::ActorId));
+    if !actor_id_msgs.is_empty() {
+        print_check("participants", false, actor_id_msgs);
+    }
+
+    // Lineage: rendered only when the capsule declares predecessors (or a
+    // declaration was refused outright) — absence is no claim, and a line
+    // reporting on nothing would be noise. A failing line means the
+    // CUSTODY CLAIM is not clean; whether the capsule itself verified is
+    // the Result line's job, since supplied-bytes linkage is report-only.
+    let lineage_msgs = strings_of(errors_for(r, TopErrorCategory::Lineage));
+    if r.lineage.declared || !lineage_msgs.is_empty() {
+        print_check("lineage", r.lineage.ok, lineage_msgs);
+    }
+
     let enc_msgs = strings_of(errors_for(r, TopErrorCategory::Encryption));
     print_check("encryption_state", enc_msgs.is_empty(), enc_msgs);
 
@@ -249,6 +461,8 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         render_signers("Inner signers:", &inner.signers);
     }
 
+    render_custody(r, supplied_predecessors, custody_policy_ok);
+
     if !r.notes.is_empty() {
         println!("Notes:");
         for n in &r.notes {
@@ -257,11 +471,236 @@ fn print_plain(path: &Path, byte_len: usize, r: &VerifyResult) {
         println!();
     }
 
-    if r.ok {
-        println!("Result: PASS");
-    } else {
-        println!("Result: FAIL");
+    for line in result_block(r) {
+        println!("{line}");
     }
+}
+
+/// Render the custody block for a declared lineage (spec/lineage.md
+/// "Required human-output language").
+///
+/// Every declared entry is rendered, supplied bytes or not: a custody
+/// claim that quietly disappears when bytes are missing is how a citation
+/// gets read as an endorsement. The block carries the pinned phrases —
+/// "not countersigned" on every declaration, "declared, not verified" on
+/// every unchecked entry, "different sealed state of the declared
+/// predecessor" on an id-matching mismatch — and never presents the
+/// successor as BEING its predecessor.
+fn render_custody(r: &VerifyResult, supplied_predecessors: usize, custody_policy_ok: bool) {
+    if !r.lineage.declared || r.lineage.entries.is_empty() {
+        // A capsule that declares no lineage has no custody block to
+        // render — unless the operator ASKED for one on this command
+        // line, in which case the run exits 1 and the report must say
+        // why. A failed policy with nothing rendered to explain it is the
+        // inverse of what the exit rule exists to prevent.
+        if supplied_predecessors > 0 && !custody_policy_ok {
+            println!("Custody (manifest.predecessors):");
+            println!(
+                "  custody policy (--predecessor): NOT satisfied — {supplied_predecessors} \
+                 artifact(s) supplied, this capsule declares no predecessors; exit 1"
+            );
+            println!();
+        }
+        return;
+    }
+    println!("Custody (manifest.predecessors):");
+    println!(
+        "  lineage is the successor's declaration; the predecessor's originator has \
+         not countersigned it"
+    );
+    // The depth is a property of the whole declaration, not of one entry,
+    // and it names two distinct identities: the successor is never
+    // presented as BEING the predecessor or as its endorsed continuation.
+    if r.lineage.verified_depth >= 1 {
+        let parents: Vec<&str> = r
+            .lineage
+            .entries
+            .iter()
+            .filter(|e| e.hop == 1)
+            .map(|e| e.capsule_id.as_deref().unwrap_or("(none)"))
+            .collect();
+        println!(
+            "  successor of capsule {}; lineage verified to depth {}",
+            parents.join(", "),
+            r.lineage.verified_depth
+        );
+    }
+    for e in &r.lineage.entries {
+        let id = e.capsule_id.as_deref().unwrap_or("(none)");
+        let era = e.format_version.as_deref().unwrap_or("(none)");
+        // Statuses that carry member-precise `errors` render the status
+        // alone: their pinned wording lives in those errors, printed just
+        // below, and saying it twice invites the two copies to drift.
+        let detail = match e.status.as_str() {
+            "verified" => "verified — the supplied artifact is the declared sealed state",
+            "mismatch" => "mismatch",
+            "predecessor_invalid" => "predecessor_invalid",
+            "predecessor_unverifiable" => {
+                "declared, not verified — bytes in hand, rules unavailable to this verifier"
+            }
+            _ => "declared, not verified — no predecessor bytes were supplied",
+        };
+        println!("  - hop {} · era {era} · capsule {id}", e.hop);
+        println!("        {detail}");
+        if let Some(reason) = e.reason.as_deref() {
+            println!("        reason: {reason}");
+        }
+        if !e.identity_checked {
+            println!(
+                "        identity coherence not checked: era {era} is outside this \
+                 verifier's known table"
+            );
+        }
+        for msg in &e.errors {
+            println!("        {msg}");
+        }
+    }
+    if supplied_predecessors > 0 && !custody_policy_ok {
+        println!(
+            "  custody policy (--predecessor): NOT satisfied — {supplied_predecessors} \
+             artifact(s) supplied, {} declared entr(y/ies) verified; exit 1",
+            r.lineage
+                .entries
+                .iter()
+                .filter(|e| e.status == "verified")
+                .count()
+        );
+    }
+    println!();
+}
+
+/// The `Profile:` header line (spec/profiles.md "Reporting"): what
+/// governed this verification, or what was declared and refused. `None`
+/// only when nothing was read at all — a container this verifier could not
+/// open declares nothing to report.
+fn profile_line(r: &VerifyResult) -> Option<String> {
+    let observed = || match (r.profile.observed.as_deref(), r.profile.observed_version.as_deref()) {
+        (Some(id), Some(version)) => format!("{id} {version}"),
+        (Some(id), None) => id.to_string(),
+        _ => "(unreadable declaration)".to_string(),
+    };
+    let line = match r.profile.status.as_str() {
+        "default" if r.profile.declared => format!(
+            "{} (default, declared)",
+            r.profile.effective.as_deref().unwrap_or("v0.6-suite")
+        ),
+        "default" => format!(
+            "{} (default, undeclared)",
+            r.profile.effective.as_deref().unwrap_or("v0.6-suite")
+        ),
+        "supported" => format!("{} (declared)", observed()),
+        "unsupported" => format!("{} (not supported by this verifier)", observed()),
+        "mismatched" => format!(
+            "{} (manifest and envelope declarations disagree)",
+            observed()
+        ),
+        "invalid" => "(declaration malformed)".to_string(),
+        "unevaluated" if r.profile.declared => {
+            format!("{} (not evaluated: the version gate refused first)", observed())
+        }
+        "unevaluated" => "(not evaluated: the version gate refused first)".to_string(),
+        _ if r.profile.declared => format!("{} (unread)", observed()),
+        _ => return None,
+    };
+    Some(line)
+}
+
+/// The verdict-first Result block (spec/results.md "CLI reference
+/// renderer"). A conforming renderer MUST NOT present a valid verdict
+/// without rendering every qualifier beside it — an unsurfaced qualifier
+/// turns an honest weaker claim by the author into a false stronger claim
+/// by the tooling. Returned as lines so the wording is unit-testable.
+fn result_block(r: &VerifyResult) -> Vec<String> {
+    match r.verdict {
+        Verdict::Valid if r.qualifiers.is_empty() => {
+            // The same outer-or-inner fact the trust qualifiers and the
+            // exit predicate read: an L3 run whose trusted signer sealed
+            // only the inner envelope must not be reported as having none.
+            let n = trusted_signer_total(r);
+            vec![format!(
+                "Result: VALID (no qualifiers; {n} distinct trusted signer{})",
+                if n == 1 { "" } else { "s" }
+            )]
+        }
+        Verdict::Valid => {
+            let mut lines = vec!["Result: VALID".to_string(), "  qualifiers:".to_string()];
+            lines.extend(r.qualifiers.iter().map(|q| format!("    - {}", qualifier_line(q, r))));
+            lines
+        }
+        Verdict::Invalid => vec!["Result: INVALID".to_string()],
+        Verdict::Unsupported => {
+            let reason = r.verdict_reason.as_deref().unwrap_or("unsupported");
+            match refusal_message(r) {
+                Some(message) => vec![format!("Result: UNSUPPORTED ({reason}: {message})")],
+                None => vec![format!("Result: UNSUPPORTED ({reason})")],
+            }
+        }
+    }
+}
+
+/// Human rendering for one qualifier. Each carries the minimum substring
+/// spec/results.md requires of any conforming renderer. A qualifier this
+/// renderer does not know — a later spec revision's name, or a vendor
+/// `x-` entry — is surfaced VERBATIM and never silently dropped.
+fn qualifier_line(qualifier: &str, r: &VerifyResult) -> String {
+    match qualifier {
+        "signer_set_unbound" => {
+            "signer set is not bound by the seal (manifest.signer_commitment absent)".to_string()
+        }
+        "actor_set_unbound" => {
+            "actors are not bound to a declared participant set (manifest.participants empty)"
+                .to_string()
+        }
+        "empty_chain_not_walked" => {
+            "empty chain: no events to walk; anchors checked null".to_string()
+        }
+        "encrypted_outer_only" => {
+            "content is encrypted and was not read (L2 outer only; chain deferred to L3)"
+                .to_string()
+        }
+        "version_not_accepted_by_policy" => format!(
+            "format version {} is not in the declared accepted set of this host",
+            r.format_version.observed.as_deref().unwrap_or("(unread)")
+        ),
+        "trust_not_evaluated" => "trust not evaluated: no allowlist supplied".to_string(),
+        "no_trusted_signer" => {
+            "allowlist matched no signer; trusted=false for all signers".to_string()
+        }
+        // The custody claim qualifies the verdict; the per-entry detail
+        // lives in the Custody block above, which is why these lines stay
+        // one sentence long. Each carries spec/results.md's required
+        // substring, and none presents the successor as BEING its
+        // predecessor.
+        "lineage_declared_unverified" => {
+            "lineage declared, not verified — no predecessor bytes established the linkage"
+                .to_string()
+        }
+        "lineage_mismatch" => {
+            "a supplied artifact is a different sealed state of the declared predecessor"
+                .to_string()
+        }
+        "lineage_predecessor_invalid" => {
+            "a supplied predecessor fails its own verification".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+/// The diagnosis behind an `unsupported` verdict: the version- or
+/// profile-gate refusal message, which carries the cross-lane needles
+/// ("newer than this verifier supports", "is not supported by this
+/// verifier"). Both categories are exclusive diagnoses, so the first
+/// message is the whole story.
+fn refusal_message(r: &VerifyResult) -> Option<String> {
+    r.errors
+        .iter()
+        .find(|e| {
+            matches!(
+                e.category,
+                TopErrorCategory::FormatVersion | TopErrorCategory::Profile
+            )
+        })
+        .map(|e| e.message.clone())
 }
 
 /// Print a single `[✓]` or `[✗]` check line, indenting any error
@@ -442,6 +881,31 @@ fn parse_decryption_key(value: &str) -> Result<[u8; 32], String> {
     ))
 }
 
+/// Reject any `--allowlist` entry that cannot be an Ed25519 public key.
+///
+/// An Ed25519 public key is 32 raw bytes — exactly 64 hex characters
+/// (any case; the library normalizes to lowercase, matching the JS
+/// reference). A truncated or mangled entry simply never matches a
+/// signer, and before F44 the non-empty vector also suppressed the
+/// library's "no allowlist provided" advisory, so the operator saw a
+/// PASS with `trusted=false` and no diagnostic. Fail loudly at the
+/// argument boundary instead (exit 2), the same way an unparseable
+/// `--decryption-key` does.
+///
+/// On the first bad entry, returns the formatted error string ready to
+/// print to stderr.
+fn validate_allowlist(allowlist: &[String]) -> Result<(), String> {
+    for entry in allowlist {
+        let well_formed = entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit());
+        if !well_formed {
+            return Err(format!(
+                "error: --allowlist entry must be 64 hex chars (a 32-byte Ed25519 public key); got: {entry}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// True iff `s` is exactly 64 ASCII characters drawn from `0-9a-f`.
 fn is_lower_hex_64(s: &str) -> bool {
     s.len() == 64
@@ -458,4 +922,541 @@ fn decode_hex_32(s: &str) -> Result<[u8; 32], hex::FromHexError> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn vectors_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../spec/vectors")
+    }
+
+    /// Verify a checked-in conformance fixture through the same entry
+    /// point the binary uses.
+    fn verify_vector(relative: &str, options: VerifyOptions) -> VerifyResult {
+        let path = vectors_dir().join(relative);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        verify_capsule(&bytes, &options)
+    }
+
+    /// The public key a collection's fixtures are signed with, read from
+    /// its keys_file — never hardcoded, so a regenerated collection cannot
+    /// leave a test asserting against a stale key.
+    fn fixture_public_key(collection: &str) -> String {
+        let path = vectors_dir().join(collection).join("output/keys.json");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let keys: serde_json::Value = serde_json::from_slice(&bytes).expect("keys.json parses");
+        keys.pointer("/originator/publicKey")
+            .and_then(|k| k.as_str())
+            .expect("keys.json carries originator.publicKey")
+            .to_string()
+    }
+
+    /// spec/results.md: a renderer MUST NOT present a valid verdict
+    /// without rendering every qualifier beside it, each carrying its
+    /// required minimum substring.
+    #[test]
+    fn result_block_renders_every_qualifier_with_its_required_substring() {
+        let r = verify_vector(
+            "chain-binding/output/empty-chain-null-anchors.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        let block = result_block(&r).join("\n");
+        assert!(block.starts_with("Result: VALID\n  qualifiers:"), "{block}");
+        for (qualifier, needle) in [
+            ("empty_chain_not_walked", "no events to walk"),
+            ("trust_not_evaluated", "no allowlist"),
+        ] {
+            assert!(
+                r.qualifiers.iter().any(|q| q == qualifier),
+                "{qualifier} must be derived; got {:?}",
+                r.qualifiers
+            );
+            assert!(block.contains(needle), "{needle:?} missing from {block:?}");
+        }
+    }
+
+    /// An unqualified valid verdict states its trust basis explicitly —
+    /// "VALID" alone would be the report lying by omission about how much
+    /// was actually checked.
+    #[test]
+    fn unqualified_valid_states_its_trust_basis() {
+        let r = verify_vector(
+            "result-vocabulary/output/unqualified-valid.capsule",
+            VerifyOptions {
+                allowlist: vec![fixture_public_key("result-vocabulary")],
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert!(r.qualifiers.is_empty(), "got {:?}", r.qualifiers);
+        assert_eq!(
+            result_block(&r),
+            vec!["Result: VALID (no qualifiers; 1 distinct trusted signer)".to_string()]
+        );
+    }
+
+    /// The same bytes under an allowlist that matches nothing: valid math,
+    /// zero trusted signers — a PASS that must never be silent about why.
+    #[test]
+    fn allowlist_that_matched_nothing_says_so() {
+        let r = verify_vector(
+            "result-vocabulary/output/unqualified-valid.capsule",
+            VerifyOptions {
+                allowlist: vec!["11".repeat(32)],
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert_eq!(r.qualifiers, vec!["no_trusted_signer".to_string()]);
+        assert!(result_block(&r).join("\n").contains("matched no signer"));
+    }
+
+    /// Drive the whole `verify` path — flag handling included — the way
+    /// the binary does, so the exit code is asserted and not merely the
+    /// text printed above it.
+    fn exit_code_for(relative: &str, allowlist: Vec<String>, accept_versions: Vec<String>) -> u8 {
+        run_verify(
+            &vectors_dir().join(relative),
+            allowlist,
+            None,
+            accept_versions,
+            Vec::new(),
+            false,
+        )
+    }
+
+    /// spec/results.md exit contract: `0` = VALID and every REQUESTED
+    /// policy satisfied. Both policies are demands the operator typed on
+    /// this command line, so an unmet one fails the run beside a verdict
+    /// that stays `valid` — the same rule the Node CLI pins in
+    /// `cli/test/smoke.mjs` ("unmatched allowlist exits 1"). Rendering the
+    /// failed policy and then exiting 0 is how the two reference CLIs came
+    /// to disagree about `--allowlist`.
+    #[test]
+    fn requested_policies_decide_the_exit_code() {
+        const CAPSULE: &str = "result-vocabulary/output/unqualified-valid.capsule";
+        let signer = fixture_public_key("result-vocabulary");
+
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![], vec![]),
+            0,
+            "no flag, no demand: an unallowlisted run is qualified, not failed"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![signer], vec![]),
+            0,
+            "the allowlisted signer satisfies the requested trust policy"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec!["11".repeat(32)], vec![]),
+            1,
+            "allowlist matched no signer: the operator's demand went unmet"
+        );
+        assert_eq!(
+            exit_code_for(CAPSULE, vec![], vec!["0.6".to_string()]),
+            1,
+            "the declared accepted set excludes this capsule's version"
+        );
+        assert_eq!(
+            exit_code_for(
+                "profile-declaration/output/unsupported-vendor-profile.capsule",
+                vec![],
+                vec![]
+            ),
+            1,
+            "UNSUPPORTED is a verdict about the capsule-verifier pair, never exit 2"
+        );
+        assert_eq!(
+            exit_code_for("tamper-detection/output/tampered-payload.capsule", vec![], vec![]),
+            1,
+            "INVALID"
+        );
+        assert_eq!(
+            exit_code_for("result-vocabulary/output/no-such-fixture.capsule", vec![], vec![]),
+            2,
+            "an unreadable file is an operator error, not a verdict"
+        );
+    }
+
+    /// spec/profiles.md: the refusal is a limitation of the VERIFIER, and
+    /// both the verdict line and the header line have to say so — the
+    /// operator's remediation is "verify it with an implementation of that
+    /// profile", not "this file is corrupt".
+    #[test]
+    fn unsupported_profile_renders_the_cross_lane_needles() {
+        let r = verify_vector(
+            "profile-declaration/output/unsupported-vendor-profile.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Unsupported);
+        let block = result_block(&r).join("\n");
+        assert!(block.starts_with("Result: UNSUPPORTED (unsupported_profile:"), "{block}");
+        assert!(block.contains("is not supported by this verifier"), "{block}");
+        assert!(
+            block.contains("not corruption of the capsule"),
+            "the remediation must be visible: {block}"
+        );
+        assert_eq!(
+            profile_line(&r).as_deref(),
+            Some("x-test-kms-1 1.0 (not supported by this verifier)")
+        );
+    }
+
+    /// A profile mismatch is a capsule SELF-CONTRADICTION — a defect —
+    /// so it renders INVALID with no verdict_reason, never "unsupported"
+    /// (which would hand the operator a false remediation).
+    #[test]
+    fn profile_mismatch_renders_invalid() {
+        let r = verify_vector(
+            "profile-declaration/output/profile-mismatch-value.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(r.verdict, Verdict::Invalid);
+        assert_eq!(r.verdict_reason, None);
+        assert_eq!(result_block(&r), vec!["Result: INVALID".to_string()]);
+    }
+
+    /// The absence rule made visible: an undeclared capsule reports the
+    /// default profile as what actually governed verification.
+    #[test]
+    fn undeclared_capsule_reports_the_default_profile() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(
+            profile_line(&r).as_deref(),
+            Some("v0.6-suite (default, undeclared)")
+        );
+    }
+
+    /// --accept-versions is a REQUESTED policy: the capsule still verifies
+    /// (the SDK reports, the host decides), and the qualifier says why the
+    /// exit code will not be 0.
+    #[test]
+    fn declared_version_policy_is_reported_as_a_qualifier() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions {
+                accept_versions: Some(vec!["0.6".to_string()]),
+                ..VerifyOptions::default()
+            },
+        );
+        assert!(r.ok, "host policy never decides integrity");
+        assert_eq!(r.verdict, Verdict::Valid);
+        assert!(
+            r.qualifiers
+                .iter()
+                .any(|q| q == "version_not_accepted_by_policy"),
+            "got {:?}",
+            r.qualifiers
+        );
+        assert!(result_block(&r)
+            .join("\n")
+            .contains("not in the declared accepted set"));
+        assert_eq!(r.format_version.accepted_by_policy, Some(false));
+    }
+
+    /// A qualifier this renderer does not know — a later spec revision's
+    /// name, or a vendor `x-` entry — is surfaced VERBATIM. Treating an
+    /// unknown qualifier as ignorable is the one consumer behavior
+    /// spec/results.md forbids outright.
+    #[test]
+    fn unknown_qualifiers_are_surfaced_verbatim() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions::default(),
+        );
+        assert_eq!(qualifier_line("x-acme-policy-stale", &r), "x-acme-policy-stale");
+        assert_eq!(
+            qualifier_line("time_not_anchored", &r),
+            "time_not_anchored",
+            "a reserved name this revision does not emit still renders verbatim"
+        );
+    }
+
+    /// Every one of the TEN spec-defined qualifiers renders with the
+    /// minimum substring spec/results.md requires — the three lineage
+    /// names included, which this lane emits from the `predecessors`
+    /// machinery. A qualifier rendered as its bare enum string would put a
+    /// custody failure in front of a human as jargon.
+    #[test]
+    fn every_spec_qualifier_renders_its_required_substring() {
+        let r = verify_vector(
+            "tamper-detection/output/clean.capsule",
+            VerifyOptions::default(),
+        );
+        for (qualifier, needle) in [
+            ("signer_set_unbound", "signer set is not bound by the seal"),
+            (
+                "actor_set_unbound",
+                "actors are not bound to a declared participant set",
+            ),
+            ("empty_chain_not_walked", "no events to walk"),
+            ("encrypted_outer_only", "content is encrypted and was not read"),
+            (
+                "version_not_accepted_by_policy",
+                "not in the declared accepted set",
+            ),
+            ("trust_not_evaluated", "no allowlist"),
+            ("no_trusted_signer", "matched no signer"),
+            ("lineage_declared_unverified", "declared, not verified"),
+            (
+                "lineage_mismatch",
+                "different sealed state of the declared predecessor",
+            ),
+            ("lineage_predecessor_invalid", "fails its own verification"),
+        ] {
+            let line = qualifier_line(qualifier, &r);
+            assert!(
+                line.contains(needle),
+                "{qualifier} must render {needle:?}; got {line:?}"
+            );
+        }
+        assert_eq!(
+            capsule_verify::QUALIFIERS.len(),
+            10,
+            "the emitted vocabulary is the seven base names plus the three lineage names"
+        );
+    }
+
+    /// The originator key shape from the fixture registries: 64 hex chars.
+    #[test]
+    fn validate_allowlist_accepts_64_hex() {
+        let good =
+            vec!["cc76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc".to_string()];
+        assert!(validate_allowlist(&good).is_ok());
+        assert!(validate_allowlist(&[]).is_ok(), "no allowlist is not an error");
+        // The library accepts any-case hex (JS toKeyHex parity), so the
+        // CLI boundary must not reject what the library would honour.
+        let upper =
+            vec!["CC76CE271ED61E515B598D73290A2B3905F40F280FA1548ED7F0513BDBE0C2BC".to_string()];
+        assert!(validate_allowlist(&upper).is_ok());
+    }
+
+    /// A truncated paste is the exact failure this guard exists for: it
+    /// can never match a signer, yet before F44 it also suppressed the
+    /// "no allowlist provided" advisory — PASS, trusted=false, silence.
+    #[test]
+    fn validate_allowlist_rejects_truncated_entry() {
+        let truncated = vec!["cc76ce271ed61e515b598d73290a2b39".to_string()];
+        let err = validate_allowlist(&truncated).expect_err("truncated key must be rejected");
+        assert!(err.contains("--allowlist"), "message must name the flag; got: {err}");
+        assert!(
+            err.contains("64 hex"),
+            "message must state the expected shape; got: {err}"
+        );
+        assert!(
+            err.contains("cc76ce271ed61e515b598d73290a2b39"),
+            "message must name the offending entry; got: {err}"
+        );
+    }
+
+    /// Non-hex garbage (a path, a 0x prefix, base64) is rejected outright.
+    #[test]
+    fn validate_allowlist_rejects_non_hex() {
+        let non_hex =
+            vec!["zz76ce271ed61e515b598d73290a2b3905f40f280fa1548ed7f0513bdbe0c2bc".to_string()];
+        assert!(validate_allowlist(&non_hex).is_err());
+        assert!(validate_allowlist(&["./keys.json".to_string()]).is_err());
+    }
+
+    /// A lineage conformance fixture, by file name.
+    fn lineage_fixture(name: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../spec/vectors/lineage/output")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    fn verify_with_pool(capsule: &str, pool: &[&str]) -> VerifyResult {
+        verify_capsule(
+            &lineage_fixture(capsule),
+            &VerifyOptions {
+                allowlist: Vec::new(),
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: pool.iter().map(|p| lineage_fixture(p)).collect(),
+            },
+        )
+    }
+
+    /// The CLI is the policy layer: supplying `--predecessor` asks for the
+    /// custody claim to hold, exactly as `--allowlist` asks for trust to
+    /// hold. The SDK result stays report-only underneath — every capsule
+    /// here verifies — so the policy is the only thing that moves.
+    #[test]
+    fn custody_policy_follows_the_allowlist_pattern() {
+        // No flag, no policy: a declared-but-unchecked lineage exits 0.
+        let declared_only = verify_with_pool("bob.capsule", &[]);
+        assert!(declared_only.ok && declared_only.lineage.declared);
+        assert!(custody_policy_satisfied(0, &declared_only.lineage));
+
+        // Supplied and verified: satisfied.
+        let verified = verify_with_pool("bob.capsule", &["alice.capsule"]);
+        assert!(custody_policy_satisfied(1, &verified.lineage));
+
+        // A different genuine seal of the same line: the capsule still
+        // verifies (linkage is report-only) but the requested check did
+        // not hold, so `verify s --predecessor p && publish` must not
+        // publish.
+        let mismatched = verify_with_pool("bob.capsule", &["alice-later-seal.capsule"]);
+        assert!(mismatched.ok, "linkage must never flip the capsule's verdict");
+        assert!(!custody_policy_satisfied(1, &mismatched.lineage));
+
+        // A mistyped path — an artifact matching no declared entry — must
+        // not exit 0 either.
+        let unmatched = verify_with_pool("bob.capsule", &["carol.capsule"]);
+        assert!(unmatched.ok);
+        assert!(!custody_policy_satisfied(1, &unmatched.lineage));
+
+        // A merge with one branch in hand: the unsupplied entry is
+        // reported, never a policy failure.
+        let merge = verify_with_pool("merge.capsule", &["alice.capsule"]);
+        assert!(custody_policy_satisfied(1, &merge.lineage));
+        assert!(merge
+            .lineage
+            .entries
+            .iter()
+            .any(|e| e.status == "unverified"));
+    }
+
+    /// The custody policy reaches the EXIT CODE through the same
+    /// `run_verify` path the binary uses, and it composes with the other
+    /// two requested policies rather than replacing them: a capsule that
+    /// verifies, whose lineage is declared but whose supplied artifact is
+    /// the wrong sealed state, exits 1 while its verdict stays VALID.
+    #[test]
+    fn custody_policy_decides_the_exit_code() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../spec/vectors/lineage/output");
+        let successor = dir.join("bob.capsule");
+        let exit = |pool: Vec<PathBuf>| {
+            run_verify(&successor, Vec::new(), None, Vec::new(), pool, false)
+        };
+
+        assert_eq!(exit(Vec::new()), 0, "no flag, no demand");
+        assert_eq!(exit(vec![dir.join("alice.capsule")]), 0, "supplied and verified");
+        assert_eq!(
+            exit(vec![dir.join("alice-later-seal.capsule")]),
+            1,
+            "a different sealed state of the declared predecessor is a failed demand"
+        );
+        assert_eq!(
+            exit(vec![dir.join("no-such-file.capsule")]),
+            2,
+            "an unreadable --predecessor is an operator error, not a custody verdict"
+        );
+
+        let mismatched = verify_with_pool("bob.capsule", &["alice-later-seal.capsule"]);
+        assert_eq!(
+            mismatched.verdict,
+            Verdict::Valid,
+            "the exit code carries the policy; the verdict still describes the capsule"
+        );
+        assert!(
+            result_block(&mismatched)
+                .join("\n")
+                .contains("different sealed state of the declared predecessor"),
+            "the failed policy must be rendered beside the verdict; got {:?}",
+            result_block(&mismatched)
+        );
+    }
+
+    /// Merge-contract defect 2 — the exit predicate and the rendered
+    /// report must read the SAME trust fact.
+    ///
+    /// `VerifyResult::trusted_signer_count` is outer-only, while the
+    /// library's `no_trusted_signer` qualifier and its advisory note are
+    /// keyed off outer-OR-inner. An encrypted capsule opened with
+    /// `--decryption-key`, whose only allowlisted signer sealed the INNER
+    /// envelope, therefore printed `Result: VALID` with no qualifier and no
+    /// note — and exited 1 anyway: a failed policy with nothing rendered to
+    /// explain it, the inverse of what the exit rule exists to prevent.
+    #[test]
+    fn exit_code_reads_the_same_trust_fact_as_the_qualifier() {
+        // A real L3 result supplies the structure; the allowlisted key is
+        // then moved to the inner envelope alone, which is the shape a
+        // courier-sealed outer produces.
+        let keys = {
+            let path = vectors_dir().join("result-vocabulary/output/keys.json");
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+            serde_json::from_slice::<serde_json::Value>(&bytes).expect("keys.json parses")
+        };
+        let recipient: [u8; 32] = hex::decode(
+            keys.pointer("/recipient/privateKey")
+                .and_then(|v| v.as_str())
+                .expect("recipient privateKey"),
+        )
+        .expect("hex")
+        .try_into()
+        .expect("32 bytes");
+        let signer = keys
+            .pointer("/encrypted_originator/publicKey")
+            .and_then(|v| v.as_str())
+            .expect("encrypted_originator publicKey")
+            .to_string();
+
+        let mut r = verify_vector(
+            "result-vocabulary/output/encrypted-outer.capsule",
+            VerifyOptions {
+                allowlist: vec![signer],
+                recipient_private_key: Some(recipient),
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(r.verdict, Verdict::Valid, "errors: {:?}", r.errors);
+        assert_eq!(r.level, "L3", "the fixture must reach L3");
+        assert!(
+            r.inner_envelope
+                .as_ref()
+                .is_some_and(|e| e.signers.iter().any(|s| s.trusted)),
+            "the inner envelope must carry the trusted signer"
+        );
+
+        // Inner-only trust: the outer seal is by a key nobody allowlisted.
+        for s in &mut r.envelope.signers {
+            s.trusted = false;
+        }
+        r.trusted_signer_count = 0;
+
+        assert!(
+            !r.qualifiers.iter().any(|q| q == "no_trusted_signer"),
+            "the library reports trust as satisfied; got {:?}",
+            r.qualifiers
+        );
+        assert_eq!(
+            trusted_signer_total(&r),
+            1,
+            "one distinct trusted key, on the inner envelope"
+        );
+        assert_eq!(
+            verify_exit_code(&r, true, true),
+            0,
+            "the exit code must not contradict a report that shows the policy satisfied"
+        );
+        assert!(
+            result_block(&r)
+                .join("\n")
+                .contains("1 distinct trusted signer"),
+            "the rendered trust basis must count the same signer the exit code did; got {:?}",
+            result_block(&r)
+        );
+
+        // And the inverse still holds: no trusted signer anywhere, with an
+        // allowlist requested, is the failed policy the exit rule exists
+        // for — and the qualifier renders it.
+        let none = verify_vector(
+            "result-vocabulary/output/unqualified-valid.capsule",
+            VerifyOptions {
+                allowlist: vec!["11".repeat(32)],
+                ..VerifyOptions::default()
+            },
+        );
+        assert_eq!(verify_exit_code(&none, true, true), 1);
+        assert!(result_block(&none).join("\n").contains("matched no signer"));
+    }
 }

@@ -5,18 +5,28 @@
 //! Behavior summary (in evaluation order):
 //!   1. parse the ZIP
 //!   2. extract `manifest.json` and `provenance/envelope.json`
-//!   3. format / version checks
+//!   3. format / version gate, then the profile gate (spec/profiles.md
+//!      obligation 1: version first, profile second, nothing else until
+//!      both pass — and on a refusal at EITHER, refusal exclusivity holds:
+//!      the refusal diagnosis is the only error the result carries and
+//!      every other channel sits at its fail-closed default)
 //!   4. cipher whitelist check
 //!   5. capsule_id derivation
 //!   6. manifest_hash check
 //!   7. content_index check
-//!   8. encryption-shape check (plain vs encrypted-outer)
+//!   8. encryption-shape check (plain vs encrypted-outer), manifest
+//!      encryption agreement, and the lineage declaration: fail-closed
+//!      standalone checks on a present `manifest.predecessors` plus the
+//!      report-only linkage walk over any supplied predecessor artifacts
 //!   9. chain walk + first/entry hash checks (skipped on encrypted outers
 //!      — chain commits are L3, not L2)
 //!  10. envelope signature verification
 //!  11. trusted_signer_count
 //!  12. advisory note when no allowlist
 //!  13. final ok = no top-level errors AND chain.ok AND content_index.ok AND envelope.ok
+//!  14. the normalized verdict surface (spec/results.md): `verdict`,
+//!      `verdict_reason`, and the ten-name `qualifiers` array — derived
+//!      last, from the facts above, never read from the capsule
 //!
 //! Encrypted vs plain capsules: at L2 we verify the *outer* envelope only.
 //! For an encrypted capsule that means: cipher is on the whitelist,
@@ -34,24 +44,30 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chain::{first_and_entry_hash, verify_chain};
+use crate::chain::{first_and_entry_hash, is_valid_event_kind, verify_chain, EVENT_KINDS};
 use crate::crypto::{hex_to_bytes, sha256_hex};
 #[cfg(test)]
 use crate::decrypt::decrypt_inner_zip;
 use crate::envelope::verify_signatures;
 use crate::l3::l3_attempt_decrypt_and_verify;
+use crate::lineage::LineageCheck;
 use crate::manifest::{
     build_content_index, compute_capsule_id, content_index_exclusions, manifest_hash,
 };
-use crate::schemas::{parse_chain_jsonl, ChainEvent, Envelope, Manifest};
+use crate::profiles::{
+    classify_profile, profile_mismatch_message, unsupported_profile_message, ProfileClassification,
+    ProfileStatus,
+};
+use crate::schemas::{parse_chain_jsonl, Envelope, Manifest, ParsedEvent};
+use crate::versions::{classify_version, suite_for, unsupported_version_message, VersionStatus};
 use crate::zip_reader::unpack_zip;
 
 /// Ciphers this verifier accepts in `envelope.cipher`.
 ///
 /// `"none"` is the plain capsule case; `"ChaCha20-Poly1305"` is the only AEAD
-/// scheme defined for v0.6 encrypted capsules. Any other value (including
+/// scheme defined for v0.6/v0.7 encrypted capsules. Any other value (including
 /// reserved-but-not-implemented names like `"AES-256-GCM"`) is a hard
-/// rejection — adding a cipher is a v0.7 schema change. Matches the
+/// rejection — adding a cipher is a future schema change. Matches the
 /// `envelope.md` cipher enum.
 const SUPPORTED_CIPHERS: &[&str] = &["none", "ChaCha20-Poly1305"];
 
@@ -62,14 +78,38 @@ const SUPPORTED_CIPHERS: &[&str] = &["none", "ChaCha20-Poly1305"];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum TopErrorCategory {
-    /// `manifest.format.version` or `envelope.version` not "0.6"
+    /// `manifest.format.version` or `envelope.version` unknown, invalid,
+    /// or mismatched (spec/versioning.md)
     FormatVersion,
+    /// the declared verification profile is unsupported, contradicted
+    /// between the two documents, or malformed (spec/profiles.md). Kept
+    /// distinct from `FormatVersion` and `Malformed` because the three
+    /// carry three different remediations: "verify it with an
+    /// implementation of that profile", "this verifier is too old", and
+    /// "this capsule is defective".
+    Profile,
     /// `manifest.id` / `envelope.capsule_id` mismatch with derived value
     CapsuleId,
     /// `manifest_hash` (envelope vs recomputed)
     ManifestHash,
     /// chain cross-checks vs envelope (first_event_hash / entry_hash)
     ChainAnchor,
+    /// signer-set binding failures: a present `manifest.signer_commitment`
+    /// that is malformed or does not equal the normalized envelope signer
+    /// set, or duplicate `(role, public_key)` signer entries
+    SignerSet,
+    /// `manifest.originator.public_key` has no valid envelope signature
+    /// with role "originator"
+    OriginatorBinding,
+    /// a declared `manifest.participants[].actor_id` outside the closed
+    /// namespace grammar (`human:`/`ai:`/`system:`/`capsule:` with a
+    /// non-empty id — manifest.md field rules, finding A06)
+    ActorId,
+    /// a PRESENT `manifest.predecessors` declaration no reader can
+    /// interpret (spec/lineage.md standalone checks 1–3). Linkage
+    /// against supplied predecessor bytes is REPORT-ONLY and never
+    /// reaches this category — it lives in `lineage.entries[].errors`.
+    Lineage,
     /// cipher / encrypted-blob inconsistencies: unsupported cipher,
     /// `envelope.encrypted_blob_hash` mismatch with the recomputed
     /// `sha256(content.enc)`, or encrypted blob present with cipher='none'
@@ -149,10 +189,18 @@ impl fmt::Display for TopError {
 /// Caller-supplied verification configuration.
 #[derive(Debug, Default, Clone)]
 pub struct VerifyOptions {
-    /// Trusted Ed25519 public keys (lowercase hex, 64 chars). A signer is
+    /// Trusted Ed25519 public keys (64 hex chars; any case, normalized to
+    /// lowercase — matching the JS reference's `toKeyHex`). A signer is
     /// marked `trusted` only when its key appears here AND its signature
-    /// verifies. An empty allowlist surfaces an advisory note in
-    /// [`VerifyResult::notes`].
+    /// verifies.
+    ///
+    /// Entries are validated: anything that is not exactly 64 hex chars
+    /// cannot be a 32-byte Ed25519 key, so it is dropped and reported
+    /// per-entry in [`VerifyResult::notes`]. The "no allowlist provided"
+    /// advisory is keyed off the *well-formed* entries, so an allowlist
+    /// made up entirely of malformed values still raises it; and an
+    /// allowlist that matched no signer at all raises its own advisory —
+    /// a PASS with `trusted=false` is never silent about why.
     pub allowlist: Vec<String>,
     /// Recipient's X25519 32-byte secret. When `Some` and the capsule is
     /// encrypted, the verifier will decrypt `content.enc`, parse the inner
@@ -161,6 +209,21 @@ pub struct VerifyOptions {
     /// exactly. When `Some` but the capsule is plain, the flag is silently
     /// ignored — there's nothing to decrypt.
     pub recipient_private_key: Option<[u8; 32]>,
+    /// Host policy (spec/versioning.md): the format versions this
+    /// deployment ACCEPTS. `Some(list)` makes the verifier report
+    /// `format_version.accepted_by_policy`; it never fails an
+    /// otherwise-valid known-version capsule — exactly the allowlist
+    /// shape: the SDK reports, the host decides. `None` reports no
+    /// policy verdict.
+    pub accept_versions: Option<Vec<String>>,
+    /// Candidate predecessor artifacts (raw capsule bytes) for lineage
+    /// linkage (spec/lineage.md). REPORT-ONLY: supplying them can
+    /// falsify `lineage.ok`, never the capsule's own `ok` — a host's
+    /// file handling must not forge a forgery verdict against an honest
+    /// successor. Each artifact is verified under ITS declared version's
+    /// rules with these same host options; the pool itself belongs to
+    /// the walk and is never passed down.
+    pub predecessors: Vec<Vec<u8>>,
 }
 
 /// Top-level verifier result.
@@ -184,6 +247,33 @@ pub struct VerifyOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyResult {
     pub ok: bool,
+    /// The normalized verdict (spec/results.md), DERIVED from the facts
+    /// below — never read from the capsule. `ok == (verdict ==
+    /// Verdict::Valid)` is an invariant: `Unsupported` partitions today's
+    /// failures into "a limitation of this verifier, not a defect of the
+    /// capsule" (unknown version, unsupported profile), it is not a third
+    /// truth value. `#[serde(default)]` keeps pre-v0.7.1 result JSON
+    /// deserializable, defaulting to the fail-closed `Invalid`.
+    #[serde(default)]
+    pub verdict: Verdict,
+    /// The machine-readable cause of an `Unsupported` verdict; `None` for
+    /// every other verdict (an invalid capsule's causes live in `errors`,
+    /// which has its own vocabulary). Values: `unsupported_version_newer`,
+    /// `unsupported_version_older`, `unsupported_profile`,
+    /// `unsupported_capability`.
+    #[serde(default)]
+    pub verdict_reason: Option<String>,
+    /// The weaker-claim facts a renderer must not hide beside a valid
+    /// verdict (spec/results.md), in the spec-defined order of
+    /// [`QUALIFIERS`] — the seven base names plus the three lineage names
+    /// of spec/lineage.md ("Reporting"), each meaning "valid verdict,
+    /// custody claim not clean". Non-empty only when `verdict ==
+    /// Verdict::Valid`. Payload-carrying facts never ride this array;
+    /// they live in their own channel (`lineage`, `profile`,
+    /// `format_version`). `Vec<String>` rather than an enum so
+    /// `x-<vendor>-` extension entries pass through unmangled.
+    #[serde(default)]
+    pub qualifiers: Vec<String>,
     pub level: String,
     pub capsule_id: String,
     pub signed_at: String,
@@ -191,6 +281,69 @@ pub struct VerifyResult {
     pub chain: ChainCheck,
     pub content_index: ContentIndexCheck,
     pub envelope: EnvelopeCheck,
+    /// Signer-set binding (manifest.signer_commitment): PRESENCE BINDS,
+    /// ABSENCE REPORTS. `bound=true` means the manifest commits to the
+    /// exact signer set and `ok` reflects the match (fail-closed);
+    /// `bound=false` means the capsule does not assert signer-set
+    /// integrity — verification can still succeed, at a visibly lower
+    /// assurance. `#[serde(default)]` keeps pre-signer-set JSON
+    /// deserializable (defaulting to unbound/not-ok, the fail-closed
+    /// reading).
+    #[serde(default)]
+    pub signer_set: SignerSetCheck,
+    /// Actor-set binding (chain.md step 6): the same claim shape as
+    /// `signer_set`. `bound=true` means `manifest.participants[]` is
+    /// non-empty and every chain event actor must be a member or the
+    /// literal `system:host` — failures surface in `chain.errors`,
+    /// fail-closed. `bound=false` means the manifest declares no
+    /// participants, i.e. no claim about who acted: verification can
+    /// still succeed at a visibly lower assurance, reported in `notes`.
+    /// Safe to condition on because `participants` is covered by
+    /// `manifest_hash` inside the signed payload — an attacker cannot
+    /// empty the list without breaking every envelope signature.
+    #[serde(default)]
+    pub actor_set: ActorSetCheck,
+    /// Version-compatibility facts (spec/versioning.md): the observed
+    /// declared version, whether this verifier supports that era, the
+    /// era's algorithm suite, and the host's declared-acceptance
+    /// verdict. `#[serde(default)]` keeps pre-versioning JSON
+    /// deserializable (defaulting to the fail-closed "unread" shape).
+    #[serde(default)]
+    pub format_version: FormatVersionCheck,
+    /// Profile-declaration facts (spec/profiles.md): the observed
+    /// declaration, the profile actually applied (the absence rule made
+    /// machine-visible), and how the dyad classified against this
+    /// verifier's table. Present on EVERY result, including refusals —
+    /// the observed declaration is what lets an auditor route a capsule to
+    /// a capable verifier instead of declaring it corrupt.
+    /// `#[serde(default)]` keeps pre-v0.7.1 JSON deserializable
+    /// (defaulting to the fail-closed "unread" shape).
+    #[serde(default)]
+    pub profile: ProfileCheck,
+    /// Lineage facts (spec/lineage.md): the successor's declared
+    /// predecessors and what this invocation could establish about them.
+    /// Standalone malformation fails the capsule; supplied-bytes linkage
+    /// is REPORT-ONLY and can only falsify `lineage.ok`.
+    /// `#[serde(default)]` keeps pre-lineage JSON deserializable
+    /// (defaulting to the not-evaluated shape — the `signer_set` /
+    /// `actor_set` pattern).
+    #[serde(default)]
+    pub lineage: LineageCheck,
+    /// Derived skill-trust classification (spec/trust.md "Skill trust").
+    /// The tier is host-relative — it depends on the allowlist THIS
+    /// verification ran with — so it derives from the verify result and
+    /// is never read from the capsule: v0.6 has no `manifest.skill_trust`
+    /// member, and a capsule carrying one (earlier drafts, hostile
+    /// authors) contributes an inert unknown member to the hash and
+    /// nothing here. The classification is capsule-level in reality (one
+    /// envelope signature covers the whole content index); per-id
+    /// variation only reflects whether that skill ships an indexed
+    /// skill.json. Computed over the OUTER files: an encrypted outer has
+    /// no skills, so it reports an empty map there. `#[serde(default)]`
+    /// keeps pre-field JSON deserializable (defaulting to the
+    /// fail-closed unsigned shape).
+    #[serde(default)]
+    pub skill_trust: SkillTrustCheck,
     /// Inner envelope signature check, populated when L3 verification ran
     /// and the inner envelope was successfully parsed. None for plain
     /// capsules, L2-only paths (no recipient key), or when L3 failed
@@ -236,6 +389,292 @@ pub struct ContentIndexCheck {
     pub errors: Vec<String>,
 }
 
+/// Signer-set binding results (see [`VerifyResult::signer_set`]). The
+/// derived `Default` is `bound: false, ok: false, errors: []` — the
+/// fail-closed shape used by every early-return path; the happy paths set
+/// the fields explicitly.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SignerSetCheck {
+    pub bound: bool,
+    pub ok: bool,
+    pub errors: Vec<String>,
+}
+
+/// Actor-set binding results (see [`VerifyResult::actor_set`]). The
+/// derived `Default` is `bound: false` — the honest shape for every
+/// early-return path (the capsule never reached the check).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ActorSetCheck {
+    pub bound: bool,
+}
+
+/// The version-compatibility fact channel (spec/versioning.md). The
+/// derived `Default` is the fail-closed "unread" shape (observed: None,
+/// supported: false) used by every early-return path before the
+/// manifest's declaration could be read; `status` defaults to "unread"
+/// via `Default` impl below.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatVersionCheck {
+    /// The version the capsule DECLARES (`manifest.format.version`),
+    /// reported even when unsupported — the observed fact is what lets
+    /// an auditor tell "this verifier is too old" from "corrupt".
+    pub observed: Option<String>,
+    /// Whether this verifier knows the declared era.
+    pub supported: bool,
+    /// Closed vocabulary: "known" | "unknown_newer" | "unknown_older" |
+    /// "invalid" | "unread".
+    pub status: String,
+    /// The era's algorithm-suite identifier ("v0.6"): Ed25519 / SHA-256
+    /// / JCS RFC 8785 / X25519 + HKDF-SHA-256 + ChaCha20-Poly1305.
+    /// `None` when the era is unsupported.
+    pub suite: Option<String>,
+    /// `Some(verdict)` only when the host declared `accept_versions`;
+    /// reported, never enforced.
+    pub accepted_by_policy: Option<bool>,
+}
+
+impl Default for FormatVersionCheck {
+    fn default() -> Self {
+        FormatVersionCheck {
+            observed: None,
+            supported: false,
+            status: "unread".to_string(),
+            suite: None,
+            accepted_by_policy: None,
+        }
+    }
+}
+
+/// The profile-declaration fact channel (spec/profiles.md "Reporting: the
+/// profile channel"), parallel to [`FormatVersionCheck`]. The derived
+/// `Default` is the fail-closed "unread" shape used by every early-return
+/// path that never reached (or could not read) the declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileCheck {
+    /// The declared profile id as READ — reported even on refusal and even
+    /// when the declaration is invalid. On a dyad mismatch these are the
+    /// manifest's values, with both normalized pairs quoted in the error.
+    pub observed: Option<String>,
+    pub observed_version: Option<String>,
+    /// Whether a declaration was present in either document.
+    pub declared: bool,
+    /// The profile whose rules were actually applied — `"v0.6-suite"` /
+    /// `"1.0"` on every successful default path (the absence rule made
+    /// machine-visible: the result SAYS what absence meant). `None`
+    /// whenever no profile's rules were applied.
+    pub effective: Option<String>,
+    pub effective_version: Option<String>,
+    /// True iff `status` is `"default"` or `"supported"`.
+    pub supported: bool,
+    /// Closed vocabulary: "default" | "supported" | "unsupported" |
+    /// "mismatched" | "invalid" | "unevaluated" | "unread".
+    pub status: String,
+    /// Host profile policy, reported never decided. Always `None` in this
+    /// lane: the verifier exposes no accepted-profile option (the channel
+    /// member exists so a reader that grows one cannot invent a divergent
+    /// name — spec/profiles.md obligation 10 is a MAY).
+    pub accepted_by_policy: Option<bool>,
+}
+
+impl Default for ProfileCheck {
+    fn default() -> Self {
+        ProfileCheck {
+            observed: None,
+            observed_version: None,
+            declared: false,
+            effective: None,
+            effective_version: None,
+            supported: false,
+            status: ProfileStatus::Unread.as_str().to_string(),
+            accepted_by_policy: None,
+        }
+    }
+}
+
+impl ProfileCheck {
+    /// The channel for a CLASSIFIED dyad: status, effective profile, and
+    /// the observed declaration all as the classifier found them.
+    fn classified(cls: &ProfileClassification) -> Self {
+        ProfileCheck {
+            observed: cls.observed.clone(),
+            observed_version: cls.observed_version.clone(),
+            declared: cls.declared,
+            effective: cls.effective.clone(),
+            effective_version: cls.effective_version.clone(),
+            supported: cls.supported,
+            status: cls.status.as_str().to_string(),
+            accepted_by_policy: None,
+        }
+    }
+
+    /// The channel for a capsule refused BEFORE the gate could classify
+    /// it: the observed declaration is still a reported fact, but no
+    /// profile's rules were applied and the classification is not this
+    /// result's to make. `status` is `unevaluated` when the version gate
+    /// refused first (profile semantics are era-scoped), `unread`
+    /// otherwise.
+    fn observed_only(cls: &ProfileClassification, status: ProfileStatus) -> Self {
+        ProfileCheck {
+            observed: cls.observed.clone(),
+            observed_version: cls.observed_version.clone(),
+            declared: cls.declared,
+            status: status.as_str().to_string(),
+            ..ProfileCheck::default()
+        }
+    }
+}
+
+/// The normalized verdict (spec/results.md). Serializes as the wire
+/// vocabulary `"valid" | "invalid" | "unsupported"`; the fail-closed
+/// `Default` is `Invalid`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    /// Every check passed: `ok == true`.
+    Valid,
+    /// The capsule is defective — tamper, malformation, canonicalization
+    /// refusal, a self-contradictory profile declaration.
+    #[default]
+    Invalid,
+    /// The capsule declares something this verifier cannot understand (an
+    /// unknown era, a profile outside its table) or exercises a capability
+    /// this lane does not implement. Not corruption: a different verifier
+    /// may verify it.
+    Unsupported,
+}
+
+impl Verdict {
+    /// The machine-readable verdict token.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Verdict::Valid => "valid",
+            Verdict::Invalid => "invalid",
+            Verdict::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// The closed qualifier vocabulary this lane emits, in the spec-defined
+/// emission order (spec/results.md): the seven base names, then the three
+/// lineage names that the `predecessors` machinery contributes
+/// (spec/lineage.md "Reporting"). A consumer must surface any qualifier it
+/// does not know verbatim and never treat it as satisfied.
+pub const QUALIFIERS: &[&str] = &[
+    "signer_set_unbound",
+    "actor_set_unbound",
+    "empty_chain_not_walked",
+    "encrypted_outer_only",
+    "version_not_accepted_by_policy",
+    "trust_not_evaluated",
+    "no_trusted_signer",
+    "lineage_declared_unverified",
+    "lineage_mismatch",
+    "lineage_predecessor_invalid",
+];
+
+/// The host-relative facts behind the two mutually exclusive trust
+/// qualifiers (spec/results.md rows 6-7): whether the caller supplied a
+/// well-formed allowlist at all, and whether any key on it matched a valid
+/// signature in THIS verification.
+#[derive(Debug, Clone, Copy)]
+struct TrustFacts {
+    allowlist_empty: bool,
+    any_trusted: bool,
+}
+
+/// Derive the normalized verdict surface onto `result` (spec/results.md):
+/// `verdict`, `verdict_reason`, `qualifiers`. Report-only — every member
+/// restates facts the result already carries, so `ok == (verdict ==
+/// Verdict::Valid)` holds by construction. Mirrors `deriveVerdict` in
+/// `sdk-js/src/verifier.js`.
+///
+/// `version_refusal` carries the refusal class of the ENVELOPE-side
+/// version gate: the manifest's observed version can be KNOWN while
+/// `envelope.version` is not, so the `format_version` channel — which
+/// reports the manifest's declaration — cannot show that refusal alone.
+fn derive_verdict(
+    result: &mut VerifyResult,
+    version_refusal: Option<VersionStatus>,
+    trust: TrustFacts,
+) {
+    let version_status = version_refusal
+        .map(|s| s.as_str().to_string())
+        .unwrap_or_else(|| result.format_version.status.clone());
+    let (verdict, reason) = if version_status == VersionStatus::UnknownNewer.as_str() {
+        // Refused because the verifier cannot understand what the capsule
+        // DECLARES — a different verifier may verify it. Not corruption.
+        (Verdict::Unsupported, Some("unsupported_version_newer"))
+    } else if version_status == VersionStatus::UnknownOlder.as_str() {
+        (Verdict::Unsupported, Some("unsupported_version_older"))
+    } else if result.profile.status == ProfileStatus::Unsupported.as_str() {
+        (Verdict::Unsupported, Some("unsupported_profile"))
+    } else if result.ok {
+        (Verdict::Valid, None)
+    } else {
+        // Tamper, malformation, canonicalization refusal, and a
+        // self-contradictory profile declaration: defects of the capsule.
+        (Verdict::Invalid, None)
+    };
+
+    let mut qualifiers: Vec<String> = Vec::new();
+    if verdict == Verdict::Valid {
+        // Spec-defined emission order ([`QUALIFIERS`]). Each entry is a
+        // pure restatement of one already-reported fact.
+        if !result.signer_set.bound {
+            qualifiers.push("signer_set_unbound".to_string());
+        }
+        if !result.actor_set.bound {
+            qualifiers.push("actor_set_unbound".to_string());
+        }
+        if result.chain.note.as_deref() == Some(EMPTY_CHAIN_NOTE) {
+            qualifiers.push("empty_chain_not_walked".to_string());
+        }
+        if result.level == "L2" && result.chain.note.as_deref() == Some(DEFERRED_CHAIN_NOTE) {
+            qualifiers.push("encrypted_outer_only".to_string());
+        }
+        if result.format_version.accepted_by_policy == Some(false) {
+            qualifiers.push("version_not_accepted_by_policy".to_string());
+        }
+        // Mutually exclusive by construction: no allowlist vs an allowlist
+        // that matched nothing. `any_trusted` is the same predicate the
+        // advisory note uses in this lane, so the qualifier and the note
+        // can never disagree about one result (at L3 the inner envelope's
+        // trusted signers count for both).
+        if trust.allowlist_empty {
+            qualifiers.push("trust_not_evaluated".to_string());
+        } else if !trust.any_trusted {
+            qualifiers.push("no_trusted_signer".to_string());
+        }
+        // Positions 8-10 of the same table: the custody claim the capsule
+        // makes about its own origin. Same rank as the seven above — a
+        // valid verdict whose lineage claim is not clean is exactly what a
+        // renderer must not hide. On every refusal path `lineage` holds
+        // its not-evaluated default, so this contributes nothing there.
+        qualifiers.extend(crate::lineage::lineage_qualifiers(
+            result.ok,
+            &result.lineage,
+        ));
+    }
+
+    result.verdict = verdict;
+    result.verdict_reason = reason.map(str::to_string);
+    result.qualifiers = qualifiers;
+}
+
+/// Derived skill-trust classification (see [`VerifyResult::skill_trust`]).
+/// The derived `Default` — `capsule_signed: false`, empty map — is the
+/// fail-closed shape used by every early-return path.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillTrustCheck {
+    /// `content_index.ok && envelope.ok && trusted_signer_count > 0`:
+    /// every content-indexed byte is covered by at least one valid
+    /// signature from a key on the caller's allowlist.
+    pub capsule_signed: bool,
+    /// Skill id -> "signed" | "unsigned". "signed" iff `capsule_signed`
+    /// AND `skills/<id>/skill.json` is listed in the content index.
+    pub skills: std::collections::BTreeMap<String, String>,
+}
+
 /// Aggregate envelope-signature results.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct EnvelopeCheck {
@@ -262,6 +701,20 @@ pub struct SignerOutcome {
 pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     let mut errors: Vec<TopError> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+
+    // ---- (0) allowlist hygiene ------------------------------------------
+    // A caller-supplied key that is not 64 hex chars can never match a
+    // signer's public key. Silently keeping it in the vector loses the
+    // operator's intent AND suppresses the "no allowlist provided"
+    // advisory below (the vector is non-empty), so a truncated
+    // --allowlist used to report PASS with trusted=false and an empty
+    // notes array — no diagnostic at all (F44). Report each bad entry
+    // and match only the well-formed ones (normalized to lowercase,
+    // matching the JS reference's toKeyHex).
+    let (allowlist, allowlist_notes) = normalize_allowlist(&options.allowlist);
+    notes.extend(allowlist_notes);
+    let no_allowlist = allowlist.is_empty();
+
     let mut chain_check = ChainCheck::default();
     let mut content_index_check = ContentIndexCheck::default();
     let mut envelope_check = EnvelopeCheck::default();
@@ -292,7 +745,10 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                FormatVersionCheck::default(),
+                ProfileCheck::default(),
+                None,
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -316,14 +772,46 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                FormatVersionCheck::default(),
+                ProfileCheck::default(),
+                None,
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
             );
         }
     };
-    let manifest: Manifest = match serde_json::from_slice(manifest_bytes) {
+    // Parse ONCE into a preserved Value tree (the hashing input — unknown
+    // members included), then project the typed view from it. Both products
+    // therefore come from the same bytes; the view fails fast on a missing
+    // or mistyped known field, and the tree is what gets canonicalised.
+    let manifest_value: serde_json::Value = match crate::jcs::parse_json_strict(manifest_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Malformed,
+                format!("failed to parse manifest.json: {e}"),
+            ));
+            return assemble_result(
+                errors,
+                notes,
+                chain_check,
+                content_index_check,
+                envelope_check,
+                None,
+                None,
+                FormatVersionCheck::default(),
+                ProfileCheck::default(),
+                None,
+                no_allowlist,
+                String::new(),
+                String::new(),
+                level,
+            );
+        }
+    };
+    let manifest: Manifest = match serde_json::from_value(manifest_value.clone()) {
         Ok(m) => m,
         Err(e) => {
             errors.push(TopError::outer(
@@ -338,7 +826,10 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                FormatVersionCheck::default(),
+                peek_profile(Some(&manifest_value), None, ProfileStatus::Unread),
+                None,
+                no_allowlist,
                 String::new(),
                 String::new(),
                 level,
@@ -361,14 +852,45 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                FormatVersionCheck::default(),
+                peek_profile(Some(&manifest_value), None, ProfileStatus::Unread),
+                None,
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
             );
         }
     };
-    let envelope: Envelope = match serde_json::from_slice(envelope_bytes) {
+    // Same preserved-tree-then-view parse as the manifest above: the tree
+    // is the input to the signed canonical payload, so unknown envelope
+    // members stay inside the signature.
+    let envelope_value: serde_json::Value = match crate::jcs::parse_json_strict(envelope_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Malformed,
+                format!("failed to parse provenance/envelope.json: {e}"),
+            ));
+            return assemble_result(
+                errors,
+                notes,
+                chain_check,
+                content_index_check,
+                envelope_check,
+                None,
+                None,
+                FormatVersionCheck::default(),
+                peek_profile(Some(&manifest_value), None, ProfileStatus::Unread),
+                None,
+                no_allowlist,
+                manifest.id.clone(),
+                String::new(),
+                level,
+            );
+        }
+    };
+    let envelope: Envelope = match serde_json::from_value(envelope_value.clone()) {
         Ok(e) => e,
         Err(e) => {
             errors.push(TopError::outer(
@@ -383,7 +905,14 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 envelope_check,
                 None,
                 None,
-                options.allowlist.is_empty(),
+                FormatVersionCheck::default(),
+                peek_profile(
+                    Some(&manifest_value),
+                    Some(&envelope_value),
+                    ProfileStatus::Unread,
+                ),
+                None,
+                no_allowlist,
                 manifest.id.clone(),
                 String::new(),
                 level,
@@ -396,21 +925,205 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     let capsule_id = manifest.id.clone();
     let signed_at = envelope.signed_at.clone();
 
-    // ---- (3) format / version checks ------------------------------------
-    if manifest.format.version != "0.6" {
+    // ---- (3) format / version gate (spec/versioning.md) ------------------
+    // The observed version is a REPORTED FACT (format_version channel);
+    // whether it is acceptable to this deployment is host policy
+    // (accept_versions), reported and never decided here. An unknown
+    // version fails closed EARLY with only the version diagnosis —
+    // running the wrong era's rules would bury "this verifier is too
+    // old" under hash-mismatch noise indistinguishable from tampering.
+    let declared_version = manifest.format.version.clone();
+    let version_status = classify_version(&declared_version);
+    let mut format_version_check = FormatVersionCheck {
+        observed: Some(declared_version.clone()),
+        supported: version_status == VersionStatus::Known,
+        status: version_status.as_str().to_string(),
+        suite: if version_status == VersionStatus::Known {
+            suite_for(&declared_version).map(|s| s.to_string())
+        } else {
+            None
+        },
+        accepted_by_policy: None,
+    };
+    if version_status != VersionStatus::Known {
         errors.push(TopError::outer(
             TopErrorCategory::FormatVersion,
-            format!(
-                "unsupported manifest format.version: {}",
-                manifest.format.version
+            if version_status == VersionStatus::Invalid {
+                format!(
+                    "manifest.format.version: not a '<major>.<minor>' version string, got {declared_version:?}"
+                )
+            } else {
+                unsupported_version_message(
+                    "manifest.format.version",
+                    &declared_version,
+                    version_status,
+                )
+            },
+        ));
+        return assemble_result(
+            errors,
+            notes,
+            chain_check,
+            content_index_check,
+            envelope_check,
+            None,
+            None,
+            format_version_check,
+            // Gate ORDER (spec/profiles.md obligation 1): profile
+            // semantics are era-scoped, so an unknown era means the
+            // declaration cannot be classified — it is REPORTED, with
+            // status "unevaluated", and the version diagnosis stays the
+            // only error the result carries.
+            peek_profile(
+                Some(&manifest_value),
+                Some(&envelope_value),
+                ProfileStatus::Unevaluated,
             ),
-        ));
+            None,
+            no_allowlist,
+            capsule_id,
+            signed_at,
+            level,
+        );
     }
-    if envelope.version != "0.6" {
+    let env_version_status = classify_version(&envelope.version);
+    if env_version_status != VersionStatus::Known || envelope.version != declared_version {
         errors.push(TopError::outer(
             TopErrorCategory::FormatVersion,
-            format!("unsupported envelope version: {}", envelope.version),
+            if env_version_status == VersionStatus::Invalid {
+                format!(
+                    "envelope.version: not a '<major>.<minor>' version string, got {:?}",
+                    envelope.version
+                )
+            } else if env_version_status != VersionStatus::Known {
+                unsupported_version_message("envelope.version", &envelope.version, env_version_status)
+            } else {
+                // Two KNOWN versions that disagree: the capsule is
+                // ambiguous about which era's rules bind it. Fail closed
+                // before applying either.
+                format!(
+                    "envelope.version '{}' does not match manifest.format.version '{}'",
+                    envelope.version, declared_version
+                )
+            },
         ));
+        return assemble_result(
+            errors,
+            notes,
+            chain_check,
+            content_index_check,
+            envelope_check,
+            None,
+            None,
+            format_version_check,
+            peek_profile(
+                Some(&manifest_value),
+                Some(&envelope_value),
+                ProfileStatus::Unevaluated,
+            ),
+            // The format_version channel reports the MANIFEST's observed
+            // version (possibly known), so the ENVELOPE-side refusal class
+            // rides explicitly. A grammar violation or a
+            // two-known-versions disagreement is a capsule defect and
+            // derives `invalid` on its own.
+            Some(env_version_status),
+            no_allowlist,
+            capsule_id,
+            signed_at,
+            level,
+        );
+    }
+
+    // ---- (3b) profile gate (spec/profiles.md) ---------------------------
+    // Version gate first (above), profile gate second, nothing else until
+    // both pass: applying an unknown profile's rules — or silently
+    // downgrading to the defaults — would manufacture mismatch errors
+    // indistinguishable from tampering, which is versioning.md's confusion
+    // reproduced on the profile axis. The declaration is read from the
+    // PRESERVED trees: the typed views ignore unknown members, so
+    // `format.profile` is only visible there.
+    let profile_class = classify_profile(
+        manifest_value.get("format").and_then(|f| f.get("profile")),
+        envelope_value.get("profile"),
+    );
+    let profile_check = ProfileCheck::classified(&profile_class);
+    if !matches!(
+        profile_class.status,
+        ProfileStatus::Default | ProfileStatus::Supported
+    ) {
+        match profile_class.status {
+            // Malformed is a defect of the capsule, unsupported a
+            // limitation of the verifier, mismatched a self-contradiction:
+            // three facts, three remediations, kept distinguishable.
+            ProfileStatus::Invalid => {
+                for problem in &profile_class.problems {
+                    errors.push(TopError::outer(TopErrorCategory::Profile, problem.clone()));
+                }
+            }
+            ProfileStatus::Mismatched => {
+                let (manifest_pair, envelope_pair) = profile_class
+                    .normalized
+                    .as_ref()
+                    .expect("a mismatched classification carries both normalized pairs");
+                errors.push(TopError::outer(
+                    TopErrorCategory::Profile,
+                    profile_mismatch_message(manifest_pair, envelope_pair),
+                ));
+            }
+            _ => {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Profile,
+                    unsupported_profile_message(
+                        profile_class.observed.as_deref().unwrap_or_default(),
+                        profile_class.observed_version.as_deref().unwrap_or_default(),
+                    ),
+                ));
+            }
+        }
+        // Suite honesty (spec/profiles.md obligation 6): the suite fact is
+        // a statement about the rules governing THIS capsule; after a
+        // profile-gate refusal none is known, so reporting "v0.6" would be
+        // false. Refusal exclusivity does the rest — the profile diagnosis
+        // is the only error, and every other channel holds its fail-closed
+        // default because no check below this point runs.
+        format_version_check.suite = None;
+        return assemble_result(
+            errors,
+            notes,
+            chain_check,
+            content_index_check,
+            envelope_check,
+            None,
+            None,
+            format_version_check,
+            profile_check,
+            None,
+            no_allowlist,
+            capsule_id,
+            signed_at,
+            level,
+        );
+    }
+    if (
+        profile_class.effective.as_deref(),
+        profile_class.effective_version.as_deref(),
+    ) != (Some(crate::profiles::DEFAULT_PROFILE.0), Some(crate::profiles::DEFAULT_PROFILE.1))
+    {
+        // Unreachable while this table holds one row; kept so a grown
+        // table cannot report the default suite under alternate rules.
+        format_version_check.suite = None;
+    }
+
+    // Host policy: DECLARED accepted versions. Reported, never decided —
+    // integrity ok is unaffected, exactly as with signer allowlists.
+    if let Some(accepted) = &options.accept_versions {
+        let verdict = accepted.iter().any(|v| v == &declared_version);
+        format_version_check.accepted_by_policy = Some(verdict);
+        if !verdict {
+            notes.push(format!(
+                "host policy: observed format version {declared_version} is not in the declared accepted set {accepted:?}"
+            ));
+        }
     }
 
     // ---- (4) cipher whitelist -------------------------------------------
@@ -425,8 +1138,12 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     }
 
     // ---- (5) capsule_id derivation --------------------------------------
+    // A None manifest anchor (zero-event capsule) derives with 32 zero
+    // bytes standing in; whether None is LEGAL here is decided by the
+    // chain walk below, which fails closed on any anchor/event-count
+    // inconsistency (spec/chain.md "Empty chains").
     match hex_to_bytes(&manifest.originator.public_key) {
-        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, &manifest.first_event_hash) {
+        Ok(pk) if pk.len() == 32 => match compute_capsule_id(&pk, manifest.first_event_hash.as_deref(), &declared_version) {
             Ok(expected_id) => {
                 if expected_id != manifest.id {
                     errors.push(TopError::outer(
@@ -468,8 +1185,28 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         }
     }
 
+    // ---- (5b) first_event_hash binding ----------------------------------
+    // `manifest.first_event_hash` is the capsule_id preimage;
+    // `envelope.first_event_hash` is what the chain walk in step 9 is
+    // checked against. `manifest.md` and `envelope.md` both pin them to the
+    // hash of chain event 1, so a drift means capsule_id names a chain this
+    // capsule does not carry. None==None is the legal empty-chain shape;
+    // the chain walk enforces anchor/event-count consistency separately.
+    if manifest.first_event_hash != envelope.first_event_hash {
+        errors.push(TopError::outer(
+            TopErrorCategory::ChainAnchor,
+            format!(
+                "manifest.first_event_hash mismatch: {} vs envelope.first_event_hash {}",
+                anchor_or_null(&manifest.first_event_hash),
+                anchor_or_null(&envelope.first_event_hash)
+            ),
+        ));
+    }
+
     // ---- (6) manifest_hash check ----------------------------------------
-    let expected_mfhash = manifest_hash(&manifest);
+    // Hash the PRESERVED manifest tree, not the typed view: unknown members
+    // are part of the signed document and must be canonicalised.
+    let expected_mfhash = manifest_hash(&manifest_value);
     if expected_mfhash != envelope.manifest_hash {
         errors.push(TopError::outer(
             TopErrorCategory::ManifestHash,
@@ -497,8 +1234,17 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
     //   - Encrypted: `content.enc` present, cipher on the whitelist (and
     //                != "none"), encrypted_blob_hash matches sha256(content.enc).
     // Anything else is an Encryption-category error.
-    let is_encrypted = files.contains_key("content.enc");
-    if is_encrypted {
+    //
+    // `is_encrypted` requires BOTH the signed cipher declaration and the
+    // blob. Keying it off file presence alone lets an attacker who appends
+    // a `content.enc` to a plain capsule switch the verifier into encrypted
+    // mode, which skips the chain walk in step 9 and reports chain.ok=true
+    // for a chain that was never looked at. The shape checks right below
+    // deliberately stay keyed off `blob_present`: an illegal cipher/blob
+    // combination must be reported no matter which half is missing.
+    let blob_present = files.contains_key("content.enc");
+    let is_encrypted = blob_present && envelope.cipher != "none";
+    if blob_present {
         match envelope.encrypted_blob_hash.as_deref() {
             None => {
                 errors.push(TopError::outer(
@@ -521,7 +1267,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 None => {
                     errors.push(TopError::outer(
                         TopErrorCategory::Malformed,
-                        "internal: is_encrypted set but content.enc absent",
+                        "internal: blob_present set but content.enc absent",
                     ));
                 }
             },
@@ -550,6 +1296,84 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         }
     }
 
+    // ---- (8b) manifest.encryption agreement -----------------------------
+    // `manifest.md` fixes `encryption` as null for plain capsules and
+    // {metadata_path, cipher} for encrypted ones. The SIGNED
+    // `envelope.cipher` is authoritative; the manifest declaration must
+    // agree with it, and the declared metadata_path must resolve to a file
+    // that is present AND covered by the content index.
+    match (envelope.cipher.as_str(), manifest.encryption.as_ref()) {
+        ("none", None) => {}
+        ("none", Some(_)) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Encryption,
+                "manifest.encryption must be null when envelope.cipher is 'none'",
+            ));
+        }
+        (cipher, None) => {
+            errors.push(TopError::outer(
+                TopErrorCategory::Encryption,
+                format!("manifest.encryption must be an object when envelope.cipher is '{cipher}'"),
+            ));
+        }
+        (cipher, Some(enc)) => {
+            if enc.cipher != cipher {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.cipher mismatch: '{}' vs envelope.cipher '{cipher}'",
+                        enc.cipher
+                    ),
+                ));
+            }
+            if enc.metadata_path.is_empty() {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    "manifest.encryption.metadata_path must be a non-empty string",
+                ));
+            } else if !files.contains_key(&enc.metadata_path) {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.metadata_path missing from capsule: {}",
+                        enc.metadata_path
+                    ),
+                ));
+            } else if !manifest
+                .content_index
+                .files
+                .iter()
+                .any(|f| f.path == enc.metadata_path)
+            {
+                errors.push(TopError::outer(
+                    TopErrorCategory::Encryption,
+                    format!(
+                        "manifest.encryption.metadata_path not covered by content index: {}",
+                        enc.metadata_path
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ---- (8c) lineage declaration (spec/lineage.md) ---------------------
+    // Standalone checks fail closed (a PRESENT declaration no reader can
+    // interpret is the capsule asserting something meaningless about its
+    // own origin). Linkage over `options.predecessors` is REPORT-ONLY: it
+    // can falsify `lineage.ok` but never the capsule's own verdict, so a
+    // host's file handling cannot forge a forgery verdict against an
+    // honest successor. An encrypted capsule's OUTER declaration is
+    // evaluated here at L2; the inner one is evaluated at L3.
+    let mut lineage_problems: Vec<String> = Vec::new();
+    let lineage_check =
+        crate::lineage::evaluate_lineage(&manifest, options, &mut lineage_problems, &mut notes);
+    for problem in lineage_problems {
+        errors.push(TopError::outer(
+            TopErrorCategory::Lineage,
+            format!("manifest.{problem}"),
+        ));
+    }
+
     // ---- (9) chain walk -------------------------------------------------
     // For encrypted outers the chain lives inside the encrypted inner — L3
     // territory. We surface chain.ok=true with a note rather than failing,
@@ -564,6 +1388,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                         &envelope,
                         &mut chain_check,
                         &mut errors,
+                        &mut notes,
                         TopErrorScope::Outer,
                     );
                 }
@@ -588,7 +1413,7 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         chain_check.ok = true;
         chain_check.errors = Vec::new();
         chain_check.event_count = 0;
-        chain_check.note = Some("deferred to L3 (encrypted outer)".to_string());
+        chain_check.note = Some(DEFERRED_CHAIN_NOTE.to_string());
         // The first_event_hash / entry_hash anchor checks are part of L3.
         // We can't recompute them without the chain bytes, so we skip them
         // here as well — they'll surface when the inner is verified.
@@ -606,28 +1431,117 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
                 &envelope,
                 &manifest,
                 &files,
-                options,
+                &allowlist,
                 &mut chain_check,
                 &mut inner_envelope_check,
                 &mut inner_content_index_check,
                 &mut errors,
+                &mut notes,
                 &mut level,
             );
         }
     }
 
     // ---- (10) envelope signature verification ---------------------------
-    envelope_check = verify_envelope_signatures(&envelope, &options.allowlist);
+    envelope_check = verify_envelope_signatures(&envelope, &envelope_value, &allowlist);
+    // Duplicate (role, public_key) signer entries are malformed — surface
+    // the envelope-check note as a categorized top-level error too, so
+    // structured consumers and the registry haystack both see it.
+    if let Some(note) = envelope_check.note.as_ref() {
+        if note.starts_with("duplicate signer entry") {
+            errors.push(TopError::outer(TopErrorCategory::SignerSet, note.clone()));
+        }
+    }
+
+    // ---- (10b) signer-set binding: PRESENCE BINDS, ABSENCE REPORTS ------
+    // A present manifest.signer_commitment must equal the normalized
+    // envelope signer set exactly (integrity invariant, fail-closed). An
+    // absent commitment downgrades the reported assurance — it never fails
+    // verification, because a capsule that does not assert signer-set
+    // binding is making a weaker claim honestly (templates, other writers).
+    // The check runs against the PRESERVED trees so malformed shapes (e.g.
+    // a null commitment) fail closed exactly like the JS reference.
+    let signer_set_check = check_signer_set(&manifest_value, &envelope_value);
+    if !signer_set_check.bound {
+        notes.push(
+            "manifest.signer_commitment absent: the signer set is not bound by the seal"
+                .to_string(),
+        );
+    }
+    for e in &signer_set_check.errors {
+        errors.push(TopError::outer(TopErrorCategory::SignerSet, e.clone()));
+    }
+
+    // ---- (10b') actor-set binding: PRESENCE BINDS, ABSENCE REPORTS ------
+    // Same claim shape as the signer set. A non-empty
+    // manifest.participants[] bound the chain walk above (fail-closed);
+    // an empty one is the manifest declining to name who acted, which
+    // verifies at a visibly lower assurance.
+    // `bound` mirrors the reference lanes: the set of INTERPRETABLE actor
+    // ids binds the chain, not the raw entry count — an entry that
+    // declares no bindable id cannot bind anything (and is flagged as
+    // malformed just below).
+    let actor_set_check = ActorSetCheck {
+        bound: manifest
+            .participants
+            .iter()
+            .any(|p| p.actor_id.is_some()),
+    };
+    if !actor_set_check.bound {
+        notes.push(
+            "manifest.participants empty: chain actors are not bound to a declared participant set"
+                .to_string(),
+        );
+    }
+    // manifest.md field rules (A06 + P2): every DECLARED entry must carry
+    // an interpretable actor_id in the closed namespace set (human/ai/
+    // system/capsule, non-empty id). Unlike an empty participants[], an
+    // uninterpretable declared entry is not a weaker claim — it is a
+    // malformed one, rejected fail-closed with the cross-lane diagnosis.
+    // Conformance vectors: chain-rules/invalid-actor-namespace,
+    // chain-rules/participant-missing-actor-id.
+    for problem in crate::chain::participant_actor_id_problems(&manifest.participants) {
+        errors.push(TopError::outer(
+            TopErrorCategory::ActorId,
+            format!("manifest.{problem}"),
+        ));
+    }
+
+    // ---- (10c) originator binding (invariant) ---------------------------
+    // The manifest names an originator key — that key must actually have
+    // sealed the capsule with a valid envelope signature under role
+    // "originator". A manifest naming an originator who never signed is
+    // the capsule asserting something false about itself.
+    if let Some(msg) =
+        originator_binding_error(&manifest.originator.public_key, &envelope_check.signers)
+    {
+        errors.push(TopError::outer(TopErrorCategory::OriginatorBinding, msg));
+    }
 
     // ---- (11) trusted_signer_count --------------------------------------
-    let trusted_signer_count = envelope_check.signers.iter().filter(|s| s.trusted).count();
+    // DISTINCT trusted keys, never rows: the same key signing under two
+    // roles is one trusted key, and duplicate rows must never inflate a
+    // quorum.
+    let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
 
-    // ---- (12) advisory note ---------------------------------------------
-    let no_allowlist = options.allowlist.is_empty();
+    // ---- (12) advisory notes --------------------------------------------
+    // `no_allowlist` came from step 0 and counts only well-formed entries,
+    // so an allowlist made up entirely of malformed values still gets the
+    // advisory on top of its per-entry notes. And an allowlist that
+    // matched nothing says so: a PASS with trusted=false is never silent
+    // about why.
+    let any_trusted = trusted_signer_count > 0
+        || inner_envelope_check
+            .as_ref()
+            .is_some_and(|e| e.signers.iter().any(|s| s.trusted));
     if no_allowlist {
         notes.push(
             "no allowlist provided; trusted=false for all signers regardless of signature validity"
                 .to_string(),
+        );
+    } else if !any_trusted {
+        notes.push(
+            "allowlist provided but matched no signer; trusted=false for all signers".to_string(),
         );
     }
 
@@ -640,11 +1554,32 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         && content_index_check.ok
         && chain_check.ok
         && envelope_check.ok
+        && signer_set_check.ok
         && inner_envelope_check.as_ref().is_none_or(|e| e.ok)
         && inner_content_index_check.as_ref().is_none_or(|ci| ci.ok);
 
-    VerifyResult {
+    // ---- (14) derived skill trust ---------------------------------------
+    // DERIVED from this verification, never read from the capsule
+    // (spec/trust.md "Skill trust"). Derived AFTER the final verdict so
+    // it is an input: a capsule that FAILS verification never classifies
+    // anything signed, whatever the allowlist says — without it, a
+    // capsule broken in a way that spares content_index and the envelope
+    // signatures (e.g. a signer_commitment naming a key that never
+    // signed) still tells the host its skills are trustworthy.
+    let skill_trust_check = derive_skill_trust(
+        &files,
+        &manifest,
         ok,
+        content_index_check.ok,
+        envelope_check.ok,
+        trusted_signer_count,
+    );
+
+    let mut result = VerifyResult {
+        ok,
+        verdict: Verdict::default(),
+        verdict_reason: None,
+        qualifiers: Vec::new(),
         level,
         capsule_id,
         signed_at,
@@ -652,11 +1587,272 @@ pub fn verify_capsule(bytes: &[u8], options: &VerifyOptions) -> VerifyResult {
         chain: chain_check,
         content_index: content_index_check,
         envelope: envelope_check,
+        signer_set: signer_set_check,
+        actor_set: actor_set_check,
+        format_version: format_version_check,
+        profile: profile_check,
+        lineage: lineage_check,
+        skill_trust: skill_trust_check,
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
         notes,
+    };
+    // ---- (15) normalized verdict surface (spec/results.md) --------------
+    // Derived last, from the facts above — the only path that can reach
+    // verdict "valid". The lineage qualifiers ride the same array: a
+    // qualifier qualifies a VALID verdict, and an invalid capsule's
+    // custody claim is not what the reader needs to hear about first.
+    derive_verdict(
+        &mut result,
+        None,
+        TrustFacts {
+            allowlist_empty: no_allowlist,
+            any_trusted,
+        },
+    );
+    result
+}
+
+/// Best-effort profile channel for a capsule refused BEFORE the gate could
+/// classify it (spec/profiles.md obligation 8): the observed declaration is
+/// a reported fact on every result, including open refusals, because it is
+/// what lets an auditor route the capsule to a capable verifier instead of
+/// declaring it corrupt. Pass whichever preserved trees this path managed
+/// to parse; `status` is `Unevaluated` when the version gate refused first
+/// and `Unread` when the documents never got that far.
+fn peek_profile(
+    manifest_value: Option<&serde_json::Value>,
+    envelope_value: Option<&serde_json::Value>,
+    status: ProfileStatus,
+) -> ProfileCheck {
+    let classification = classify_profile(
+        manifest_value
+            .and_then(|m| m.get("format"))
+            .and_then(|f| f.get("profile")),
+        envelope_value.and_then(|e| e.get("profile")),
+    );
+    ProfileCheck::observed_only(&classification, status)
+}
+
+/// Normalized `(public_key, role)` member — the commitment sort order is
+/// ascending by public_key, then role, byte order (spec/manifest.md).
+type Member = (String, String);
+
+fn member_of(role: &str, public_key: &str) -> Member {
+    (public_key.to_lowercase(), role.to_string())
+}
+
+/// Validate a raw `signer_commitment` value. `Ok(members)` when
+/// well-formed; `Err(problems)` otherwise. Rules (spec/manifest.md):
+/// non-empty array; each member an object with exactly `role` (non-empty
+/// string) and `public_key` (lowercase 64-hex); sorted ascending by
+/// (public_key, role); pairs unique.
+fn validate_signer_commitment(raw: &serde_json::Value) -> Result<Vec<Member>, Vec<String>> {
+    let Some(list) = raw.as_array() else {
+        return Err(vec!["must be a non-empty array of {role, public_key}".to_string()]);
+    };
+    if list.is_empty() {
+        return Err(vec!["must not be empty when present".to_string()]);
     }
+    let mut problems = Vec::new();
+    let mut members: Vec<Member> = Vec::with_capacity(list.len());
+    for (i, m) in list.iter().enumerate() {
+        let Some(obj) = m.as_object() else {
+            problems.push(format!("member {i} is not an object"));
+            continue;
+        };
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        if keys != ["public_key", "role"] {
+            problems.push(format!("member {i} must carry exactly {{role, public_key}}"));
+            continue;
+        }
+        let role = obj.get("role").and_then(|v| v.as_str());
+        let key = obj.get("public_key").and_then(|v| v.as_str());
+        match role {
+            Some(r) if !r.is_empty() => {}
+            _ => problems.push(format!("member {i}: role must be a non-empty string")),
+        }
+        let key_ok = key.is_some_and(|k| {
+            k.len() == 64 && k.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        });
+        if !key_ok {
+            problems.push(format!("member {i}: public_key must be lowercase 64-hex"));
+        }
+        if problems.is_empty() {
+            members.push((key.unwrap().to_string(), role.unwrap().to_string()));
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    for i in 1..members.len() {
+        if members[i - 1] == members[i] {
+            problems.push(format!(
+                "duplicate member (role={}, public_key={})",
+                members[i].1, members[i].0
+            ));
+        } else if members[i - 1] > members[i] {
+            problems.push("members not sorted ascending by (public_key, role)".to_string());
+            break;
+        }
+    }
+    if problems.is_empty() {
+        Ok(members)
+    } else {
+        Err(problems)
+    }
+}
+
+/// Signer-set binding check over the PRESERVED manifest and envelope
+/// trees. PRESENCE BINDS (exact membership, fail-closed); ABSENCE REPORTS
+/// (`bound: false`, `ok: true` — the caller surfaces the advisory note).
+pub(crate) fn check_signer_set(
+    manifest_value: &serde_json::Value,
+    envelope_value: &serde_json::Value,
+) -> SignerSetCheck {
+    let Some(raw) = manifest_value.get("signer_commitment") else {
+        return SignerSetCheck {
+            bound: false,
+            ok: true,
+            errors: Vec::new(),
+        };
+    };
+    let mut errors: Vec<String> = Vec::new();
+    match validate_signer_commitment(raw) {
+        Err(problems) => {
+            errors.extend(
+                problems
+                    .into_iter()
+                    .map(|p| format!("manifest.signer_commitment malformed: {p}")),
+            );
+        }
+        Ok(committed) => {
+            let mut actual: Vec<Member> = envelope_value
+                .get("signers")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|s| {
+                            member_of(
+                                s.get("role").and_then(|v| v.as_str()).unwrap_or(""),
+                                s.get("public_key").and_then(|v| v.as_str()).unwrap_or(""),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            actual.sort();
+            // Merge-walk both sorted member lists; name every difference.
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < committed.len() || j < actual.len() {
+                let ord = if i >= committed.len() {
+                    std::cmp::Ordering::Greater
+                } else if j >= actual.len() {
+                    std::cmp::Ordering::Less
+                } else {
+                    committed[i].cmp(&actual[j])
+                };
+                match ord {
+                    std::cmp::Ordering::Equal => {
+                        i += 1;
+                        j += 1;
+                    }
+                    std::cmp::Ordering::Less => {
+                        let (key, role) = &committed[i];
+                        errors.push(format!(
+                            "signer_commitment mismatch: no envelope signer matches committed member (role={role}, public_key={key})"
+                        ));
+                        i += 1;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let (key, role) = &actual[j];
+                        errors.push(format!(
+                            "signer_commitment mismatch: envelope signer not committed (role={role}, public_key={key})"
+                        ));
+                        j += 1;
+                    }
+                }
+            }
+        }
+    }
+    SignerSetCheck {
+        bound: true,
+        ok: errors.is_empty(),
+        errors,
+    }
+}
+
+/// Originator binding (invariant): `Some(message)` when the manifest's
+/// originator key has NO valid envelope signature with role "originator".
+pub(crate) fn originator_binding_error(
+    originator_public_key: &str,
+    outcomes: &[SignerOutcome],
+) -> Option<String> {
+    let key = originator_public_key.to_lowercase();
+    let bound = outcomes
+        .iter()
+        .any(|s| s.role == "originator" && s.valid && s.public_key.to_lowercase() == key);
+    if bound {
+        None
+    } else {
+        Some(format!(
+            "originator binding: manifest.originator.public_key {key} has no valid envelope signature with role 'originator'"
+        ))
+    }
+}
+
+/// Count DISTINCT trusted public keys (lowercased), never signer rows.
+/// Derive the skill-trust classification (spec/trust.md "Skill trust"):
+/// `capsule_signed = verdict_ok && content_index_ok && envelope_ok &&
+/// trusted_signer_count > 0` — the OVERALL verdict is consulted, so a
+/// failing capsule never classifies anything signed; content_index /
+/// envelope stay in the conjunction for fail-closed redundancy. A skill
+/// id (any `skills/<id>/skill.json` or `skills/<id>/SKILL.md` in the
+/// package, `decryption` excluded) is "signed" iff `capsule_signed` AND
+/// its `skill.json` path is listed in `manifest.content_index.files`.
+fn derive_skill_trust(
+    files: &BTreeMap<String, Vec<u8>>,
+    manifest: &Manifest,
+    verdict_ok: bool,
+    content_index_ok: bool,
+    envelope_ok: bool,
+    trusted_signer_count: usize,
+) -> SkillTrustCheck {
+    let capsule_signed = verdict_ok && content_index_ok && envelope_ok && trusted_signer_count > 0;
+    let indexed: std::collections::BTreeSet<&str> = manifest
+        .content_index
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    let mut skills = std::collections::BTreeMap::new();
+    for path in files.keys() {
+        let Some(rest) = path.strip_prefix("skills/") else { continue };
+        let mut parts = rest.splitn(2, '/');
+        let (Some(id), Some(file)) = (parts.next(), parts.next()) else { continue };
+        if id == "decryption" || (file != "skill.json" && file != "SKILL.md") {
+            continue;
+        }
+        let json_path = format!("skills/{id}/skill.json");
+        let tier = if capsule_signed && indexed.contains(json_path.as_str()) {
+            "signed"
+        } else {
+            "unsigned"
+        };
+        skills.insert(id.to_string(), tier.to_string());
+    }
+    SkillTrustCheck { capsule_signed, skills }
+}
+
+pub(crate) fn distinct_trusted_keys(outcomes: &[SignerOutcome]) -> usize {
+    outcomes
+        .iter()
+        .filter(|s| s.trusted)
+        .map(|s| s.public_key.to_lowercase())
+        .collect::<std::collections::BTreeSet<String>>()
+        .len()
 }
 
 /// Verify a manifest's content_index against the actual files on disk.
@@ -751,67 +1947,174 @@ pub(crate) fn verify_content_index(
     content_index_check
 }
 
+/// Display form for a nullable anchor: the stored hex, or `null`.
+pub(crate) fn anchor_or_null(anchor: &Option<String>) -> &str {
+    anchor.as_deref().unwrap_or("null")
+}
+
+/// The note recorded (in `ChainCheck::note` AND `VerifyResult::notes`)
+/// when a zero-event chain is verified: honest reporting that the
+/// per-event walk did not run and what was checked instead. Shared with
+/// the JS and Python lanes verbatim; the chain-binding registry pins it
+/// via `notes_includes`.
+pub(crate) const EMPTY_CHAIN_NOTE: &str =
+    "empty chain: no events to walk; envelope anchors checked to be null instead";
+
+/// The note recorded in `ChainCheck::note` when the chain lives inside an
+/// encrypted inner and was therefore not walked at L2. Shared verbatim
+/// with the JS and Python lanes; it is also the derivational fact behind
+/// the `encrypted_outer_only` qualifier (spec/results.md).
+pub(crate) const DEFERRED_CHAIN_NOTE: &str = "deferred to L3 (encrypted outer)";
+
 /// Walk `events` against `manifest` + `envelope` and accumulate per-event
-/// failures into `chain_check`. The two `ChainAnchor` cross-checks
+/// failures into `chain_check`. The `ChainAnchor` cross-checks
 /// (`envelope.first_event_hash` and `envelope.entry_hash` vs the recomputed
 /// chain anchors) push into `errors` via the `scope`-aware constructor —
 /// callers in the outer pipeline pass `TopErrorScope::Outer`; the L3 caller
 /// pushes the same logical mismatches against the *inner* envelope and
 /// therefore passes `TopErrorScope::Inner`.
+///
+/// ZERO events is legal — the weakest honest shape (a template or draft
+/// capsule, spec/chain.md "Empty chains") — and then the capsule must not
+/// claim chain anchors it does not have: `manifest.first_event_hash`,
+/// `envelope.first_event_hash` and `envelope.entry_hash` must all be
+/// null, fail-closed otherwise. In a plain capsule those anchors are the
+/// only envelope-to-chain binding, so skipping the comparison because
+/// `first_and_entry_hash` has nothing to return would verify an envelope
+/// bound to nothing (F22). The zero-event case is reported honestly via
+/// [`EMPTY_CHAIN_NOTE`] in both `chain_check.note` and `notes`.
 pub(crate) fn chain_walk_into(
-    events: &[ChainEvent],
+    events: &[ParsedEvent],
     manifest: &Manifest,
     envelope: &Envelope,
     chain_check: &mut ChainCheck,
     errors: &mut Vec<TopError>,
+    notes: &mut Vec<String>,
     scope: TopErrorScope,
 ) {
     chain_check.event_count = events.len();
-    let walk_errors = verify_chain(events);
-    chain_check
-        .errors
-        .extend(walk_errors.into_iter().map(|e| e.into_string()));
 
-    // Per-event actor whitelist. Each event's actor must appear in
-    // manifest.participants[].actor_id OR equal "system:host" (matching the
-    // JS reference's `chain.md` rule).
-    let participant_ids: std::collections::BTreeSet<&str> = manifest
-        .participants
-        .iter()
-        .map(|p| p.actor_id.as_str())
-        .collect();
-    for e in events {
-        if e.actor != "system:host" && !participant_ids.contains(e.actor.as_str()) {
-            chain_check.errors.push(format!(
-                "seq {}: actor {:?} not in manifest.participants and not system:host",
-                e.seq, e.actor
-            ));
-        }
-    }
-
-    chain_check.ok = chain_check.errors.is_empty();
-
-    // Cross-check first/entry against envelope. Build the error via whichever
-    // constructor the caller's scope dictates so the resulting `TopError`
-    // carries the right `scope` for JSON consumers.
+    // Build anchor errors via whichever constructor the caller's scope
+    // dictates so the resulting `TopError` carries the right `scope`.
     let make_anchor = |msg: String| -> TopError {
         match scope {
             TopErrorScope::Outer => TopError::outer(TopErrorCategory::ChainAnchor, msg),
             TopErrorScope::Inner => TopError::inner(TopErrorCategory::ChainAnchor, msg),
         }
     };
-    if let Some((first_hash, entry_hash)) = first_and_entry_hash(events) {
-        if first_hash != envelope.first_event_hash {
+
+    if events.is_empty() {
+        // Legal, but only as the honest null-anchor shape.
+        chain_check.ok = true;
+        chain_check.note = Some(EMPTY_CHAIN_NOTE.to_string());
+        notes.push(EMPTY_CHAIN_NOTE.to_string());
+        if let Some(v) = envelope.first_event_hash.as_deref() {
             errors.push(make_anchor(format!(
-                "envelope.first_event_hash mismatch: {} vs {}",
-                envelope.first_event_hash, first_hash
+                "envelope.first_event_hash must be null when the chain has no events; got {v}"
             )));
         }
-        if entry_hash != envelope.entry_hash {
+        if let Some(v) = envelope.entry_hash.as_deref() {
+            errors.push(make_anchor(format!(
+                "envelope.entry_hash must be null when the chain has no events; got {v}"
+            )));
+        }
+        if let Some(v) = manifest.first_event_hash.as_deref() {
+            errors.push(make_anchor(format!(
+                "manifest.first_event_hash must be null when the chain has no events; got {v}"
+            )));
+        }
+        return;
+    }
+
+    let walk_errors = verify_chain(events);
+    chain_check
+        .errors
+        .extend(walk_errors.into_iter().map(|e| e.into_string()));
+
+    // Per-event field rules (chain.md step 6 + the kind enum).
+    //
+    // The actor rule is CONDITIONAL on the manifest's own claim: a
+    // NON-EMPTY participants[] binds every event actor to the declared set
+    // (or the literal "system:host"), fail-closed. An EMPTY participants[]
+    // is the manifest making no claim about who acted — a weaker claim
+    // made honestly (template / open-publication tiers) — so the walk
+    // accepts any actor and the pipeline reports the reduced assurance
+    // (`actor_set.bound=false` plus a note) instead of rejecting. This is
+    // safe because participants is covered by manifest_hash inside the
+    // signed payload: an attacker cannot empty the list to escape the
+    // check without breaking every envelope signature.
+    let participant_ids: std::collections::BTreeSet<&str> = manifest
+        .participants
+        .iter()
+        .filter_map(|p| p.actor_id.as_deref())
+        .collect();
+    for e in events.iter().map(|p| &p.event) {
+        let actor = e.actor.as_deref();
+        if !participant_ids.is_empty()
+            && actor != Some("system:host")
+            && !actor.map(|a| participant_ids.contains(a)).unwrap_or(false)
+        {
+            // An absent (or non-string) actor renders as `null`, matching
+            // the JS reference's JSON.stringify(actor ?? null).
+            let rendered = match actor {
+                Some(a) => format!("{a:?}"),
+                None => "null".to_string(),
+            };
+            chain_check.errors.push(format!(
+                "seq {}: actor {rendered} not in manifest.participants and not system:host",
+                e.seq
+            ));
+        }
+        // The `kind` enum is closed in every tier: chain.md declares the
+        // set and says "Readers reject unknown kinds."
+        if !is_valid_event_kind(&e.kind) {
+            chain_check.errors.push(format!(
+                "seq {}: kind {:?} is not one of {}",
+                e.seq,
+                e.kind,
+                EVENT_KINDS.join(", ")
+            ));
+        }
+        // spec/chain.md "Untrusted content" — when present, every marking
+        // must match the path grammar. An unparseable marking silently
+        // unmarks LLM-authored content for every downstream host. (A
+        // non-array member, or a non-string entry, already fails the typed
+        // event parse in this lane.)
+        for (i, p) in e.untrusted_payload_fields.iter().enumerate() {
+            if !crate::chain::is_valid_untrusted_payload_path(p) {
+                chain_check.errors.push(format!(
+                    "seq {}: untrusted_payload_fields[{}] is not a valid payload path: {:?}",
+                    e.seq, i, p
+                ));
+            }
+        }
+    }
+
+    chain_check.ok = chain_check.errors.is_empty();
+
+    // Cross-check first/entry against envelope. A `None` anchor over a
+    // non-empty chain fails here like any other mismatch (rendered as
+    // "null").
+    if let Some((first_hash, entry_hash)) = first_and_entry_hash(events) {
+        if envelope.first_event_hash.as_deref() != Some(first_hash) {
+            errors.push(make_anchor(format!(
+                "envelope.first_event_hash mismatch: {} vs {}",
+                anchor_or_null(&envelope.first_event_hash),
+                first_hash
+            )));
+        }
+        if envelope.entry_hash.as_deref() != Some(entry_hash) {
             errors.push(make_anchor(format!(
                 "envelope.entry_hash mismatch: {} vs {}",
-                envelope.entry_hash, entry_hash
+                anchor_or_null(&envelope.entry_hash),
+                entry_hash
             )));
+        }
+        if manifest.first_event_hash.is_none() {
+            errors.push(make_anchor(
+                "manifest.first_event_hash must not be null when the chain has events"
+                    .to_string(),
+            ));
         }
     }
 }
@@ -820,6 +2123,10 @@ pub(crate) fn chain_walk_into(
 /// build the corresponding [`EnvelopeCheck`]. The same code path is used for
 /// the outer envelope (top-level pipeline step 10) and for the inner
 /// envelope (L3, when decryption + inner parsing succeeded).
+///
+/// `envelope` is the typed view (signer list); `envelope_value` is the
+/// PRESERVED tree from the same bytes — the canonical payload is built from
+/// the tree so unknown envelope members stay inside the signature.
 ///
 /// `allowlist` is a list of trusted Ed25519 public keys (hex). Comparison is
 /// case-insensitive: keys are lowercased on both sides before lookup. A
@@ -830,9 +2137,27 @@ pub(crate) fn chain_walk_into(
 /// `EnvelopeCheck::ok` is `true` only when there is at least one signer AND
 /// every signer's signature verified. An envelope with zero signers is
 /// reported as `ok=false` with a `note` of `"envelope has no signers"`.
-pub(crate) fn verify_envelope_signatures(envelope: &Envelope, allowlist: &[String]) -> EnvelopeCheck {
+pub(crate) fn verify_envelope_signatures(
+    envelope: &Envelope,
+    envelope_value: &serde_json::Value,
+    allowlist: &[String],
+) -> EnvelopeCheck {
     let mut envelope_check = EnvelopeCheck::default();
-    let signer_outcomes = verify_signatures(envelope);
+    // Duplicate (role, public_key) entries are malformed: counting rows
+    // instead of distinct members lets one key satisfy an M-of-N policy.
+    // Same key under different roles is permitted (distinct members).
+    let mut seen = std::collections::BTreeSet::new();
+    for s in &envelope.signers {
+        if !seen.insert((s.role.clone(), s.public_key.to_lowercase())) {
+            envelope_check.ok = false;
+            envelope_check.note = Some(format!(
+                "duplicate signer entry (role={}, public_key={})",
+                s.role, s.public_key
+            ));
+            return envelope_check;
+        }
+    }
+    let signer_outcomes = verify_signatures(envelope, envelope_value);
     let mut all_valid = !signer_outcomes.is_empty();
     let allowlist_lower: std::collections::BTreeSet<String> =
         allowlist.iter().map(|k| k.to_lowercase()).collect();
@@ -858,6 +2183,32 @@ pub(crate) fn verify_envelope_signatures(envelope: &Envelope, allowlist: &[Strin
     envelope_check
 }
 
+/// Split a caller-supplied allowlist into the normalized (lowercase hex)
+/// entries this verifier will actually match against, plus one
+/// human-readable note per rejected entry.
+///
+/// An Ed25519 public key is 32 raw bytes — exactly 64 hex characters
+/// (accepted in any case, normalized to lowercase, matching the JS
+/// reference's `toKeyHex`). Anything else — a truncated paste, a `0x`
+/// prefix, a base64 blob, a file path — can never equal a signer's
+/// `public_key`, so keeping it would silently mean "allowlist supplied,
+/// nothing trusted, no explanation" (F44).
+pub(crate) fn normalize_allowlist(allowlist: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut valid: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for (i, entry) in allowlist.iter().enumerate() {
+        if entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit()) {
+            valid.push(entry.to_lowercase());
+        } else {
+            notes.push(format!(
+                "ignored invalid allowlist[{i}]: must be a 64-char hex string \
+                 (32-byte Ed25519 public key); got {entry:?}"
+            ));
+        }
+    }
+    (valid, notes)
+}
+
 /// Build a final `VerifyResult` from the accumulated state. Used by the
 /// early-return paths.
 ///
@@ -869,6 +2220,13 @@ pub(crate) fn verify_envelope_signatures(envelope: &Envelope, allowlist: &[Strin
 /// decrypt + chain walk. `inner_envelope_check` and
 /// `inner_content_index_check` are populated only on the L3-success path;
 /// every early-return path passes `None` for both.
+///
+/// `profile` is the profile channel as far as this path could establish it
+/// (spec/profiles.md obligation 8: the observed declaration is a reported
+/// fact even on refusal) — the fail-closed `unread` default when the
+/// manifest never parsed. `version_refusal` names the refusal class when
+/// the ENVELOPE's version is the unknown one, which the `format_version`
+/// channel (reporting the manifest's declaration) cannot show.
 #[allow(clippy::too_many_arguments)]
 fn assemble_result(
     errors: Vec<TopError>,
@@ -878,6 +2236,9 @@ fn assemble_result(
     envelope_check: EnvelopeCheck,
     inner_envelope_check: Option<EnvelopeCheck>,
     inner_content_index_check: Option<ContentIndexCheck>,
+    format_version: FormatVersionCheck,
+    profile: ProfileCheck,
+    version_refusal: Option<VersionStatus>,
     no_allowlist: bool,
     capsule_id: String,
     signed_at: String,
@@ -889,15 +2250,22 @@ fn assemble_result(
                 .to_string(),
         );
     }
-    let trusted_signer_count = envelope_check.signers.iter().filter(|s| s.trusted).count();
+    let trusted_signer_count = distinct_trusted_keys(&envelope_check.signers);
+    let any_trusted = trusted_signer_count > 0
+        || inner_envelope_check
+            .as_ref()
+            .is_some_and(|e| e.signers.iter().any(|s| s.trusted));
     let ok = errors.is_empty()
         && content_index_check.ok
         && chain_check.ok
         && envelope_check.ok
         && inner_envelope_check.as_ref().is_none_or(|e| e.ok)
         && inner_content_index_check.as_ref().is_none_or(|ci| ci.ok);
-    VerifyResult {
+    let mut result = VerifyResult {
         ok,
+        verdict: Verdict::default(),
+        verdict_reason: None,
+        qualifiers: Vec::new(),
         level,
         capsule_id,
         signed_at,
@@ -905,20 +2273,376 @@ fn assemble_result(
         chain: chain_check,
         content_index: content_index_check,
         envelope: envelope_check,
+        // Early-return shape: fail-closed (bound=false, ok=false) — the
+        // capsule never reached the signer-set, actor-set, or skill-trust
+        // checks.
+        signer_set: SignerSetCheck::default(),
+        actor_set: ActorSetCheck::default(),
+        format_version,
+        profile,
+        // Refusal exclusivity (spec/lineage.md "Reporting", spec/profiles.md
+        // obligation 8): after an open-stage, version-gate, or profile-gate
+        // refusal the lineage channel holds its not-evaluated default and
+        // the refusal diagnosis is the only error carried — `declared:
+        // false` here means "not evaluated". The profile channel arrives
+        // from the caller because a version-gate refusal still REPORTS the
+        // observed declaration (at status "unevaluated"), while a
+        // profile-gate refusal reports the classification it made.
+        lineage: LineageCheck::default(),
+        skill_trust: SkillTrustCheck::default(),
         inner_envelope: inner_envelope_check,
         inner_content_index: inner_content_index_check,
         trusted_signer_count,
         notes,
-    }
+    };
+    derive_verdict(
+        &mut result,
+        version_refusal,
+        TrustFacts {
+            allowlist_empty: no_allowlist,
+            any_trusted,
+        },
+    );
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{
-        clean_capsule_bytes, recipient_x25519_private_key,
-        synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes,
+        chain_binding_capsule_bytes, clean_capsule_bytes, originator_ed25519_public_key_hex,
+        recipient_x25519_private_key, semantic_binding_capsule_bytes,
+        synthesize_capsule_with_envelope_mutation, tampered_capsule_bytes, vector_capsule_bytes,
     };
+
+    /// Refusal exclusivity (spec/lineage.md "Reporting"): a capsule
+    /// refused at the version gate carries the refusal diagnosis and
+    /// nothing else, and every other channel holds its fail-closed
+    /// default. `lineage.declared == false` there means NOT EVALUATED —
+    /// distinguishable from the "no claim" shape a capsule that reached
+    /// the check reports (`declared: false, ok: true`), so a reader can
+    /// never mistake "we never looked" for "it cited nothing".
+    #[test]
+    fn version_gate_refusal_leaves_the_lineage_channel_unevaluated() {
+        let refused = verify_capsule(
+            &vector_capsule_bytes("version-compat", "unknown-newer-version.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!refused.ok);
+        assert!(
+            !refused.lineage.declared && !refused.lineage.ok,
+            "refused capsule must hold the not-evaluated lineage default; got {:?}",
+            refused.lineage
+        );
+        assert!(refused.qualifiers.is_empty(), "an invalid verdict carries no qualifiers");
+
+        let reached = verify_capsule(&clean_capsule_bytes(), &VerifyOptions::default());
+        assert!(
+            !reached.lineage.declared && reached.lineage.ok,
+            "a capsule that reached the check and declares nothing reports the honest \
+             no-claim shape; got {:?}",
+            reached.lineage
+        );
+    }
+
+    /// No retroactive interpretation of sealed eras: the SAME malformed
+    /// value that fails a 0.7 capsule closed (`empty-array`) is an inert
+    /// unknown member inside a 0.6 one. `predecessors` is a claim
+    /// member, so it follows per-era rule sets — and the gate applies to
+    /// the SUBJECT capsule, not only to hops reached through the walk.
+    #[test]
+    fn predecessors_in_a_pre_lineage_era_capsule_is_inert() {
+        let v07 = verify_capsule(
+            &vector_capsule_bytes("lineage", "empty-array.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!v07.ok, "a 0.7 capsule's malformed declaration still fails closed");
+
+        let v06 = verify_capsule(
+            &vector_capsule_bytes("lineage", "predecessors-in-v06-capsule.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(
+            v06.ok,
+            "a v0.6 capsule must verify byte-identically to what a v0.6 reader gives it; \
+             errors: {:?}",
+            v06.errors
+        );
+        assert_eq!(v06.format_version.observed.as_deref(), Some("0.6"));
+        assert!(
+            !v06.lineage.declared && v06.lineage.ok && v06.lineage.entries.is_empty(),
+            "the era reports the not-declared shape; got {:?}",
+            v06.lineage
+        );
+        // The era's inertness is about the LINEAGE names: the base
+        // qualifiers still describe this run honestly (nothing was
+        // allowlisted), and asserting an empty array would only be
+        // pinning the absence of the trust vocabulary by accident.
+        assert!(
+            !v06.qualifiers.iter().any(|q| q.starts_with("lineage_")),
+            "a pre-lineage era emits no lineage qualifier; got {:?}",
+            v06.qualifiers
+        );
+        assert_eq!(v06.qualifiers, vec!["trust_not_evaluated".to_string()]);
+        assert!(
+            v06.notes.iter().any(|n| n.contains("unknown member under that era")),
+            "the uninterpreted member is reported, never silently dropped; got {:?}",
+            v06.notes
+        );
+    }
+
+    /// Linkage is REPORT-ONLY: a host handing the verifier the wrong file
+    /// must not be able to brand an honest successor a forgery. The area
+    /// records the fact and the qualifier surfaces it; `ok` is untouched.
+    #[test]
+    fn supplied_predecessor_bytes_never_flip_the_capsule_verdict() {
+        let successor = vector_capsule_bytes("lineage", "bob.capsule");
+        let wrong_seal = vector_capsule_bytes("lineage", "alice-later-seal.capsule");
+        let result = verify_capsule(
+            &successor,
+            &VerifyOptions {
+                predecessors: vec![wrong_seal],
+                ..VerifyOptions::default()
+            },
+        );
+        assert!(result.ok, "linkage must never falsify ok; errors: {:?}", result.errors);
+        assert!(!result.lineage.ok, "the AREA carries the failed custody claim");
+        // The lineage names ride the SAME array as the seven base names,
+        // in spec/results.md's order: `trust_not_evaluated` is 6,
+        // `lineage_mismatch` is 9. One array, one emission order — a
+        // renderer never has to merge two channels to tell the truth.
+        assert_eq!(
+            result.qualifiers,
+            vec!["trust_not_evaluated".to_string(), "lineage_mismatch".to_string()]
+        );
+        assert!(
+            result.errors.is_empty(),
+            "a linkage fact is never a top-level error; got {:?}",
+            result.errors
+        );
+    }
+
+    /// A plain capsule (signed cipher "none") with a `content.enc` appended
+    /// and a corrupt chain. Encrypted-mode detection must key off the signed
+    /// cipher, not file presence — otherwise the chain walk is skipped and
+    /// `chain.ok` is reported true for a chain nobody looked at.
+    #[test]
+    fn smuggled_blob_does_not_skip_the_chain_walk() {
+        let bytes = semantic_binding_capsule_bytes("smuggled-blob-broken-chain.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+
+        assert!(!result.ok, "smuggled blob + broken chain must not verify");
+        assert!(
+            result.chain.note.is_none(),
+            "chain must be walked, not deferred; got note {:?}",
+            result.chain.note
+        );
+        assert!(
+            !result.chain.ok,
+            "the corrupt chain must fail; got {:?}",
+            result.chain
+        );
+    }
+
+    /// `manifest.first_event_hash` (the capsule_id preimage) disagrees with
+    /// `envelope.first_event_hash` (which still matches chain event 1). The
+    /// capsule is correctly signed over its own manifest, so only an
+    /// explicit cross-check catches it.
+    #[test]
+    fn manifest_first_event_hash_must_match_envelope() {
+        let bytes = semantic_binding_capsule_bytes("first-event-hash-drift.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+
+        assert!(!result.ok, "first_event_hash drift must not verify");
+        assert!(
+            result.errors.iter().any(|e| e.category
+                == TopErrorCategory::ChainAnchor
+                && e.message.contains("manifest.first_event_hash mismatch")),
+            "expected a ChainAnchor error naming manifest.first_event_hash; got: {:?}",
+            result.errors
+        );
+    }
+
+    /// `manifest.encryption` must agree with the signed `envelope.cipher`,
+    /// and its `metadata_path` must resolve to a file in the package.
+    #[test]
+    fn manifest_encryption_must_agree_with_envelope_cipher() {
+        let declared = verify_capsule(
+            &semantic_binding_capsule_bytes("encryption-declared-plain.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!declared.ok, "plain capsule declaring encryption must fail");
+        assert!(
+            declared.errors.iter().any(|e| e.category == TopErrorCategory::Encryption
+                && e.message.contains("manifest.encryption must be")),
+            "expected an encryption-shape error; got: {:?}",
+            declared.errors
+        );
+
+        let dangling = verify_capsule(
+            &semantic_binding_capsule_bytes("encryption-metadata-path-dangling.capsule"),
+            &VerifyOptions::default(),
+        );
+        assert!(!dangling.ok, "dangling metadata_path must fail");
+        assert!(
+            dangling.errors.iter().any(|e| e.category == TopErrorCategory::Encryption
+                && e.message.contains("manifest.encryption.metadata_path")),
+            "expected a metadata_path error; got: {:?}",
+            dangling.errors
+        );
+    }
+
+    /// L3 decryption must resolve the decryption metadata through
+    /// `manifest.encryption.metadata_path`, not a hardcoded default path.
+    #[test]
+    fn l3_follows_manifest_declared_metadata_path() {
+        let bytes = semantic_binding_capsule_bytes("encryption-metadata-path-relocated.capsule");
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![originator_ed25519_public_key_hex()],
+                recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(
+            result.ok,
+            "relocated metadata_path must still decrypt at L3; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.level, "L3", "level must upgrade to L3");
+    }
+
+    /// Shared plumbing for the chain-walk field-rule tests below: unpack
+    /// the clean fixture and hand back (manifest, envelope, events).
+    fn clean_walk_inputs() -> (Manifest, Envelope, Vec<crate::schemas::ParsedEvent>) {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let envelope: Envelope =
+            serde_json::from_slice(map.get("provenance/envelope.json").unwrap()).unwrap();
+        let events =
+            crate::schemas::parse_chain_jsonl(map.get("chain/events.jsonl").unwrap()).unwrap();
+        (manifest, envelope, events)
+    }
+
+    fn walk(
+        events: &[crate::schemas::ParsedEvent],
+        manifest: &Manifest,
+        envelope: &Envelope,
+    ) -> ChainCheck {
+        let mut chain_check = ChainCheck::default();
+        let mut errors: Vec<TopError> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        chain_walk_into(
+            events,
+            manifest,
+            envelope,
+            &mut chain_check,
+            &mut errors,
+            &mut notes,
+            TopErrorScope::Outer,
+        );
+        chain_check
+    }
+
+    /// chain.md step 6: when the manifest declares a non-empty
+    /// participants[], an actor that is neither a declared participant nor
+    /// `system:host` must surface a per-event chain error. Pins the exact
+    /// message shape — the JS, Python, Swift, and Kotlin lanes reproduce
+    /// this string verbatim (minus the `seq N: ` prefix where a lane
+    /// carries `{seq, message}` instead).
+    #[test]
+    fn actor_not_in_participants_surfaces_as_chain_error() {
+        let (manifest, envelope, mut events) = clean_walk_inputs();
+        assert!(
+            !manifest.participants.is_empty(),
+            "fixture must declare participants for this test to bind"
+        );
+        events[0].event.actor = Some("human:mallory".to_string());
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(!chain_check.ok, "undeclared actor must fail the chain check");
+        assert!(
+            chain_check.errors.iter().any(|e| e
+                == "seq 1: actor \"human:mallory\" not in manifest.participants and not system:host"),
+            "expected the step-6 actor error; got: {:?}",
+            chain_check.errors
+        );
+    }
+
+    /// chain.md step 6, the other half: an EMPTY participants[] is the
+    /// manifest making no claim about who acted — a weaker claim made
+    /// honestly. The walk must NOT reject any actor then; the reduced
+    /// assurance is reported by the pipeline (actor_set.bound=false plus a
+    /// note), not enforced. Safe because participants is covered by
+    /// manifest_hash inside the signed payload: an attacker cannot empty
+    /// the list without breaking the signature.
+    #[test]
+    fn empty_participants_skips_actor_rule() {
+        let (mut manifest, envelope, mut events) = clean_walk_inputs();
+        manifest.participants.clear();
+        // Mutate the typed view only (the raw tree feeds the hash
+        // recompute); the assertion below is about the ABSENCE of the
+        // actor error, not the hash.
+        events[0].event.actor = Some("human:anyone".to_string());
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(
+            !chain_check
+                .errors
+                .iter()
+                .any(|e| e.contains("not in manifest.participants")),
+            "empty participants must not reject any actor; got: {:?}",
+            chain_check.errors
+        );
+    }
+
+    /// chain.md "Field rules": `kind` is a closed enum and readers reject
+    /// unknown kinds — unconditionally, in every tier (unlike the actor
+    /// rule, a custom kind is not a weaker claim; it is unreadable to the
+    /// foreign LLM reader).
+    #[test]
+    fn unknown_event_kind_surfaces_as_chain_error() {
+        let (mut manifest, envelope, mut events) = clean_walk_inputs();
+        events[0].event.kind = "gossip".to_string();
+
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(!chain_check.ok, "unknown kind must fail the chain check");
+        assert!(
+            chain_check.errors.iter().any(|e| e
+                == "seq 1: kind \"gossip\" is not one of decision, observation, mutation, session, checkpoint"),
+            "expected the kind-enum error; got: {:?}",
+            chain_check.errors
+        );
+
+        // And the enum stays closed with empty participants too.
+        manifest.participants.clear();
+        let chain_check = walk(&events, &manifest, &envelope);
+        assert!(
+            !chain_check.ok,
+            "unknown kind must fail even when participants is empty"
+        );
+    }
+
+    /// Every kind in the enum passes the same walk.
+    #[test]
+    fn all_enum_kinds_accepted() {
+        let (manifest, envelope, base) = clean_walk_inputs();
+        for kind in EVENT_KINDS {
+            let mut events = base.clone();
+            events[0].event.kind = kind.to_string();
+            let chain_check = walk(&events, &manifest, &envelope);
+            assert!(
+                !chain_check.errors.iter().any(|e| e.contains("is not one of")),
+                "kind {kind:?} must be accepted; got: {:?}",
+                chain_check.errors
+            );
+        }
+    }
 
     /// L2 happy path. The clean fixture must verify cleanly with no errors,
     /// no chain or content_index issues, and every signature valid. With no
@@ -926,7 +2650,7 @@ mod tests {
     #[test]
     fn clean_capsule_passes_l2() {
         let bytes = clean_capsule_bytes();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(result.ok, "clean capsule must pass; errors: {:?}", result.errors);
         assert!(result.errors.is_empty(), "no top-level errors: {:?}", result.errors);
@@ -956,6 +2680,63 @@ mod tests {
         );
     }
 
+    /// F02 regression. Appending a single byte after the EOCD must not
+    /// disable the container strictness pass: the padded capsule fails
+    /// closed with a Malformed error and zero trusted signers, while the
+    /// unmodified fixture still verifies. The JS reference lane rejects
+    /// the identical padded bytes at open time.
+    #[test]
+    fn trailing_byte_after_eocd_fails_closed() {
+        let clean = clean_capsule_bytes();
+        let map = unpack_zip(&clean).expect("clean fixture unzips");
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let allowlist = vec![manifest.originator.public_key.clone()];
+
+        let mut padded = clean.clone();
+        padded.push(0x00);
+        let padded_result = verify_capsule(
+            &padded,
+            &VerifyOptions {
+                allowlist: allowlist.clone(),
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(!padded_result.ok, "padded capsule must not verify");
+        assert_eq!(
+            padded_result.trusted_signer_count, 0,
+            "no signer may be trusted on a rejected container"
+        );
+        assert!(
+            padded_result.errors.iter().any(|e| {
+                e.category == TopErrorCategory::Malformed
+                    && e.message
+                        .contains("trailing bytes after end-of-central-directory")
+            }),
+            "expected a Malformed trailing-bytes error, got: {:?}",
+            padded_result.errors
+        );
+
+        let control = verify_capsule(
+            &clean,
+            &VerifyOptions {
+                allowlist,
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+        assert!(
+            control.ok,
+            "control must verify; errors: {:?}",
+            control.errors
+        );
+        assert!(control.trusted_signer_count >= 1, "control must be trusted");
+    }
+
     /// With the originator's pubkey on the allowlist, at least one signer
     /// must be marked trusted.
     #[test]
@@ -968,7 +2749,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(manifest_bytes).unwrap();
         let pk = manifest.originator.public_key.clone();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![pk], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(result.ok, "must still pass with allowlist; errors: {:?}", result.errors);
         assert!(
@@ -982,7 +2763,7 @@ mod tests {
     #[test]
     fn tampered_payload_fails_at_content_index() {
         let bytes = tampered_capsule_bytes("tampered-payload.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered payload must fail");
         assert!(
@@ -1009,7 +2790,7 @@ mod tests {
     #[test]
     fn tampered_chain_fails_at_chain_or_content_index() {
         let bytes = tampered_capsule_bytes("tampered-chain.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered chain must fail");
         assert!(
@@ -1022,7 +2803,7 @@ mod tests {
     #[test]
     fn tampered_envelope_fails_at_signature() {
         let bytes = tampered_capsule_bytes("tampered-envelope.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered envelope must fail");
         assert!(
@@ -1043,7 +2824,7 @@ mod tests {
     #[test]
     fn encrypted_capsule_rejected_with_clear_message() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered-blob.capsule must be rejected");
         assert!(
@@ -1065,9 +2846,11 @@ mod tests {
     }
 
     /// A synthesized capsule with `format.version = "0.5"` must be
-    /// rejected. This test builds a STORED-only ZIP from raw JSON bytes
-    /// (no real signatures), so most other checks will also fail — but
-    /// the format error must be present.
+    /// rejected — 0.5 is a well-formed version this verifier has never
+    /// supported (spec/versioning.md: unknown_older). The refusal must
+    /// carry the directional, NON-TAMPER diagnosis, report the observed
+    /// version as a fact, and fail closed EARLY: no downstream
+    /// hash-mismatch noise from applying the wrong era's rules.
     #[test]
     fn format_version_mismatch_rejected() {
         use std::io::Cursor;
@@ -1097,7 +2880,6 @@ mod tests {
                 "files": [],
                 "index_hash": "0".repeat(64)
             },
-            "skill_trust": {},
             "encryption": null,
             "created_at": "2026-01-01T00:00:00Z"
         });
@@ -1127,16 +2909,28 @@ mod tests {
         zw.write_all(b"").unwrap(); // empty chain
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "0.5 manifest must be rejected");
         assert!(
             result
                 .errors
                 .iter()
-                .any(|e| e.message.contains("unsupported manifest format.version")
+                .any(|e| e.message.contains("older than any version this verifier supports")
                     && e.category == TopErrorCategory::FormatVersion),
-            "expected an unsupported-version error tagged FormatVersion; got: {:?}",
+            "expected the directional unsupported-version error tagged FormatVersion; got: {:?}",
+            result.errors
+        );
+        // The observed version is a REPORTED fact even on refusal.
+        assert_eq!(result.format_version.observed.as_deref(), Some("0.5"));
+        assert_eq!(result.format_version.status, "unknown_older");
+        assert!(!result.format_version.supported);
+        // Early fail-closed: the version diagnosis is the ONLY error —
+        // no tamper-flavored mismatches from the wrong era's rules.
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "unknown-version refusal must not read as tampering: {:?}",
             result.errors
         );
     }
@@ -1147,7 +2941,7 @@ mod tests {
     #[test]
     fn malformed_zip_surfaces_as_malformed_category() {
         let bytes = b"not a zip at all".to_vec();
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "garbage bytes must not verify");
         assert!(
@@ -1189,7 +2983,6 @@ mod tests {
                 "files": [],
                 "index_hash": "0".repeat(64)
             },
-            "skill_trust": {},
             "encryption": null,
             "created_at": "2026-01-01T00:00:00Z"
         });
@@ -1218,7 +3011,7 @@ mod tests {
         zw.write_all(b"").unwrap();
         let bytes = zw.finish().unwrap().into_inner();
 
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
         assert!(!result.ok);
         assert!(
             result
@@ -1296,8 +3089,7 @@ mod tests {
                 "participants": [],
                 "first_event_hash": "0".repeat(64),
                 "content_index": {"files": [], "index_hash": "0".repeat(64)},
-                "skill_trust": {},
-                "encryption": null,
+                    "encryption": null,
                 "created_at": "2026-01-01T00:00:00Z"
             }),
             serde_json::json!({
@@ -1333,8 +3125,7 @@ mod tests {
                 "participants": [],
                 "first_event_hash": "2".repeat(64),
                 "content_index": {"files": [], "index_hash": "0".repeat(64)},
-                "skill_trust": {},
-                "encryption": null,
+                    "encryption": null,
                 "created_at": "2026-01-01T00:00:00Z"
             }),
             serde_json::json!({
@@ -1444,7 +3235,7 @@ mod tests {
     #[test]
     fn clean_encrypted_passes_l2() {
         let bytes = tampered_capsule_bytes("clean-encrypted.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(
             result.ok,
@@ -1478,7 +3269,7 @@ mod tests {
     #[test]
     fn tampered_blob_fails_at_encrypted_blob_hash() {
         let bytes = tampered_capsule_bytes("tampered-blob.capsule");
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "tampered-blob must fail at L2");
         assert!(
@@ -1518,7 +3309,7 @@ mod tests {
         let bytes = synthesize_capsule_with_envelope_mutation("clean.capsule", |env| {
             env["cipher"] = serde_json::Value::String("AES-256-GCM".to_string());
         });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "unsupported cipher must be rejected");
         assert!(
@@ -1543,7 +3334,7 @@ mod tests {
             synthesize_capsule_with_envelope_mutation("clean-encrypted.capsule", |env| {
                 env["cipher"] = serde_json::Value::String("none".to_string());
             });
-        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None });
+        let result = verify_capsule(&bytes, &VerifyOptions { allowlist: vec![], recipient_private_key: None, accept_versions: None, predecessors: Vec::new() });
 
         assert!(!result.ok, "encrypted blob with cipher='none' must fail");
         assert!(
@@ -1568,6 +3359,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1634,6 +3427,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1663,6 +3458,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1698,6 +3495,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some([0x42; 32]),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1724,6 +3523,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1760,6 +3561,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1797,6 +3600,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1824,6 +3629,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1875,15 +3682,18 @@ mod tests {
         )
         .expect("decryption must succeed for clean-encrypted");
         let inner_files = unpack_zip(&inner_zip_bytes).expect("inner zip must unpack");
-        let mut inner_envelope: Envelope = serde_json::from_slice(
+        let inner_envelope_value: serde_json::Value = serde_json::from_slice(
             inner_files
                 .get("provenance/envelope.json")
                 .expect("inner envelope must be present"),
         )
         .expect("inner envelope JSON must parse");
+        let mut inner_envelope: Envelope =
+            serde_json::from_value(inner_envelope_value.clone())
+                .expect("inner envelope must project to the typed view");
 
         // Sanity check: the unmutated inner envelope verifies cleanly.
-        let pre = verify_envelope_signatures(&inner_envelope, &[]);
+        let pre = verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &[]);
         assert!(
             pre.ok,
             "inner envelope must verify before mutation; got: {pre:?}"
@@ -1901,8 +3711,11 @@ mod tests {
         *sig = chars.into_iter().collect();
 
         // Step 4: re-run the helper. The mutated signer must be invalid,
-        // and `EnvelopeCheck.ok` must be false.
-        let post = verify_envelope_signatures(&inner_envelope, &[]);
+        // and `EnvelopeCheck.ok` must be false. (The canonical payload from
+        // the preserved tree is unchanged — only the stored signature hex
+        // moved — so this exercises the signature comparison, not the
+        // payload.)
+        let post = verify_envelope_signatures(&inner_envelope, &inner_envelope_value, &[]);
         assert!(
             !post.ok,
             "mutated inner envelope must not verify; got: {post:?}"
@@ -1928,6 +3741,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -1980,6 +3795,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2006,6 +3823,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2133,6 +3952,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
 
@@ -2179,6 +4000,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
         assert!(
@@ -2200,6 +4023,8 @@ mod tests {
             &VerifyOptions {
                 allowlist: vec![],
                 recipient_private_key: Some(recipient_x25519_private_key()),
+                accept_versions: None,
+                predecessors: Vec::new(),
             },
         );
         let has_inner = result
@@ -2279,7 +4104,7 @@ mod tests {
         )
         .expect("decryption must succeed for clean-encrypted");
         let inner_files = unpack_zip(&inner_zip_bytes).expect("inner zip must unpack");
-        let mut inner_manifest: Manifest = serde_json::from_slice(
+        let mut inner_manifest_value: serde_json::Value = serde_json::from_slice(
             inner_files
                 .get("manifest.json")
                 .expect("inner manifest must be present"),
@@ -2294,23 +4119,571 @@ mod tests {
 
         // Sanity check: the unmutated inner manifest_hash matches the inner
         // envelope's claim.
-        let pre = manifest_hash(&inner_manifest);
+        let pre = manifest_hash(&inner_manifest_value);
         assert_eq!(
             pre, inner_envelope.manifest_hash,
             "inner manifest_hash must verify before mutation"
         );
 
-        // Step 3: mutate `created_at` to a value that differs from the
-        // original. Picking a fixed past date keeps the test deterministic
-        // regardless of when the fixture was generated.
-        inner_manifest.created_at = "1999-01-01T00:00:00Z".to_string();
+        // Step 3: mutate `created_at` in the preserved tree to a value that
+        // differs from the original. Picking a fixed past date keeps the
+        // test deterministic regardless of when the fixture was generated.
+        inner_manifest_value["created_at"] =
+            serde_json::Value::String("1999-01-01T00:00:00Z".to_string());
 
         // Step 4: re-run the helper. The recomputed manifest_hash must
         // differ from the inner envelope's stored claim.
-        let post = manifest_hash(&inner_manifest);
+        let post = manifest_hash(&inner_manifest_value);
         assert_ne!(
             post, inner_envelope.manifest_hash,
             "mutated inner manifest_hash must differ from the inner envelope's claim"
+        );
+    }
+
+    /// The same trusted key under two roles is ONE distinct trusted key;
+    /// rows never inflate the count.
+    #[test]
+    fn distinct_trusted_keys_counts_keys_not_rows() {
+        let outcomes = vec![
+            SignerOutcome {
+                role: "originator".into(),
+                public_key: "AB".repeat(32),
+                valid: true,
+                trusted: true,
+            },
+            SignerOutcome {
+                role: "notary".into(),
+                public_key: "ab".repeat(32),
+                valid: true,
+                trusted: true,
+            },
+        ];
+        assert_eq!(distinct_trusted_keys(&outcomes), 1);
+    }
+
+    /// Originator binding requires role "originator" AND a matching key
+    /// AND a valid signature.
+    #[test]
+    fn originator_binding_requires_valid_originator_role_signer() {
+        let key = "cd".repeat(32);
+        let mk = |role: &str, pk: &str, valid: bool| SignerOutcome {
+            role: role.into(),
+            public_key: pk.into(),
+            valid,
+            trusted: false,
+        };
+        // Bound: exact match.
+        assert!(originator_binding_error(&key, &[mk("originator", &key, true)]).is_none());
+        // Not bound: wrong role, wrong key, or invalid signature.
+        assert!(originator_binding_error(&key, &[mk("creator", &key, true)]).is_some());
+        assert!(originator_binding_error(&key, &[mk("originator", &"ef".repeat(32), true)]).is_some());
+        assert!(originator_binding_error(&key, &[mk("originator", &key, false)]).is_some());
+    }
+
+    /// check_signer_set: absence reports (bound=false, ok=true); a present
+    /// commitment must byte-match the normalized signer set.
+    #[test]
+    fn check_signer_set_presence_binds_absence_reports() {
+        let key = "ab".repeat(32);
+        let envelope = serde_json::json!({
+            "signers": [ { "role": "originator", "public_key": key, "signature": "00" } ]
+        });
+        // Absent commitment: unbound, ok.
+        let absent = check_signer_set(&serde_json::json!({}), &envelope);
+        assert!(!absent.bound);
+        assert!(absent.ok);
+        // Matching commitment: bound, ok.
+        let bound = check_signer_set(
+            &serde_json::json!({
+                "signer_commitment": [ { "role": "originator", "public_key": key } ]
+            }),
+            &envelope,
+        );
+        assert!(bound.bound && bound.ok, "{:?}", bound.errors);
+        // Extra committed member with no signer: fail, naming the member.
+        let mismatch = check_signer_set(
+            &serde_json::json!({
+                "signer_commitment": [
+                    { "role": "originator", "public_key": key },
+                    { "role": "approver", "public_key": "cd".repeat(32) },
+                ]
+            }),
+            &envelope,
+        );
+        assert!(mismatch.bound && !mismatch.ok);
+        assert!(
+            mismatch.errors.iter().any(|e| e.contains("signer_commitment mismatch")
+                && e.contains(&"cd".repeat(32))),
+            "{:?}",
+            mismatch.errors
+        );
+        // null commitment is PRESENT and malformed, never treated as absent.
+        let null_commitment = check_signer_set(
+            &serde_json::json!({ "signer_commitment": null }),
+            &envelope,
+        );
+        assert!(null_commitment.bound && !null_commitment.ok);
+    }
+
+    /// A truncated or otherwise malformed allowlist entry can never match
+    /// a 32-byte Ed25519 public key, but because the vector was non-empty
+    /// the "no allowlist provided" advisory used to be suppressed —
+    /// leaving a PASS with trusted=false and no diagnostic anywhere in the
+    /// result (F44). Malformed entries must be reported per-entry in
+    /// `notes` and must not count as an allowlist for the advisory.
+    #[test]
+    fn malformed_allowlist_entry_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                // Truncated: 32 hex chars where 64 are required.
+                allowlist: vec!["cc76ce271ed61e515b598d73290a2b39".to_string()],
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(
+            result.ok,
+            "a malformed allowlist must not fail the capsule itself; errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.trusted_signer_count, 0, "nothing can be trusted");
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an all-malformed allowlist must still raise the no-allowlist advisory; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// The sibling case: a well-formed entry alongside a malformed one
+    /// still trusts the good key, and only the bad entry is reported.
+    #[test]
+    fn malformed_allowlist_entry_does_not_suppress_valid_one() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk = manifest.originator.public_key.clone();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["not-hex".to_string(), pk],
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "the well-formed key must still be honoured, got {}",
+            result.trusted_signer_count
+        );
+        assert!(
+            result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "expected a per-entry malformed-allowlist note; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "one valid entry means the allowlist is NOT empty; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("matched no signer")),
+            "a trusted signer means the no-match advisory must not fire; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// A syntactically valid allowlist that simply matches no signer must
+    /// say so: silence there is how an operator misreads PASS +
+    /// trusted=false as "trusted".
+    #[test]
+    fn allowlist_with_no_matching_signer_is_reported() {
+        let bytes = clean_capsule_bytes();
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec!["ab".repeat(32)],
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.trusted_signer_count, 0);
+        assert!(
+            result.notes.iter().any(|n| n.contains("matched no signer")),
+            "expected the matched-no-signer advisory; got: {:?}",
+            result.notes
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("no allowlist")),
+            "an allowlist WAS provided; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// JS-reference parity (`toKeyHex`): a 64-hex entry in ANY case is a
+    /// valid key and is normalized to lowercase, not dropped.
+    #[test]
+    fn uppercase_allowlist_entry_still_matches() {
+        let bytes = clean_capsule_bytes();
+        let map = unpack_zip(&bytes).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(map.get("manifest.json").unwrap()).unwrap();
+        let pk_upper = manifest.originator.public_key.to_uppercase();
+
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![pk_upper],
+                recipient_private_key: None,
+                accept_versions: None,
+                predecessors: Vec::new(),
+            },
+        );
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(
+            result.trusted_signer_count >= 1,
+            "uppercase hex is a valid key; got {} trusted",
+            result.trusted_signer_count
+        );
+        assert!(
+            !result.notes.iter().any(|n| n.contains("ignored invalid allowlist")),
+            "uppercase hex must not be dropped; got: {:?}",
+            result.notes
+        );
+    }
+
+    /// A zero-event chain is LEGAL when the capsule claims no anchors
+    /// (spec/chain.md "Empty chains"): the weakest honest shape must
+    /// verify, and the result must be honest that nothing was walked —
+    /// `chain.note` and `notes` both carry the empty-chain report.
+    #[test]
+    fn empty_chain_with_null_anchors_verifies() {
+        let bytes = chain_binding_capsule_bytes("empty-chain-null-anchors.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert!(result.chain.ok, "chain: {:?}", result.chain);
+        assert_eq!(result.chain.event_count, 0);
+        assert_eq!(result.chain.note.as_deref(), Some(EMPTY_CHAIN_NOTE));
+        assert!(
+            result.notes.iter().any(|n| n.contains("empty chain")),
+            "expected the empty-chain note; got {:?}",
+            result.notes
+        );
+    }
+
+    /// A capsule claiming first_event_hash / entry_hash while carrying no
+    /// events is the lie F22 is about: with zero events the anchor
+    /// cross-checks used to never execute, so the envelope was bound to
+    /// nothing and the capsule PASSED. All three anchor claims must be
+    /// null over an empty chain, fail-closed.
+    #[test]
+    fn empty_chain_with_claimed_anchors_fails_closed() {
+        let bytes = chain_binding_capsule_bytes("empty-chain-claimed-anchors.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(!result.ok, "claimed anchors over zero events must not verify");
+        for field in [
+            "envelope.first_event_hash",
+            "envelope.entry_hash",
+            "manifest.first_event_hash",
+        ] {
+            assert!(
+                result.errors.iter().any(|e| {
+                    e.category == TopErrorCategory::ChainAnchor
+                        && e.message.contains(field)
+                        && e.message.contains("must be null when the chain has no events")
+                }),
+                "expected a null-anchor violation for {field}; got {:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// Read a `spec/vectors/<collection>/output/<name>` fixture.
+    #[cfg(test)]
+    fn vector_bytes(collection: &str, name: &str) -> Vec<u8> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../spec/vectors")
+            .join(collection)
+            .join("output")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read fixture {path:?}: {e}"))
+    }
+
+    /// spec/profiles.md obligation 5 — REFUSAL EXCLUSIVITY. Having refused
+    /// at the profile gate, the verifier must not apply any profile's
+    /// rules: no hash recomputation, no signature check, no chain walk, no
+    /// skill-trust derivation, no actor binding. The profile diagnosis is
+    /// the only error the result carries, and every other channel holds
+    /// its fail-closed default. The fixture is internally coherent under
+    /// default rules except for the declaration, so a lane that ran the
+    /// rules anyway would report `ok: true` here.
+    #[test]
+    fn profile_refusal_is_the_only_diagnosis() {
+        let bytes = vector_bytes("profile-declaration", "unsupported-vendor-profile.capsule");
+        let result = verify_capsule(
+            &bytes,
+            &VerifyOptions {
+                allowlist: vec![originator_ed25519_public_key_hex()],
+                ..VerifyOptions::default()
+            },
+        );
+
+        assert!(!result.ok);
+        assert_eq!(result.verdict, Verdict::Unsupported);
+        assert_eq!(result.verdict_reason.as_deref(), Some("unsupported_profile"));
+        assert!(result.qualifiers.is_empty(), "qualifiers only qualify a VALID verdict");
+        assert_eq!(result.errors.len(), 1, "sole diagnosis; got {:?}", result.errors);
+        assert_eq!(result.errors[0].category, TopErrorCategory::Profile);
+        // Suite honesty: reporting "v0.6" about rules this verifier
+        // refused to apply would be a false fact on the result.
+        assert_eq!(result.format_version.suite, None);
+        assert_eq!(result.format_version.observed.as_deref(), Some("0.7"));
+        assert_eq!(result.profile.status, "unsupported");
+        assert_eq!(result.profile.observed.as_deref(), Some("x-test-kms-1"));
+        assert_eq!(result.profile.effective, None);
+        // Fail-closed defaults everywhere else.
+        assert!(!result.signer_set.bound && !result.signer_set.ok);
+        assert!(!result.actor_set.bound);
+        assert!(!result.skill_trust.capsule_signed);
+        assert_eq!(result.trusted_signer_count, 0);
+        assert!(result.envelope.signers.is_empty(), "no signature was checked");
+    }
+
+    /// The absence rule as a REPORTED fact (spec/profiles.md): a capsule
+    /// that declares nothing is governed by `v0.6-suite`/`1.0`, and the
+    /// result says so rather than leaving it folklore.
+    #[test]
+    fn absent_declaration_reports_the_default_profile() {
+        let result = verify_capsule(&clean_capsule_bytes(), &VerifyOptions::default());
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.profile.status, "default");
+        assert!(!result.profile.declared);
+        assert_eq!(result.profile.observed, None);
+        assert_eq!(result.profile.effective.as_deref(), Some("v0.6-suite"));
+        assert_eq!(result.profile.effective_version.as_deref(), Some("1.0"));
+        assert!(result.profile.supported);
+        assert_eq!(result.format_version.suite.as_deref(), Some("v0.6"));
+    }
+
+    /// spec/results.md: `ok == (verdict == Verdict::Valid)` is an
+    /// invariant — `Unsupported` partitions failures, it is not a third
+    /// truth value — and `verdict_reason` is non-null iff the verdict is
+    /// `Unsupported`. Checked across every outcome class this lane
+    /// produces.
+    #[test]
+    fn verdict_never_disagrees_with_ok() {
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            ("clean", clean_capsule_bytes()),
+            ("tampered", tampered_capsule_bytes("tampered-payload.capsule")),
+            (
+                "unknown-newer",
+                vector_bytes("version-compat", "unknown-newer-version.capsule"),
+            ),
+            (
+                "unknown-older",
+                vector_bytes("version-compat", "unknown-older-version.capsule"),
+            ),
+            (
+                "unsupported-profile",
+                vector_bytes("profile-declaration", "unsupported-vendor-profile.capsule"),
+            ),
+            (
+                "profile-mismatch",
+                vector_bytes("profile-declaration", "profile-mismatch-value.capsule"),
+            ),
+            ("garbage", b"not a zip at all".to_vec()),
+        ];
+        for (name, bytes) in cases {
+            let result = verify_capsule(&bytes, &VerifyOptions::default());
+            assert_eq!(
+                result.ok,
+                result.verdict == Verdict::Valid,
+                "{name}: ok={} disagrees with verdict={:?}",
+                result.ok,
+                result.verdict
+            );
+            assert_eq!(
+                result.verdict_reason.is_some(),
+                result.verdict == Verdict::Unsupported,
+                "{name}: verdict_reason is non-null iff unsupported; got {:?}",
+                result.verdict_reason
+            );
+            assert!(
+                result.qualifiers.is_empty() || result.verdict == Verdict::Valid,
+                "{name}: qualifiers only qualify a VALID verdict"
+            );
+        }
+    }
+
+    /// The weakest honest capsule — no signer commitment, no
+    /// participants, zero events, verified with no allowlist — VERIFIES,
+    /// and every reduced assurance is named on the verdict in the
+    /// spec-defined order. A host that says just "verified" about this
+    /// capsule is the failure mode spec/results.md exists to kill.
+    #[test]
+    fn maximally_qualified_capsule_names_every_weaker_claim() {
+        let bytes = vector_bytes("result-vocabulary", "maximally-qualified-valid.capsule");
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.verdict, Verdict::Valid);
+        assert_eq!(
+            result.qualifiers,
+            vec![
+                "signer_set_unbound",
+                "actor_set_unbound",
+                "empty_chain_not_walked",
+                "trust_not_evaluated",
+            ]
+        );
+        // Emission follows the spec-defined order, and nothing outside
+        // the closed set is invented.
+        let mut expected_order = QUALIFIERS.iter();
+        for emitted in &result.qualifiers {
+            assert!(
+                expected_order.any(|q| q == emitted),
+                "{emitted} is out of the spec-defined order or outside the closed set"
+            );
+        }
+    }
+
+    /// Pre-v0.7.1 result JSON — no `verdict`, `verdict_reason`,
+    /// `qualifiers`, or `profile` members — must still deserialize, into
+    /// the fail-closed shape: `Invalid`, no reason, no qualifiers, an
+    /// `unread` profile channel. A consumer reading such a result must
+    /// treat it as vocabulary-unaware, never as unqualified.
+    #[test]
+    fn pre_v071_result_json_deserializes_fail_closed() {
+        let json = r#"{
+            "ok": true,
+            "level": "L2",
+            "capsule_id": "abc",
+            "signed_at": "2026-05-08T12:00:00Z",
+            "errors": [],
+            "chain": { "ok": true, "errors": [], "event_count": 1, "note": null },
+            "content_index": { "ok": true, "errors": [] },
+            "envelope": { "ok": true, "signers": [], "note": null },
+            "inner_envelope": null,
+            "inner_content_index": null,
+            "trusted_signer_count": 0,
+            "notes": []
+        }"#;
+        let parsed: VerifyResult = serde_json::from_str(json).expect("pre-v0.7.1 JSON");
+        assert_eq!(parsed.verdict, Verdict::Invalid);
+        assert_eq!(parsed.verdict_reason, None);
+        assert!(parsed.qualifiers.is_empty());
+        assert_eq!(parsed.profile, ProfileCheck::default());
+        assert_eq!(parsed.profile.status, "unread");
+        // And the current shape serializes the wire vocabulary.
+        let current = verify_capsule(&clean_capsule_bytes(), &VerifyOptions::default());
+        let text = serde_json::to_string(&current).expect("serialize");
+        assert!(text.contains(r#""verdict":"valid""#), "{text}");
+        assert!(text.contains(r#""verdict_reason":null"#), "{text}");
+        assert!(text.contains(r#""status":"default""#), "{text}");
+    }
+
+    /// The L3 inner gate reads the INNER manifest's preserved tree
+    /// (spec/profiles.md obligation 11: the inner capsule declares its own
+    /// profile and is gated independently). No builder in this workspace
+    /// can seal an encrypted capsule around an alternate-profile inner, so
+    /// this drives the classifier over the real decrypted inner manifest
+    /// with a declaration injected — proving the gate reads
+    /// `format.profile` from the tree the inner ZIP actually carries.
+    #[test]
+    fn inner_declaration_is_classified_from_the_decrypted_manifest() {
+        let bytes = tampered_capsule_bytes("clean-encrypted.capsule");
+        let files = crate::zip_reader::unpack_zip(&bytes).expect("outer unpacks");
+        let outer_manifest: Manifest =
+            serde_json::from_slice(files.get("manifest.json").expect("manifest")).unwrap();
+        let outer_envelope: Envelope = serde_json::from_slice(
+            files
+                .get("provenance/envelope.json")
+                .expect("envelope"),
+        )
+        .unwrap();
+        let inner_zip = decrypt_inner_zip(
+            &outer_envelope,
+            &outer_manifest,
+            &files,
+            &recipient_x25519_private_key(),
+        )
+        .expect("decrypt");
+        let inner_files = crate::zip_reader::unpack_zip(&inner_zip).expect("inner unpacks");
+        let mut inner_manifest: serde_json::Value =
+            serde_json::from_slice(inner_files.get("manifest.json").expect("inner manifest"))
+                .unwrap();
+        let mut inner_envelope: serde_json::Value = serde_json::from_slice(
+            inner_files
+                .get("provenance/envelope.json")
+                .expect("inner envelope"),
+        )
+        .unwrap();
+
+        let classify = |manifest: &serde_json::Value, envelope: &serde_json::Value| {
+            classify_profile(
+                manifest.get("format").and_then(|f| f.get("profile")),
+                envelope.get("profile"),
+            )
+        };
+
+        // As shipped: no declaration anywhere, so the inner is governed by
+        // the era default and L3 proceeds.
+        assert_eq!(
+            classify(&inner_manifest, &inner_envelope).status,
+            ProfileStatus::Default
+        );
+
+        // Declared in the inner manifest alone: the silent inner envelope
+        // normalizes to the default, so the inner contradicts itself.
+        let declaration = serde_json::json!({ "id": "x-test-kms-1", "version": "1.0" });
+        inner_manifest["format"]["profile"] = declaration.clone();
+        assert_eq!(
+            classify(&inner_manifest, &inner_envelope).status,
+            ProfileStatus::Mismatched
+        );
+
+        // Declared coherently: the inner is refused on its own terms — the
+        // outer's supported profile grants it nothing.
+        inner_envelope["profile"] = declaration;
+        let declared = classify(&inner_manifest, &inner_envelope);
+        assert_eq!(declared.status, ProfileStatus::Unsupported);
+        assert_eq!(declared.observed.as_deref(), Some("x-test-kms-1"));
+    }
+
+    /// Reverse direction: a chain WITH events must claim them — null
+    /// envelope anchors fail as plain mismatches (rendered "null"), and a
+    /// null manifest anchor is called out explicitly.
+    #[test]
+    fn non_empty_chain_with_null_anchors_fails() {
+        let bytes = synthesize_capsule_with_envelope_mutation("clean.capsule", |env| {
+            env["first_event_hash"] = serde_json::Value::Null;
+            env["entry_hash"] = serde_json::Value::Null;
+        });
+        let result = verify_capsule(&bytes, &VerifyOptions::default());
+        assert!(!result.ok);
+        assert!(
+            result.errors.iter().any(|e| {
+                e.category == TopErrorCategory::ChainAnchor
+                    && e.message.contains("envelope.first_event_hash mismatch: null vs ")
+            }),
+            "expected a null-vs-hash mismatch; got {:?}",
+            result.errors
         );
     }
 }

@@ -1,8 +1,20 @@
 // JCS — RFC 8785 canonicalization. Mirrors the JavaScript reference SDK.
 //
-// Object keys sorted by code-unit order. Numbers via shortest-roundtrip,
-// rejecting NaN/Infinity. Strings escape RFC 8259 mandatory chars and
-// U+0000..U+001F. Arrays preserve insertion order.
+// Object keys sorted by UTF-16 code-unit order, per RFC 8785 §3.2.3. This
+// lane gets that for free: `sortedBy` is `sortedWith(compareBy(selector))`,
+// whose comparator bottoms out in `compareValues(a, b)` ->
+// `Comparable.compareTo` -> java.lang.String.compareTo, which is specified
+// to compare `char` values — and a Java `char` IS a UTF-16 code unit. Do
+// NOT replace it with a Collator, a locale-aware comparator, or a
+// codePoints() comparison: code-point order disagrees with UTF-16 whenever
+// a supplementary key (>= U+10000) meets a key in U+E000..U+FFFF, which is
+// exactly the bug sdk-py and sdk-swift had. Pinned by
+// SpecRegistryTest.jcsKeyOrderRegistry. Manifest.buildContentIndex and
+// CapsuleZip.pack lean on the same property for path ordering.
+//
+// Numbers via shortest-roundtrip, rejecting NaN/Infinity. Strings escape
+// RFC 8259 mandatory chars and U+0000..U+001F. Arrays preserve insertion
+// order.
 
 package ai.virion.capsule.core
 
@@ -35,6 +47,13 @@ object JCS {
         }
         is JCSValue.Decimal -> {
             require(v.v.isFinite()) { "JCS: non-finite number" }
+            // I-JSON acceptance boundary (spec/canonicalization.md), the
+            // double half of the Integer guard above: an integral double
+            // below 1e21 serializes as a *plain integer literal*, so the
+            // same ±(2^53 - 1) limit applies to it. Without this, 1e19 was
+            // laid out as 10000000000000000000 and no native-integer parser
+            // read it back the same.
+            require(isAcceptableDouble(v.v)) { outOfExactRange("(number)") }
             serializeNumber(v.v)
         }
         is JCSValue.Str -> encodeString(v.v)
@@ -49,6 +68,88 @@ object JCS {
     fun bytes(v: JCSValue): ByteArray = canonical(v).toByteArray(Charsets.UTF_8)
 
     private const val MAX_SAFE_INTEGER = (1L shl 53) - 1
+
+    /**
+     * Smallest magnitude whose ECMAScript Number::toString form uses
+     * exponent notation. Below it an integral double serializes as a
+     * plain integer literal; at or above it the token carries an `e`.
+     */
+    private const val PLAIN_INTEGER_CEILING = 1e21
+
+    /**
+     * Enforce the I-JSON acceptance boundary from spec/canonicalization.md.
+     *
+     * Numbers: a value whose canonical token is a plain integer literal
+     * (no "." and no "e") must satisfy |n| <= 2^53 - 1. Exponent-form
+     * tokens round-trip through every lane's double path and are accepted
+     * at any magnitude.
+     *
+     * Strings: a Java String is UTF-16 and can hold an unpaired surrogate.
+     * toByteArray(UTF_8) then substitutes '?' silently, so the capsule
+     * hashes different bytes with no error at all. Refuse instead.
+     *
+     * [canonical] and [encodeString] carry the same rules as backstops;
+     * this is the walking gate that names the offending path, so a builder
+     * or reader rejection tells the caller *which* value it was.
+     */
+    fun assertAcceptable(v: JCSValue, path: String = "$") {
+        when (v) {
+            is JCSValue.Null, is JCSValue.Bool -> Unit
+            is JCSValue.Str -> assertWellFormedUnicode(v.v, path)
+            is JCSValue.Integer -> require(Math.abs(v.v) <= MAX_SAFE_INTEGER) {
+                outOfExactRange(path)
+            }
+            is JCSValue.Decimal -> {
+                require(v.v.isFinite()) { "JCS: non-finite number at $path" }
+                require(isAcceptableDouble(v.v)) { outOfExactRange(path) }
+            }
+            is JCSValue.Arr -> v.items.forEachIndexed { i, item ->
+                assertAcceptable(item, "$path[$i]")
+            }
+            is JCSValue.Obj -> v.pairs.forEach { (key, value) ->
+                assertWellFormedUnicode(key, "$path.$key")
+                assertAcceptable(value, "$path.$key")
+            }
+        }
+    }
+
+    /**
+     * `false` when [d] is integral, beyond ±(2^53 - 1), and below 1e21 —
+     * i.e. exactly when its canonical token is an unsafe plain integer
+     * literal. Non-finite values are handled by the callers.
+     */
+    private fun isAcceptableDouble(d: Double): Boolean {
+        val magnitude = Math.abs(d)
+        val integral = d == Math.floor(d)
+        return !(integral &&
+            magnitude > MAX_SAFE_INTEGER.toDouble() &&
+            magnitude < PLAIN_INTEGER_CEILING)
+    }
+
+    private fun outOfExactRange(path: String): String =
+        "JCS: integer outside IEEE-754 exact range (|n| > 2^53 - 1) at $path; " +
+            "not representable identically across implementations"
+
+    /** Throw unless every surrogate in [s] is part of a well-formed pair. */
+    private fun assertWellFormedUnicode(s: String, path: String) {
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (Character.isHighSurrogate(c)) {
+                require(i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) {
+                    unpairedSurrogate(c, path)
+                }
+                i += 2
+                continue
+            }
+            require(!Character.isLowSurrogate(c)) { unpairedSurrogate(c, path) }
+            i++
+        }
+    }
+
+    private fun unpairedSurrogate(c: Char, path: String): String =
+        "JCS: unpaired surrogate U+%04X at %s; strings must be well-formed Unicode"
+            .format(c.code, path)
 
     /**
      * RFC 8785 §3.2.2.3: serialize per ECMAScript Number::toString
@@ -152,6 +253,11 @@ object JCS {
     }
 
     private fun encodeString(s: String): String {
+        // Backstop for every canonicalization path, including callers that
+        // did not go through assertAcceptable. Without it, the surrogate
+        // survives to toByteArray(UTF_8), which replaces it with '?' and
+        // yields a wrong hash with no error (spec/canonicalization.md).
+        assertWellFormedUnicode(s, "(string)")
         val out = StringBuilder(s.length + 2)
         out.append('"')
         for (c in s) {

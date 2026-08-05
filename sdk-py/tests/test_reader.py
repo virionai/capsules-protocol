@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from capsule.versions import CURRENT_VERSION
 from capsule.builder import CapsuleBuilder
 from capsule.crypto import generate_ed25519, generate_x25519
 from capsule.envelope import EncryptedCapsulesNotSupportedError
@@ -38,10 +39,10 @@ def test_from_bytes_loads_manifest_envelope_chain_and_program():
     zip_bytes, kp = _build()
     reader = CapsuleReader.from_bytes(zip_bytes)
     m = reader.manifest()
-    assert m["format"]["version"] == "0.6"
+    assert m["format"]["version"] == CURRENT_VERSION
     assert m["originator"]["public_key"] == kp.public_key_hex
     env = reader.envelope()
-    assert env["version"] == "0.6"
+    assert env["version"] == CURRENT_VERSION
     assert env["cipher"] == "none"
     events = reader.events()
     assert len(events) == 1
@@ -82,9 +83,18 @@ def test_is_encrypted_when_manifest_has_encryption():
 
     manifest = {
         "format": {"version": "0.6"},
+        "id": "11" * 32,
+        "originator": {"public_key": "22" * 32, "label": "Acme"},
+        "first_event_hash": "33" * 32,
+        "content_index": {"files": [], "index_hash": "44" * 32},
         "encryption": {"metadata_path": "x", "cipher": "ChaCha20-Poly1305"},
     }
-    envelope = {"version": "0.6", "cipher": "ChaCha20-Poly1305", "signers": []}
+    envelope = {
+        "version": "0.6",
+        "capsule_id": "11" * 32,
+        "cipher": "ChaCha20-Poly1305",
+        "signers": [{"role": "originator", "public_key": "22" * 32, "signature": "55" * 64}],
+    }
     zip_bytes = pack_zip(
         {
             "manifest.json": json.dumps(manifest).encode(),
@@ -284,3 +294,29 @@ def test_decrypt_third_of_three_recipients():
         recipient_private_key=third.private_key,
     )
     assert inner.program() == "# encrypted loan\n"
+
+
+def test_is_encrypted_ignores_a_smuggled_content_enc():
+    """The SIGNED envelope.cipher decides, not file presence.
+
+    smuggled-blob-broken-chain.capsule is a plain (cipher="none") capsule
+    with a content.enc appended and a corrupt chain. OR-semantics here
+    flip the reader into encrypted mode, and verify_capsule then defers
+    the chain to L3 and reports chain.ok=True for a chain nobody walked.
+    """
+    import pathlib
+
+    from capsule.verifier import verify_capsule
+
+    path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "spec/vectors/semantic-binding/output/smuggled-blob-broken-chain.capsule"
+    )
+    reader = CapsuleReader.from_bytes(path.read_bytes())
+    assert reader.envelope()["cipher"] == "none"
+    assert "content.enc" in reader.files()
+    assert reader.is_encrypted() is False
+
+    result = verify_capsule(reader)
+    assert "note" not in result["chain"], "the chain must be walked, not deferred"
+    assert result["chain"]["ok"] is False, "the corrupt chain must fail"

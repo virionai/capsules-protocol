@@ -18,11 +18,15 @@ public final class CapsuleBuilder {
         }
     }
 
+    /// Builder-side participant declaration. `role` and `label` are
+    /// OPTIONAL advisory attribution text (spec/manifest.md field rules):
+    /// a participant declared with only an actor id is a weaker claim
+    /// made honestly, and the sealed manifest omits the absent members.
     public struct Participant {
         public let actorId: String
-        public let role: String
-        public let label: String
-        public init(actorId: String, role: String, label: String) {
+        public let role: String?
+        public let label: String?
+        public init(actorId: String, role: String? = nil, label: String? = nil) {
             self.actorId = actorId; self.role = role; self.label = label
         }
     }
@@ -55,7 +59,7 @@ public final class CapsuleBuilder {
     private var programMd: String = "# Program\n"
     private var agentsMd: String? = nil
     private var bareEvents: [BareEvent] = []
-    private var skills: [String: (json: Data?, markdown: String?, signed: Bool)] = [:]
+    private var skills: [String: (json: Data?, markdown: String?)] = [:]
     private var payload: [String: Data] = [:]
     private var createdAt: String
 
@@ -74,20 +78,67 @@ public final class CapsuleBuilder {
         self.agentsMd = md; return self
     }
 
+    /// Declare the participant set. Throws (spec/manifest.md field rules,
+    /// finding A06) when any `actorId` falls outside the closed namespace
+    /// grammar — `human:<id>`, `ai:<id>`, `system:<id>`, `capsule:<id>`
+    /// with a non-empty `<id>` — because a capsule declaring an
+    /// uninterpretable participant fails every conformant verifier.
     @discardableResult
-    public func setParticipants(_ ps: [Participant]) -> CapsuleBuilder {
-        self.participants = ps; return self
+    public func setParticipants(_ ps: [Participant]) throws -> CapsuleBuilder {
+        for (i, p) in ps.enumerated() where !Chain.isValidActorId(p.actorId) {
+            throw CapsuleError.malformed(
+                "participants[\(i)].actor_id \(Chain.debugQuoted(p.actorId)) "
+                    + "does not match an allowed namespace (human:, ai:, system:, capsule:)"
+            )
+        }
+        self.participants = ps
+        return self
     }
 
     /// Append a chain event. The seq, event_id, prev_hash, and hash are
     /// computed at seal time.
+    ///
+    /// Throws (spec/chain.md) when `kind` is outside the closed enum
+    /// (always), or when the builder declares a non-empty participant set
+    /// and `actor` is neither `"system:host"` nor a declared actor id.
+    /// The builder never auto-registers participants — declaring who may
+    /// act is the caller's decision. A builder with NO declared
+    /// participants accepts any actor: that capsule makes a visibly
+    /// weaker claim (verifiers report the actor set as unbound).
     @discardableResult
     public func appendEvent(
         actor: String, kind: String, action: String, target: String,
         timestamp: String? = nil,
         payload: JCSValue = .object([]),
         untrustedPayloadFields: [String] = []
-    ) -> CapsuleBuilder {
+    ) throws -> CapsuleBuilder {
+        guard Chain.isValidEventKind(kind) else {
+            throw CapsuleError.malformed(
+                "event kind \(Chain.debugQuoted(kind)) is not one of "
+                    + Chain.EVENT_KINDS.joined(separator: ", ")
+            )
+        }
+        guard participants.isEmpty
+                || actor == Chain.HOST_ACTOR
+                || participants.contains(where: { $0.actorId == actor })
+        else {
+            throw CapsuleError.malformed(
+                "event actor \(Chain.debugQuoted(actor)) is not a declared participant: "
+                    + "call setParticipants(_:) with actor_id \(Chain.debugQuoted(actor)) "
+                    + "before appendEvent (only \"system:host\" may appear without one)"
+            )
+        }
+        // Writer obligation (spec/chain.md "Untrusted content"): a marking
+        // outside the path grammar has no defined resolution, so refuse it
+        // at the call site that introduced it rather than at some future
+        // reader.
+        for path in untrustedPayloadFields where !Chain.isValidUntrustedPayloadPath(path) {
+            throw CapsuleError.malformed(
+                "appendEvent: untrusted_payload_fields entry \(Chain.debugQuoted(path)) "
+                    + "is not a valid payload path (expected \"payload.<segment>\" "
+                    + "per spec/chain.md)"
+            )
+        }
         bareEvents.append(BareEvent(
             actor: actor, kind: kind, action: action, target: target,
             timestamp: timestamp ?? createdAt,
@@ -97,16 +148,19 @@ public final class CapsuleBuilder {
         return self
     }
 
-    /// Add a Capsule skill (skills/<id>/skill.json + SKILL.md).
+    /// Add a Capsule skill (skills/<id>/skill.json + SKILL.md). There is
+    /// no trust declaration here: skill trust is host-relative and DERIVED
+    /// at verify time (CapsuleVerification.skillTrust), so an author
+    /// cannot assert it (spec/trust.md "Skill trust").
     @discardableResult
-    public func addSkill(id: String, json: Data?, markdown: String?, signed: Bool = false)
+    public func addSkill(id: String, json: Data?, markdown: String?)
         -> CapsuleBuilder
     {
         precondition(id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
                      "invalid skill id: \(id)")
         precondition(id != "decryption",
                      "'decryption' is reserved for encryption metadata; not a skill")
-        skills[id] = (json, markdown, signed)
+        skills[id] = (json, markdown)
         return self
     }
 
@@ -123,7 +177,7 @@ public final class CapsuleBuilder {
     public func seal(signedAt: String? = nil) throws -> BuildResult {
         let sealedAt = signedAt ?? Self.isoNow()
         let parts = try buildInnerParts(sealedAt: sealedAt)
-        let contentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let contentIndex = try Manifest.buildContentIndex(parts.innerFiles)
         let manifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -132,11 +186,11 @@ public final class CapsuleBuilder {
             },
             contentIndex: contentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: parts.skillTrust,
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let mfHash = Manifest.hash(manifest)
+        let mfHash = try Manifest.hash(manifest)
 
         var envelope = Envelope.build(
             capsuleId: parts.capsuleId,
@@ -152,8 +206,8 @@ public final class CapsuleBuilder {
         ])
 
         var allFiles = parts.innerFiles
-        allFiles.append(("manifest.json", Manifest.bytes(manifest)))
-        allFiles.append(("provenance/envelope.json", JCS.bytes(envelope)))
+        allFiles.append(("manifest.json", try Manifest.bytes(manifest)))
+        allFiles.append(("provenance/envelope.json", try JCS.bytes(envelope)))
         let zipBytes = CapsuleZip.pack(allFiles.map { ($0.0, $0.1) })
 
         return BuildResult(
@@ -205,7 +259,7 @@ public final class CapsuleBuilder {
         // 2) Build the inner manifest + envelope. The inner package is what
         // recipients receive after decryption — a fully-formed plain
         // capsule that an L3 verifier can verify in isolation.
-        let innerContentIndex = Manifest.buildContentIndex(parts.innerFiles)
+        let innerContentIndex = try Manifest.buildContentIndex(parts.innerFiles)
         let innerManifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -214,12 +268,12 @@ public final class CapsuleBuilder {
             },
             contentIndex: innerContentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: parts.skillTrust,
             encryption: .null,
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let innerMfHash = Manifest.hash(innerManifest)
+        let innerMfHash = try Manifest.hash(innerManifest)
         var innerEnvelope = Envelope.build(
             capsuleId: parts.capsuleId,
             firstEventHash: parts.firstHash,
@@ -234,8 +288,8 @@ public final class CapsuleBuilder {
         ])
 
         var innerAllFiles = parts.innerFiles
-        innerAllFiles.append(("manifest.json", Manifest.bytes(innerManifest)))
-        innerAllFiles.append(("provenance/envelope.json", JCS.bytes(innerEnvelope)))
+        innerAllFiles.append(("manifest.json", try Manifest.bytes(innerManifest)))
+        innerAllFiles.append(("provenance/envelope.json", try JCS.bytes(innerEnvelope)))
         let innerZipBytes = CapsuleZip.pack(innerAllFiles)
 
         // 3) Encrypt the inner zip.
@@ -250,8 +304,13 @@ public final class CapsuleBuilder {
         // capsule sealed in Swift decrypts under JS and vice versa.
         let contentKey = Random.key32()
         let contentNonce = Random.nonce12()
-        let aad = JCS.bytes(.object([
-            ("version", .string("0.6")),
+        // The AAD's version member is the SEALING version — the same
+        // value the manifest and envelope declare. The read side rebuilds
+        // this AAD keyed by the capsule's DECLARED version
+        // (spec/versioning.md), so a hardcoded era here would produce a
+        // capsule that verifies but cannot be decrypted after a bump.
+        let aad = try JCS.bytes(.object([
+            ("version", .string(CapsuleVersions.current)),
             ("capsule_id", .string(parts.capsuleId)),
             ("first_event_hash", .string(parts.firstHash)),
             ("originator_public_key", .string(originator.keyPair.publicKeyHex)),
@@ -269,10 +328,14 @@ public final class CapsuleBuilder {
         for r in recipients {
             let eph = X25519KeyPair.generate()
             let shared = try eph.dh(peerPublicKey: r.publicKey)
+            // Key-wrap HKDF info embeds the SEALING version; the reader
+            // selects it by the declared version (CapsuleVersions
+            // .keyWrapInfo(declared)), so both sides must derive from the
+            // one CapsuleVersions.current source of truth.
             let wrapKey = HKDF.sha256(
                 ikm: shared,
                 salt: r.publicKey,
-                info: Data("capsule-key-wrap-v0.6".utf8),
+                info: CapsuleVersions.keyWrapInfo(CapsuleVersions.current),
                 length: 32
             )
             let wrapNonce = Random.nonce12()
@@ -291,17 +354,22 @@ public final class CapsuleBuilder {
             ("content_nonce", .string(Bytes.toHex(contentNonce))),
             ("key_bundles", .array(keyBundles)),
         ])
-        let decryptionMetaBytes = JCS.bytes(decryptionMeta)
+        let decryptionMetaBytes = try JCS.bytes(decryptionMeta)
 
         // 5) Outer manifest + envelope. The outer content_index covers
         // only skills/decryption/decryption.json — manifest.json,
-        // provenance/envelope.json, and content.enc are excluded from the
-        // index by `buildContentIndex` (see spec/manifest.md).
+        // provenance/envelope.json, and (because this capsule declares a
+        // cipher) content.enc are excluded. The content.enc exclusion is
+        // requested explicitly here: it is conditional on the signed
+        // envelope.cipher, not on file presence (see spec/manifest.md).
         let outerSidecars: [(String, Data)] = [
             ("skills/decryption/decryption.json", decryptionMetaBytes),
             ("content.enc", contentEnc),
         ]
-        let outerContentIndex = Manifest.buildContentIndex(outerSidecars)
+        let outerContentIndex = try Manifest.buildContentIndex(
+            outerSidecars,
+            excluded: Manifest.contentIndexExclusions(true)
+        )
         let outerManifest = Manifest.build(
             originator: .init(publicKeyHex: originator.keyPair.publicKeyHex,
                               label: originator.label),
@@ -310,15 +378,15 @@ public final class CapsuleBuilder {
             },
             contentIndex: outerContentIndex,
             firstEventHash: parts.firstHash,
-            skillTrust: [], // decryption metadata is not a skill
             encryption: .object([
                 ("metadata_path", .string("skills/decryption/decryption.json")),
                 ("cipher", .string("ChaCha20-Poly1305")),
             ]),
+            signerCommitment: signerCommitment(),
             createdAt: createdAt,
             capsuleId: parts.capsuleId
         )
-        let outerMfHash = Manifest.hash(outerManifest)
+        let outerMfHash = try Manifest.hash(outerManifest)
 
         var outerEnvelope = Envelope.build(
             capsuleId: parts.capsuleId,
@@ -336,8 +404,8 @@ public final class CapsuleBuilder {
 
         // 6) Pack the outer zip.
         var outerAllFiles = outerSidecars
-        outerAllFiles.append(("manifest.json", Manifest.bytes(outerManifest)))
-        outerAllFiles.append(("provenance/envelope.json", JCS.bytes(outerEnvelope)))
+        outerAllFiles.append(("manifest.json", try Manifest.bytes(outerManifest)))
+        outerAllFiles.append(("provenance/envelope.json", try JCS.bytes(outerEnvelope)))
         let outerZipBytes = CapsuleZip.pack(outerAllFiles)
 
         return BuildResult(
@@ -352,6 +420,16 @@ public final class CapsuleBuilder {
             fileCount: outerAllFiles.count,
             byteCount: outerZipBytes.count
         )
+    }
+
+    /// The exact seal-time signer set for this builder: the originator is
+    /// the sole signer in v0, so the commitment is a single member. Plain
+    /// and encrypted paths share it (one commitment serves the inner and
+    /// outer manifests).
+    private func signerCommitment() -> [Manifest.SignerCommitmentMember] {
+        Manifest.buildSignerCommitment([
+            .init(role: "originator", publicKeyHex: originator.keyPair.publicKeyHex)
+        ])
     }
 
     public static func isoNow() -> String {
@@ -371,7 +449,6 @@ public final class CapsuleBuilder {
         let capsuleId: String
         let firstHash: String
         let entryHash: String
-        let skillTrust: [(String, String)]
     }
 
     private func buildInnerParts(sealedAt: String) throws -> InnerParts {
@@ -385,7 +462,13 @@ public final class CapsuleBuilder {
                 untrustedPayloadFields: []
             ))
         }
-        let events = Chain.build(bare)
+        // I-JSON acceptance boundary (spec/canonicalization.md): refuse to
+        // seal a payload that cannot be canonicalized identically in every
+        // lane, rather than emitting a capsule only this lane can verify.
+        for (i, event) in bare.enumerated() {
+            try JCS.assertAcceptable(event.payload, path: "event[\(i)].payload")
+        }
+        let events = try Chain.build(bare)
         guard let firstHash = events.first?.hash, let entryHash = events.last?.hash else {
             throw CapsuleError.malformed("empty chain after build")
         }
@@ -398,7 +481,6 @@ public final class CapsuleBuilder {
         if let agents = agentsMd {
             innerFiles.append(("agents.md", Data(agents.utf8)))
         }
-        var skillTrust: [(String, String)] = []
         for (id, s) in skills {
             if let json = s.json {
                 innerFiles.append(("skills/\(id)/skill.json", json))
@@ -406,7 +488,6 @@ public final class CapsuleBuilder {
             if let md = s.markdown {
                 innerFiles.append(("skills/\(id)/SKILL.md", Data(md.utf8)))
             }
-            skillTrust.append((id, s.signed ? "signed" : "unsigned"))
         }
         for (path, bytes) in payload {
             innerFiles.append((path, bytes))
@@ -419,8 +500,7 @@ public final class CapsuleBuilder {
             innerFiles: innerFiles,
             capsuleId: capsuleId,
             firstHash: firstHash,
-            entryHash: entryHash,
-            skillTrust: skillTrust
+            entryHash: entryHash
         )
     }
 }

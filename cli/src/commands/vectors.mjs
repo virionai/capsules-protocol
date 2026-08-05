@@ -6,7 +6,7 @@
 // asserts the verifier-observed identity / hashes match the file's
 // `expected.*` fields.
 //
-// The contract is: any conforming v0.6 implementation should accept the
+// The contract is: any conforming implementation should accept the
 // embedded capsule bytes AND should compute the same capsule_id,
 // manifest_hash, content_index_hash, first_event_hash, entry_hash. If
 // any of those drift, this command exits 1 with a per-field diff. That
@@ -16,7 +16,7 @@
 // Python, Swift, Kotlin to prove the implementations agree.
 
 import { readFile } from "node:fs/promises";
-import { CapsuleReader, verifyCapsule, hexToBytes } from "@capsule/sdk-v0.6-prototype";
+import { CapsuleReader, verifyCapsule, hexToBytes } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { CLIError, check, out, truncHex } from "../format.mjs";
 
@@ -56,7 +56,8 @@ export async function vectorsCmd(argv) {
 }
 
 async function vectorsVerify(argv) {
-  const args = parseArgs(argv, { booleans: ["json"] });
+  const args = parseArgs(argv, { booleans: ["json"], maxPositionals: 1 });
+  if (args.help) { process.stderr.write(USAGE); return 0; }
   const file = args._[0];
   if (!file) { process.stderr.write(USAGE); return 2; }
 

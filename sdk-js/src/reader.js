@@ -1,6 +1,6 @@
 // CapsuleReader: opens a .capsule, exposes the inner pieces, decrypts.
 
-import { jcs } from "./canonical.js";
+import { jcs, parseJsonStrict } from "./canonical.js";
 import { eventsFromJsonl } from "./chain.js";
 import {
   chacha20Poly1305Decrypt,
@@ -11,6 +11,8 @@ import {
 } from "./crypto.js";
 import { unpackZip } from "./zip.js";
 import { toRawKey } from "./keys.js";
+import { keyWrapInfo, requireKnownVersion } from "./versions.js";
+import { requireSupportedProfile } from "./profiles.js";
 
 const dec = new TextDecoder();
 
@@ -23,30 +25,73 @@ const HEX64 = /^[0-9a-f]{64}$/;
  * on the field being a 64-hex lowercase string per spec.
  */
 function validateManifestShape(manifest) {
-  if (manifest == null || typeof manifest !== "object") {
+  if (manifest == null || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("manifest.json is not a JSON object");
   }
-  if (manifest.format?.version !== "0.6") {
-    throw new Error(`manifest.format.version: expected '0.6', got ${JSON.stringify(manifest.format?.version)}`);
-  }
+  // Any KNOWN version opens (spec/versioning.md): a v0.6 capsule stays
+  // openable by every future reader, forever. Unknown versions fail
+  // closed with a diagnosis distinct from malformation or tampering.
+  requireKnownVersion("manifest.format.version", manifest.format?.version);
   if (!HEX64.test(manifest.id ?? "")) {
     throw new Error(`manifest.id is not a 64-char lowercase hex string: ${JSON.stringify(manifest.id)}`);
   }
   if (!manifest.originator || !HEX64.test(manifest.originator.public_key ?? "")) {
     throw new Error("manifest.originator.public_key must be a 64-char lowercase hex string");
   }
-  if (!HEX64.test(manifest.first_event_hash ?? "")) {
-    throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string");
+  // participants is an ARRAY when present (spec/manifest.md). An absent
+  // member (and an empty array) is the legal unbound-actor-set shape; a
+  // PRESENT non-array declaration is malformed — silently skipping it
+  // would no-op the actor-membership rule and the actor_id grammar check.
+  if ("participants" in manifest && !Array.isArray(manifest.participants)) {
+    throw new Error("manifest.participants must be an array of participant objects");
   }
+  // null is the legal empty-chain shape (spec/chain.md "Empty chains"):
+  // a zero-event capsule has no first event to hash. The verifier enforces
+  // the null-anchor / event-count consistency; the reader only rejects
+  // values that are neither null nor well-formed hex.
+  const feh = manifest.first_event_hash ?? null;
+  if (feh !== null && !HEX64.test(feh)) {
+    throw new Error("manifest.first_event_hash must be a 64-char lowercase hex string or null");
+  }
+  validateContentIndexShape(manifest.content_index);
+}
+
+/**
+ * verifyCapsule reads content_index.index_hash and iterates
+ * content_index.files unconditionally. Checking the shape at the parse
+ * boundary is what keeps verification a total function over whatever the
+ * reader hands back, instead of a TypeError on a hand-edited manifest.
+ */
+function validateContentIndexShape(index) {
+  if (index == null || typeof index !== "object" || Array.isArray(index)) {
+    throw new Error("manifest.content_index must be a JSON object");
+  }
+  if (!HEX64.test(index.index_hash ?? "")) {
+    throw new Error("manifest.content_index.index_hash must be a 64-char lowercase hex string");
+  }
+  if (!Array.isArray(index.files)) {
+    throw new Error("manifest.content_index.files must be an array");
+  }
+  index.files.forEach((f, i) => {
+    if (f == null || typeof f !== "object" || Array.isArray(f)) {
+      throw new Error(`manifest.content_index.files[${i}] must be a JSON object`);
+    }
+    if (typeof f.path !== "string" || f.path.length === 0) {
+      throw new Error(`manifest.content_index.files[${i}].path must be a non-empty string`);
+    }
+    if (!HEX64.test(f.sha256 ?? "")) {
+      throw new Error(
+        `manifest.content_index.files[${i}].sha256 must be a 64-char lowercase hex string`,
+      );
+    }
+  });
 }
 
 function validateEnvelopeShape(envelope) {
   if (envelope == null || typeof envelope !== "object") {
     throw new Error("envelope.json is not a JSON object");
   }
-  if (envelope.version !== "0.6") {
-    throw new Error(`envelope.version: expected '0.6', got ${JSON.stringify(envelope.version)}`);
-  }
+  requireKnownVersion("envelope.version", envelope.version);
   if (!HEX64.test(envelope.capsule_id ?? "")) {
     throw new Error("envelope.capsule_id must be a 64-char lowercase hex string");
   }
@@ -60,12 +105,30 @@ export class CapsuleReader {
     this.files = files; // Map<path, Uint8Array>
     const manifestBytes = files.get("manifest.json");
     if (!manifestBytes) throw new Error("missing manifest.json");
-    this._manifest = JSON.parse(dec.decode(manifestBytes));
+    this._manifest = parseJsonStrict(manifestBytes, "manifest.json");
     validateManifestShape(this._manifest);
     const envBytes = files.get("provenance/envelope.json");
     if (!envBytes) throw new Error("missing provenance/envelope.json");
-    this._envelope = JSON.parse(dec.decode(envBytes));
+    this._envelope = parseJsonStrict(envBytes, "provenance/envelope.json");
     validateEnvelopeShape(this._envelope);
+    // Profile gate (spec/profiles.md): version gate first (the two
+    // requireKnownVersion calls above), profile gate second, nothing
+    // else until both pass. Applying an unknown profile's rules — or
+    // silently downgrading to the defaults — would manufacture mismatch
+    // errors indistinguishable from tampering. The refusal is OPEN-
+    // stage: a reader that cannot establish its governing rules cannot
+    // meaningfully construct at all. The decrypt() path re-enters this
+    // constructor for the inner capsule, so an encrypted capsule's
+    // inner declaration is gated independently at L3 (no inner/outer
+    // equality rule: a KMS-wrapped outer over a plain default inner is
+    // a legitimate authorial shape).
+    requireSupportedProfile(this._manifest, this._envelope);
+    // Set only on the reader `decrypt()` returns: the layer this one
+    // came out of. It carries the L3 inner/outer lineage equality
+    // (spec/lineage.md standalone check 4) to verifyCapsule without the
+    // caller having to know the check exists — a normative fail-closed
+    // rule must not be opt-in.
+    this._outerManifest = null;
   }
 
   static async fromBytes(bytes) {
@@ -75,6 +138,9 @@ export class CapsuleReader {
 
   manifest() { return this._manifest; }
   envelope() { return this._envelope; }
+
+  /** The enclosing layer's manifest, or null for a top-level reader. */
+  outerManifest() { return this._outerManifest; }
 
   isEncrypted() {
     return this._envelope.cipher !== "none" && this.files.has("content.enc");
@@ -105,20 +171,26 @@ export class CapsuleReader {
   }
 
   /**
-   * Returns Map<skill_id, { json, markdown, trust }>.
+   * Returns Map<skill_id, { json, markdown }>.
    * Excludes 'decryption' (which is metadata, not a skill).
+   *
+   * Deliberately carries NO trust tier: the tier is host-relative (it
+   * depends on the allowlist the host supplies at verify time), so a
+   * reader cannot know it. Take the classification from
+   * `verifyCapsule(...).skillTrust` — and until a skill classifies
+   * "signed" there, treat its SKILL.md as untrusted text, never as
+   * instructions (spec/trust.md "Skill trust").
    */
   skills() {
     const out = new Map();
-    const trust = this._manifest.skill_trust ?? {};
     for (const [path, bytes] of this.files.entries()) {
       const m = path.match(/^skills\/([^/]+)\/(skill\.json|SKILL\.md)$/);
       if (!m) continue;
       const id = m[1];
       if (id === "decryption") continue;
-      if (!out.has(id)) out.set(id, { json: null, markdown: null, trust: trust[id] ?? "unsigned" });
+      if (!out.has(id)) out.set(id, { json: null, markdown: null });
       const slot = out.get(id);
-      if (m[2] === "skill.json") slot.json = JSON.parse(dec.decode(bytes));
+      if (m[2] === "skill.json") slot.json = parseJsonStrict(bytes, path);
       else slot.markdown = dec.decode(bytes);
     }
     return out;
@@ -130,7 +202,7 @@ export class CapsuleReader {
     const path = this._manifest.encryption?.metadata_path ?? "skills/decryption/decryption.json";
     const b = this.files.get(path);
     if (!b) return null;
-    return JSON.parse(dec.decode(b));
+    return parseJsonStrict(b, path);
   }
 
   /**
@@ -166,10 +238,13 @@ export class CapsuleReader {
     const wrappedKey = hexToBytes(bundle.wrapped_key);
 
     const shared = x25519DH(recipientPrivateKey, ephPub);
+    // HKDF info is keyed by the capsule's DECLARED version
+    // (spec/versioning.md): decrypting a v0.6 capsule uses the v0.6
+    // wrap-domain forever, whatever version this SDK seals at.
     const wrapKey = hkdfSha256(
       shared,
       recipientPublicKey,
-      Buffer.from("capsule-key-wrap-v0.6", "utf8"),
+      keyWrapInfo(this._envelope.version),
       32,
     );
     const contentKey = chacha20Poly1305Decrypt(wrapKey, wrapNonce, Buffer.alloc(0), wrappedKey);
@@ -177,7 +252,7 @@ export class CapsuleReader {
     // AAD reconstructed per spec/envelope.md "Encryption" — must mirror
     // builder exactly. Do not include manifest_hash; see spec rationale.
     const aad = jcs({
-      version: "0.6",
+      version: this._envelope.version,
       capsule_id: this._envelope.capsule_id,
       first_event_hash: this._envelope.first_event_hash,
       originator_public_key: this._manifest.originator.public_key,
@@ -189,6 +264,8 @@ export class CapsuleReader {
     const innerZipBytes = chacha20Poly1305Decrypt(contentKey, contentNonce, aad, contentEnc);
 
     const innerFiles = await unpackZip(innerZipBytes);
-    return new CapsuleReader(innerFiles);
+    const inner = new CapsuleReader(innerFiles);
+    inner._outerManifest = this._manifest;
+    return inner;
   }
 }
