@@ -85,6 +85,41 @@ print("Signers: \(v.signers.map { "\($0.role) trusted=\($0.trusted)" })")
 print("Program:\n\(parsed.programMd)")
 ```
 
+## Quick start — checking a successor's lineage
+
+A successor capsule declares the exact sealed artifact(s) it continues
+from in `manifest.predecessors` (spec/lineage.md). The declaration is
+always reported; supplying the predecessor's bytes is what turns it from
+a claim into a verified link.
+
+```swift
+// No bytes supplied: the claim is reported, never silently believed.
+let claim = CapsuleVerifier.verify(successorBytes)
+for entry in claim.lineage.entries {
+    print("predecessor \(entry.capsuleId ?? "-"): \(entry.status)")  // "unverified"
+}
+
+// With the predecessor in hand, every equality is checked against
+// RECOMPUTED values, and deeper hops resolve from further supplied files.
+let linked = CapsuleVerifier.verify(
+    successorBytes, predecessors: [predecessorBytes, grandparentBytes])
+print(linked.lineage.verifiedDepth)   // 2
+print(linked.lineage.ok)              // false if anything CHECKED contradicts
+print(linked.qualifiers)              // e.g. ["lineage_mismatch"]
+```
+
+Two rules a host must not paper over:
+
+- **Linkage is report-only.** A mismatched or invalid predecessor
+  falsifies `lineage.ok` and never `ok` — otherwise anyone could flip a
+  valid capsule's verdict by handing this verifier the wrong file. A
+  malformed *declaration*, by contrast, fails the capsule closed (the
+  `lineage` check).
+- **Lineage is not endorsement.** It is the successor's one-way claim;
+  the predecessor's originator has not countersigned it. Render
+  unverified entries — `notes` carries the pinned "declared, not
+  verified" and "not countersigned" wording — rather than dropping them.
+
 ## Quick start — seal + open an encrypted capsule
 
 ```swift
@@ -204,7 +239,9 @@ shared protocol keeps those adapters thin.
   Chain, Manifest, Envelope, Builder (plain + multi-recipient encrypted
   `seal(recipients:)`), Reader (`parse` + `openInner`), Verifier (L2
   outer-only + L3 decrypted-content), JCSValue value type with
-  literal-syntax sugar (`jobj`, `jarr`).
+  literal-syntax sugar (`jobj`, `jarr`), Lineage (`manifest.predecessors`
+  standalone checks + the report-only `predecessors:` linkage walk,
+  reported as `CapsuleVerification.lineage`).
 - `CapsuleSkills`: `CapsuleSkill` model, `ParsedCapsule.skills()`
   extension, trust-tier semantics.
 - `CapsuleLLM`: `CapsuleLocalLLM` + `CapsuleSkillRuntime` protocols,
@@ -219,6 +256,10 @@ shared protocol keeps those adapters thin.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `[Signer]`
   but `CapsuleBuilder.seal` currently signs only with the originator.
   The lower-level `Envelope` API is callable for hosts that need it.
+- **Writer-side lineage (rewrap)**: this lane verifies lineage in full;
+  the builder conveniences that EMIT a declaration
+  (`continueFrom` / `declarePredecessor` / `rewrapCapsule`) are a
+  declared fast-follow, available today in the JS and Python SDKs.
 
 ## License
 

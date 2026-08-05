@@ -46,6 +46,16 @@ here.
     { "role": "approver", "public_key": "<64-hex ed25519 raw>" },
     { "role": "originator", "public_key": "<64-hex ed25519 raw>" }
   ],
+  "predecessors": [
+    {
+      "capsule_id": "<64-hex>",
+      "format_version": "0.6",
+      "originator_public_key": "<64-hex ed25519 raw>",
+      "first_event_hash": "<64-hex> | null",
+      "entry_hash": "<64-hex> | null",
+      "manifest_hash": "<64-hex>"
+    }
+  ],
   "encryption": null,
   "created_at": "2026-05-07T12:00:00Z"
 }
@@ -191,6 +201,28 @@ here.
   - One commitment value serves both the inner and outer manifests of
     an encrypted capsule — both are sealed by the same signer list.
   - Conformance vectors: `spec/vectors/signer-set/`.
+- `predecessors`: the lineage declaration — the exact sealed
+  artifact(s) this capsule verifiably declares it continues from, as an
+  array of six-member entries (spec revision v0.7.1). OPTIONAL —
+  **presence binds, absence reports**: an absent member is "no claim"
+  (verifiers report `declared=false` and proceed); a PRESENT member no
+  reader can interpret is the capsule asserting something meaningless
+  about its own origin, rejected fail-closed with the same
+  `predecessors[i].<member>` diagnosis in every lane. Entries name
+  **immediate parents** only (never an inline ancestry list); all six
+  members are REQUIRED per entry; `first_event_hash`/`entry_hash` are
+  both `null` (zero-event predecessor) or both 64-hex; lowercase hex is
+  required, not normalized; a present-but-empty array and duplicate
+  `manifest_hash` values are malformed. When the declared
+  `format_version` is a KNOWN era, the declared `capsule_id` must equal
+  the recompute under that era's identity rule (below), fail-closed;
+  an unknown declared era skips the recompute and is reported, never
+  failed. Linkage against supplied predecessor bytes is REPORT-ONLY.
+  Full rules — verification, reporting, the entry-status vocabulary,
+  encrypted-successor placement, and the rewrap writer conventions —
+  live in [lineage.md](lineage.md). v0.7.1 declarations commit to
+  plain, default-profile (`v0.6-suite`) predecessors. Conformance
+  vectors: `spec/vectors/lineage/`.
 - `encryption`: `null` for plain capsules; for encrypted capsules a
   small object pointing to the decryption metadata path:
   ```json

@@ -4,7 +4,7 @@
 // chain length, action histogram, payload tree size, signer summary. No
 // verification — use `capsule verify` for that.
 
-import { CapsuleReader } from "@capsule/sdk-v0.7-prototype";
+import { CapsuleReader, eraDefinesLineage } from "@capsule/sdk-v0.7-prototype";
 import { parseArgs } from "../args.mjs";
 import { bytesText, out, readBytes, truncHex } from "../format.mjs";
 
@@ -62,6 +62,10 @@ export async function inspectCmd(argv) {
       signed_at: env.signed_at,
       cipher: env.cipher,
       signers: env.signers?.map((s) => ({ role: s.role, public_key: s.public_key })) ?? [],
+      // The lineage declaration verbatim (spec/lineage.md). inspect
+      // verifies nothing, so this is the claim as sealed — `capsule
+      // verify --predecessor` is what checks it against bytes.
+      predecessors: m.predecessors ?? null,
       content_index_files: m.content_index?.files?.length ?? 0,
       chain_length: chainLen,
       action_histogram: actionHistogram,
@@ -86,6 +90,42 @@ export async function inspectCmd(argv) {
     out("Participants:");
     for (const p of m.participants) {
       out(`  - ${p.actor_id.padEnd(28)} role=${p.role}` + (p.label ? `  ${p.label}` : ""));
+    }
+  }
+
+  // Declared lineage is printed whenever the member is present — a
+  // custody claim must never quietly disappear from a report
+  // (spec/lineage.md). inspect checks nothing, so every entry is
+  // labelled exactly that.
+  if (m.predecessors !== undefined) {
+    out("");
+    if (!eraDefinesLineage(m.format.version)) {
+      // A claim member in a pre-lineage era: an unknown member there,
+      // never shape-checked. Saying otherwise would promise a check
+      // `capsule verify` deliberately does not run (spec/versioning.md).
+      out("Predecessors (uninterpreted):");
+      out(`  ${JSON.stringify(m.predecessors)}`);
+      out(`  (era ${m.format.version} defines no lineage semantics — this is an unknown`);
+      out("   member there: preserved and hashed, never shape-checked)");
+    } else if (Array.isArray(m.predecessors)) {
+      out(`Predecessors (declared lineage, ${m.predecessors.length} entr${m.predecessors.length === 1 ? "y" : "ies"}):`);
+      for (const p of m.predecessors) {
+        out(`  - capsule ${p?.capsule_id ?? "(missing capsule_id)"}  era ${p?.format_version ?? "(missing format_version)"}`);
+        out(`      originator:        ${p?.originator_public_key ?? "(missing)"}`);
+        out(`      first_event_hash:  ${p?.first_event_hash ?? "null"}`);
+        out(`      entry_hash:        ${p?.entry_hash ?? "null"}`);
+        out(`      manifest_hash:     ${p?.manifest_hash ?? "(missing)"}`);
+        out("      declared, not verified — supply the predecessor bytes to");
+        out("        `capsule verify <file> --predecessor <predecessor.capsule>`");
+      }
+    } else {
+      out("Predecessors (declared lineage):");
+      out(`  ${JSON.stringify(m.predecessors)}`);
+      out("  (not an array — `capsule verify` fails this declaration closed)");
+    }
+    if (eraDefinesLineage(m.format.version)) {
+      out("  Note: lineage is the successor's declaration; the predecessor's");
+      out("        originator has not countersigned it.");
     }
   }
 

@@ -21,6 +21,9 @@
 //   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 //   - pith-authoring/vectors.json     (verbatim technical prose + the
 //                                      pith_normalized_fields marker verify)
+//   - lineage/vectors.json            (manifest.predecessors: fail-closed
+//                                      standalone checks + REPORT-ONLY
+//                                      supplied-bytes linkage)
 //
 // signing-input.json is consumed by SigningInputVectorTests, and
 // jcs-numbers.json / ed25519-key-validation.json by their own test files.
@@ -114,6 +117,7 @@ final class SpecRegistryTests: XCTestCase {
         "encrypted_blob": "encrypted_blob_hash",
         "signer_set": "signer_commitment",
         "originator_binding": "originator_binding",
+        "lineage": "lineage",
     ]
 
     /// Verify-stage vectors that THIS lane legitimately rejects at OPEN:
@@ -127,8 +131,13 @@ final class SpecRegistryTests: XCTestCase {
         "invalid-chain-json",
     ]
 
+    /// All diagnostic text a vector's `error_includes` may pin. Lineage
+    /// entry errors join it because linkage diagnoses are REPORT-ONLY —
+    /// they never fail a check, but their wording is pinned (e.g.
+    /// "different sealed state of the declared predecessor").
     private func haystack(_ v: CapsuleVerification) -> String {
-        v.checks.map { "\($0.name) \($0.detail)" }.joined(separator: " ")
+        (v.checks.map { "\($0.name) \($0.detail)" }
+            + v.lineage.entries.flatMap { $0.errors }).joined(separator: " ")
     }
 
     private func assertVerifyOutcome(_ name: String,
@@ -175,8 +184,13 @@ final class SpecRegistryTests: XCTestCase {
             )
         }
         // Honest-reporting pin: some rules require the verifier to REPORT
-        // a weaker claim machine-readably, not just to pass/fail.
-        if let needle = expected["notes_includes"] as? String {
+        // a weaker claim machine-readably, not just to pass/fail. A string
+        // pins one substring; an array pins several (e.g. the lineage
+        // phrases "declared, not verified" AND "not countersigned").
+        let noteNeedles = (expected["notes_includes"] as? [String])
+            ?? (expected["notes_includes"] as? String).map { [$0] }
+            ?? []
+        for needle in noteNeedles {
             XCTAssertTrue(
                 v.notes.contains(where: { $0.contains(needle) }),
                 "\(name): expected a note containing \(needle); got \(v.notes)"
@@ -261,6 +275,167 @@ final class SpecRegistryTests: XCTestCase {
             let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
             let bytes = try Data(contentsOf: base.appendingPathComponent(file))
             assertVerifyOutcome(name, expected, CapsuleVerifier.verify(bytes, allowlist: keys))
+        }
+    }
+
+    // MARK: - lineage/vectors.json
+
+    /// `expected.lineage` pins the reported area (spec/lineage.md
+    /// "Reporting"). Every member is ignore-if-absent, per the shared
+    /// outcome-schema contract.
+    private func assertLineage(_ name: String, _ want: [String: Any], _ got: LineageReport) {
+        let shape = got.entries
+            .map { "hop \($0.hop) \($0.status)\($0.reason.map { r in " (\(r))" } ?? "")" }
+            .joined(separator: ", ")
+        if let declared = want["declared"] as? Bool {
+            XCTAssertEqual(got.declared, declared, "\(name): expected lineage.declared=\(declared)")
+        }
+        if let ok = want["ok"] as? Bool {
+            XCTAssertEqual(got.ok, ok, "\(name): expected lineage.ok=\(ok); entries: \(shape)")
+        }
+        if let depth = want["verified_depth"] as? Int {
+            XCTAssertEqual(
+                got.verifiedDepth, depth,
+                "\(name): expected lineage.verified_depth=\(depth); entries: \(shape)"
+            )
+        }
+        guard let wantEntries = want["entries"] as? [[String: Any]] else { return }
+        XCTAssertEqual(
+            got.entries.count, wantEntries.count,
+            "\(name): expected \(wantEntries.count) lineage entries; got \(shape)"
+        )
+        guard got.entries.count == wantEntries.count else { return }
+        for (i, wantEntry) in wantEntries.enumerated() {
+            let entry = got.entries[i]
+            let at = "\(name): lineage.entries[\(i)]"
+            if let status = wantEntry["status"] as? String {
+                XCTAssertEqual(entry.status, status,
+                               "\(at).status; errors: \(entry.errors.joined(separator: "; "))")
+            }
+            if let hop = wantEntry["hop"] as? Int {
+                XCTAssertEqual(entry.hop, hop, "\(at).hop")
+            }
+            if let reason = wantEntry["reason"] as? String {
+                XCTAssertEqual(entry.reason, reason, "\(at).reason")
+            }
+            if let capsuleId = wantEntry["capsule_id"] as? String {
+                XCTAssertEqual(entry.capsuleId, capsuleId, "\(at).capsule_id")
+            }
+            if let checked = wantEntry["identity_checked"] as? Bool {
+                XCTAssertEqual(entry.identityChecked, checked, "\(at).identity_checked")
+            }
+            if let version = wantEntry["artifact_observed_version"] as? String {
+                XCTAssertEqual(entry.artifact?.observedVersion, version,
+                               "\(at).artifact.observed_version")
+            }
+            // A FLOOR, not an equality: the count is lane-local (this
+            // lane counts failing checks), so only the honesty invariant
+            // is pinned — an artifact reported as failing never also
+            // reports zero errors.
+            if let floor = wantEntry["artifact_error_count_min"] as? Int {
+                XCTAssertGreaterThanOrEqual(entry.artifact?.errorCount ?? 0, floor,
+                                            "\(at).artifact.error_count")
+            }
+        }
+    }
+
+    /// The capsule's own declared identity — a reported fact some vectors
+    /// pin (the same-id-zero-event-rewrap and unendorsed-successor ids).
+    private func declaredCapsuleId(_ bytes: Data) throws -> String? {
+        let parsed = try CapsuleReader.parse(bytes)
+        guard case .object(let pairs) = parsed.manifest,
+              case .some(.string(let id)) = pairs.first(where: { $0.0 == "id" })?.1
+        else { return nil }
+        return id
+    }
+
+    /// The lineage declaration (spec/lineage.md, `manifest.predecessors`).
+    /// PRESENCE BINDS, ABSENCE REPORTS: an absent member is "no claim"; a
+    /// PRESENT malformed declaration is the capsule asserting something
+    /// meaningless about its own origin and fails closed with the shared
+    /// `predecessors[i].<member>` diagnoses. Identity coherence is
+    /// era-keyed and SKIPPED (identity_checked=false, never failed) for
+    /// unknown declared eras.
+    ///
+    /// Linkage against the per-vector `predecessors` pool is REPORT-ONLY:
+    /// the ok-true-under-mismatch vectors are normative — a lane that
+    /// fails the capsule when a host supplies the wrong (or a hostile)
+    /// file lets a third party flip a valid capsule's verdict. The
+    /// verified/mismatch/predecessor_invalid/predecessor_unverifiable
+    /// vocabulary and the pinned phrases ("declared, not verified", "not
+    /// countersigned", "different sealed state") are the cross-lane
+    /// contract.
+    func testLineageRegistryOutcomes() throws {
+        let path = Self.vectorsDir.appendingPathComponent("lineage/vectors.json")
+        let doc = try loadJSON(path)
+        let base = path.deletingLastPathComponent()
+        let keys = try allowlist(doc, base: base)
+        let keysDoc = try loadJSON(
+            base.appendingPathComponent(try XCTUnwrap(doc["keys_file"] as? String))
+                .standardizedFileURL
+        )
+        let vectors = (doc["vectors"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(vectors.isEmpty, "lineage registry is empty")
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "<unnamed>"
+            for req in (vector["requires"] as? [String]) ?? [] {
+                XCTAssertTrue(Self.knownRequirements.contains(req),
+                              "\(name): unknown requirement \(req)")
+            }
+            let file = try XCTUnwrap(vector["capsule_file"] as? String, "\(name): capsule_file")
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any], "\(name): expected")
+            let bytes = try Data(contentsOf: base.appendingPathComponent(file))
+            // The pool paths are relative to the collection file; supplying
+            // them is the host's evidence, not the capsule's claim.
+            var pool: [Data] = []
+            for rel in (vector["predecessors"] as? [String]) ?? [] {
+                pool.append(try Data(contentsOf: base.appendingPathComponent(rel)))
+            }
+            let v = CapsuleVerifier.verify(bytes, allowlist: keys, predecessors: pool)
+            assertVerifyOutcome(name, expected, v)
+            if let wantId = expected["capsule_id"] as? String {
+                XCTAssertEqual(try declaredCapsuleId(bytes), wantId,
+                               "\(name): expected capsule_id \(wantId)")
+            }
+            if let wantLineage = expected["lineage"] as? [String: Any] {
+                assertLineage(name, wantLineage, v.lineage)
+            }
+            // Verdict qualifiers: the exact array after stripping x-
+            // vendor entries. Non-empty only on a valid verdict, and
+            // payload-carrying facts never ride the bare strings.
+            if let wantQualifiers = expected["qualifiers"] as? [String] {
+                XCTAssertEqual(
+                    v.qualifiers.filter { !$0.hasPrefix("x-") }, wantQualifiers,
+                    "\(name): expected qualifiers \(wantQualifiers); got \(v.qualifiers)"
+                )
+            }
+            // `inner_ok` pins an L3 fail-closed outcome — the inner/outer
+            // declaration equality of an encrypted successor. This lane's
+            // L3 surface is one composite result over the outer and inner
+            // halves, so the inner refusal shows up as the composite `ok`.
+            guard let keyName = expected["decryptable_with"] as? String else { continue }
+            let pair = try XCTUnwrap(keysDoc[keyName] as? [String: Any],
+                                     "\(name): keys_file has no keypair \(keyName)")
+            let pub = Bytes.fromHex(try XCTUnwrap(pair["publicKey"] as? String))
+            let priv = Bytes.fromHex(try XCTUnwrap(pair["privateKey"] as? String))
+            let l3 = CapsuleVerifier.verify(
+                bytes, recipientPrivateKey: priv, recipientPublicKey: pub,
+                allowlist: keys, predecessors: pool
+            )
+            XCTAssertEqual(l3.level, "L3", "\(name): level must be L3")
+            let wantInnerOk = (expected["inner_ok"] as? Bool) ?? true
+            XCTAssertEqual(
+                l3.ok, wantInnerOk,
+                "\(name): expected L3 ok=\(wantInnerOk); failing checks: "
+                + l3.checks.filter { !$0.ok }.map { "\($0.name):\($0.detail)" }
+                    .joined(separator: ", ")
+            )
+            if let needle = expected["inner_error_includes"] as? String {
+                XCTAssertTrue(
+                    haystack(l3).contains(needle),
+                    "\(name): expected an L3 error containing \(needle); got \(haystack(l3))"
+                )
+            }
         }
     }
 

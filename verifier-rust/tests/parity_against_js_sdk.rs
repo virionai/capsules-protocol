@@ -81,6 +81,7 @@ fn clean_capsule_passes() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 
@@ -116,6 +117,7 @@ fn tampered_payload_fails_at_content_index() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 
@@ -159,6 +161,7 @@ fn tampered_chain_fails_at_chain_or_content_index() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 
@@ -182,6 +185,7 @@ fn tampered_envelope_fails_at_signature() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 
@@ -212,6 +216,7 @@ fn encrypted_capsule_rejected_with_clear_message() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 
@@ -256,6 +261,7 @@ fn encrypted_clean_capsule_passes_l3() {
             allowlist: vec![],
             recipient_private_key: Some(recipient_secret),
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
     assert!(
@@ -333,6 +339,7 @@ fn encrypted_clean_capsule_passes_l2() {
             allowlist,
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: Vec::new(),
         },
     );
 

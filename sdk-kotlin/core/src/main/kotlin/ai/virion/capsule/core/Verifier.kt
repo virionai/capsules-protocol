@@ -59,6 +59,24 @@ data class CapsuleVerification(
      * reflects whether that skill ships an indexed skill.json.
      */
     val skillTrust: SkillTrustCheck = SkillTrustCheck(),
+    /**
+     * Lineage declaration facts (spec/lineage.md,
+     * `manifest.predecessors`). The default is the fail-closed
+     * not-evaluated shape used by early-return paths: after an
+     * open-stage refusal `declared=false` means "not evaluated", not
+     * "absent". Standalone malformation fails the `lineage` check (and
+     * so the overall verdict); supplied-bytes linkage is REPORT-ONLY —
+     * it can falsify [LineageReport.ok] but never [ok].
+     */
+    val lineage: LineageReport = LineageReport(),
+    /**
+     * Verdict qualifiers (spec/lineage.md "Verdict qualifiers"): bare
+     * strings naming a weaker claim on an otherwise valid verdict, so a
+     * renderer cannot hide it. Non-empty only when [ok] is true. This
+     * lane emits the three lineage names; the profile/version
+     * qualifiers arrive with the results-vocabulary work.
+     */
+    val qualifiers: List<String> = emptyList(),
     val notes: List<String>,
 ) {
     data class SignerCheck(
@@ -93,10 +111,18 @@ data class CapsuleVerification(
 }
 
 object CapsuleVerifier {
+    /**
+     * [predecessors] is the optional pool of candidate predecessor
+     * artifacts for the lineage linkage walk (spec/lineage.md). It is
+     * REPORT-ONLY: it affects [CapsuleVerification.lineage] and the
+     * notes, never `ok` — otherwise a third party could flip a valid
+     * capsule's verdict by handing this verifier the wrong file.
+     */
     fun verify(
         bytes: ByteArray,
         allowlist: Set<String> = emptySet(),
         acceptVersions: Set<String>? = null,
+        predecessors: List<ByteArray> = emptyList(),
     ): CapsuleVerification {
         val checks = mutableListOf<VerifyCheck>()
         fun rec(name: String, ok: Boolean, detail: String = "") {
@@ -201,7 +227,12 @@ object CapsuleVerifier {
         try {
             val mh = Manifest.hash(parsed.manifest)
             val storedMh = CapsuleReader.lookupString(parsed.envelope, listOf("manifest_hash"))
-            rec("manifest_hash", mh == storedMh, mh.take(12) + "…")
+            rec(
+                "manifest_hash", mh == storedMh,
+                if (mh == storedMh) mh.take(12) + "…"
+                else "envelope.manifest_hash mismatch: stored ${storedMh ?: "null"} " +
+                    "vs recomputed $mh",
+            )
         } catch (e: IllegalArgumentException) {
             rec("manifest_hash", false, "manifest hash recompute failed: ${e.message}")
         }
@@ -496,7 +527,53 @@ object CapsuleVerifier {
                 "with role 'originator'",
         )
 
+        // Lineage declaration (spec/lineage.md). Standalone checks fail
+        // CLOSED — a PRESENT declaration no reader can interpret is the
+        // capsule asserting something meaningless about its own origin,
+        // and skipping it would let a lying capsule present identically
+        // to an honestly silent one. The supplied [predecessors] pool is
+        // REPORT-ONLY: it can falsify the area, never this verdict.
+        // The capsule's own observed era decides whether the member is
+        // interpreted at all: in a pre-lineage era it is an unknown
+        // member, exactly as it is when reached as a hop.
+        val lineageEval = Lineage.evaluate(
+            manifest = parsed.manifest,
+            version = declaredVersion,
+            pool = predecessors,
+            notes = notes,
+        ) { predecessorBytes -> verify(predecessorBytes, allowlist, acceptVersions) }
+        val lineage = lineageEval.report
+        rec(
+            "lineage", lineageEval.problems.isEmpty(),
+            if (lineageEval.problems.isNotEmpty())
+                lineageEval.problems.joinToString("; ") { "manifest.$it" }
+            else if (!lineage.declared) "absent (no lineage declared)"
+            else "${lineage.entries.size} declared predecessor(s); " +
+                "verified to depth ${lineage.verifiedDepth}",
+        )
+
         val ok = checks.all { it.ok }
+        // Verdict qualifiers (spec/lineage.md): bare strings naming a
+        // weaker claim on an otherwise valid verdict — a renderer must
+        // not hide them. Payload-carrying facts (verified_depth, the
+        // per-entry statuses and reasons) live in the lineage area, never
+        // on this array.
+        val qualifiers = mutableListOf<String>()
+        if (ok && lineage.declared) {
+            if (lineage.entries.any {
+                    it.status == Lineage.STATUS_UNVERIFIED ||
+                        it.status == Lineage.STATUS_PREDECESSOR_UNVERIFIABLE
+                }
+            ) {
+                qualifiers += "lineage_declared_unverified"
+            }
+            if (lineage.entries.any { it.status == Lineage.STATUS_MISMATCH }) {
+                qualifiers += "lineage_mismatch"
+            }
+            if (lineage.entries.any { it.status == Lineage.STATUS_PREDECESSOR_INVALID }) {
+                qualifiers += "lineage_predecessor_invalid"
+            }
+        }
         // DISTINCT trusted keys, never rows.
         val trustedCount = signers.filter { it.trusted }
             .map { it.publicKey.lowercase() }.toSet().size
@@ -532,6 +609,8 @@ object CapsuleVerifier {
             actorSetBound = actorSetBound,
             formatVersion = formatVersion,
             skillTrust = CapsuleVerification.SkillTrustCheck(capsuleSigned, skillTiers),
+            lineage = lineage,
+            qualifiers = qualifiers,
             notes = notes,
         )
     }

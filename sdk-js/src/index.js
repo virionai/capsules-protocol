@@ -1,12 +1,18 @@
 // Public surface of @capsule/sdk-v0.7-prototype.
 
-export { CapsuleBuilder } from "./builder.js";
+export {
+  CapsuleBuilder,
+  PredecessorError,
+  derivePredecessorEntry,
+  rewrapCapsule,
+} from "./builder.js";
 export { CapsuleReader } from "./reader.js";
 export { verifyCapsule } from "./verifier.js";
 
 export {
   generateEd25519,
   generateX25519,
+  ed25519DerivePublic,
   ed25519Sign,
   ed25519Verify,
   bytesToHex,
@@ -51,7 +57,18 @@ export {
   manifestHash,
   manifestBytes,
   signerCommitmentProblems,
+  predecessorsProblems,
+  PREDECESSOR_ENTRY_MEMBERS,
+  DEFAULT_PROFILE_ID,
 } from "./manifest.js";
+
+// Lineage verification internals (spec/lineage.md) — exposed for
+// tooling and conformance work; app code reads verifyCapsule(...).lineage.
+export {
+  LINEAGE_HOP_CAP_DEFAULT,
+  eraDefinesLineage,
+  verificationErrorCount,
+} from "./lineage.js";
 
 // Useful for demos and tooling that needs to read or rewrite the
 // underlying ZIP container directly (e.g. tampering tests).

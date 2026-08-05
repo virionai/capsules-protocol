@@ -139,6 +139,52 @@ suite identifier names the algorithm set by the era that introduced it,
 not the sealing era, so verifiers report suite `v0.6` for both 0.6 and
 0.7 capsules.
 
+## In-era tightening and cross-era force
+
+A spec revision MAY add an OPTIONAL member — and a fail-closed rule for
+a PRESENT-but-malformed value of it — **within** an existing era,
+without a version bump, exactly when all of the following hold (the
+bright-line rule; precedents: the `participants` shape tightening, the
+v0.7.1 `predecessors` member of [lineage.md](lineage.md), and profile
+declarations):
+
+1. the member is optional: absence remains the era's legal
+   weaker-claim shape, and no capsule sealed without the member changes
+   verdict;
+2. the member's key sits in the spec-reserved (non-`x-`) namespace, so
+   no conforming writer of that era could have emitted it — any sealed
+   capsule the new rule rejects was already non-conformant when
+   written: **zero honestly sealed capsules change verdict**;
+3. the new rule fires only on a PRESENT value that no reader could
+   interpret — a capsule asserting something meaningless about itself —
+   never on a weaker claim made honestly; and
+4. the diagnosis is a shared cross-lane vocabulary, never a
+   lane-specific parse failure.
+
+How far such a member's interpretation reaches across eras follows a
+second distinction:
+
+- **Rule-selector members** (members that select which rules bind
+  verification, e.g. a profile declaration) get **cross-era fail-closed
+  force**, era-keyed: leaving one uninterpreted in ANY known era means
+  possibly verifying under the wrong rules — the wrong-rules hazard
+  this document exists to kill, which is era-independent.
+- **Claim members** (claims interpreted within an era's rule set, e.g.
+  `predecessors`) follow **per-era rule sets** and stay inert in eras
+  whose rules do not define them: leaving one uninterpreted loses only
+  a report. A `predecessors` member inside a v0.6 capsule is an unknown
+  member even to a v0.7.1 reader — preserved, hashed, never
+  shape-checked — and this holds wherever that capsule appears: as the
+  verification subject, as a predecessor hop, or as the inner layer of
+  an encrypted one. A verifier that applied the gate only to hops would
+  reject an artifact a reader of its own era accepts. Conformance
+  vector: `spec/vectors/lineage/` (`predecessors-in-v06-capsule-is-inert`).
+
+A claim member MAY still *refer across* eras: the lineage identity
+recompute keys the domain string to the DECLARED predecessor era
+(`capsule-id-v0.6\0` for a cited v0.6 capsule) — reusing the retained
+version-keyed strings above, never extending them.
+
 ## Host policy: the SDK reports, the host decides
 
 Whether an observed version is *acceptable* is deployment policy, not

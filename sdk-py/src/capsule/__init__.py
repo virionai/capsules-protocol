@@ -4,7 +4,12 @@ Mirrors the JS reference at sdk/src/. v0.1 supports plain capsules end
 to end; encrypted capsules raise EncryptedCapsulesNotSupportedError.
 """
 
-from .builder import CapsuleBuilder
+from .builder import (
+    CapsuleBuilder,
+    PredecessorError,
+    derive_predecessor_entry,
+    rewrap_capsule,
+)
 from .canonical import (
     bytes_to_hex,
     concat_bytes,
@@ -50,15 +55,21 @@ from .envelope import (
     sign_envelope,
     verify_envelope_signatures,
 )
+from .lineage import LINEAGE_HOP_CAP_DEFAULT, verification_error_count
 from .manifest import (
     CONTENT_INDEX_EXCLUDED,
+    DEFAULT_PROFILE_ID,
+    PREDECESSOR_ENTRY_MEMBERS,
     STRUCTURAL_EXCLUDED,
     build_content_index,
     build_manifest,
     compute_capsule_id,
     content_index_exclusions,
+    declared_alternate_profile_id,
     manifest_bytes,
     manifest_hash,
+    predecessor_identity_checkable,
+    predecessors_problems,
 )
 from .pith import (
     PITH_VERSION,
@@ -90,7 +101,10 @@ __all__ = [
     "ACTOR_NAMESPACES",
     "CONTENT_INDEX_EXCLUDED",
     "CURRENT_VERSION",
+    "DEFAULT_PROFILE_ID",
     "KNOWN_VERSIONS",
+    "LINEAGE_HOP_CAP_DEFAULT",
+    "PREDECESSOR_ENTRY_MEMBERS",
     "SUITES",
     "EVENT_KINDS",
     "HOST_ACTOR",
@@ -102,6 +116,7 @@ __all__ = [
     "Ed25519KeyPair",
     "EncryptedCapsulesNotSupportedError",
     "MalformedCapsuleError",
+    "PredecessorError",
     "UnsafeZipPathError",
     "UnsupportedCapsuleVersionError",
     "X25519KeyPair",
@@ -120,6 +135,8 @@ __all__ = [
     "compute_capsule_id",
     "concat_bytes",
     "content_index_exclusions",
+    "declared_alternate_profile_id",
+    "derive_predecessor_entry",
     "ed25519_sign",
     "ed25519_verify",
     "envelope_canonical_payload",
@@ -142,13 +159,17 @@ __all__ = [
     "pack_zip",
     "participant_actor_id_problems",
     "participant_actor_ids",
+    "predecessor_identity_checkable",
+    "predecessors_problems",
     "provenance_domain",
     "random_key32",
     "random_nonce12",
+    "rewrap_capsule",
     "sha256",
     "sha256_hex",
     "sign_envelope",
     "unpack_zip",
+    "verification_error_count",
     "verify_capsule",
     "verify_chain",
     "verify_envelope_signatures",

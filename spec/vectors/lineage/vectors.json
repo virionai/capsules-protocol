@@ -1,0 +1,378 @@
+{
+  "meta": {
+    "name": "lineage",
+    "spec_version": "0.7",
+    "description": "Language-neutral expected verifier outcomes for the lineage declaration (spec/lineage.md, `manifest.predecessors`). PRESENCE BINDS, ABSENCE REPORTS: an absent member is 'no claim' (declared=false, reported); a PRESENT malformed declaration is the capsule asserting something meaningless about its own origin and fails closed with the shared `predecessors[i].<member>` diagnoses — but ONLY inside a capsule whose own era defines lineage: `predecessors` is a claim member, so in an earlier era it stays an unknown member (preserved, hashed, never shape-checked) whether the capsule is the subject or a hop. Identity coherence is era-keyed and SKIPPED (identity_checked=false, never failed) for unknown declared eras. Linkage against a supplied predecessor pool (per-vector `predecessors`, paths relative to this file) is REPORT-ONLY: it can falsify the lineage AREA (`expected.lineage.ok`) but never the capsule's overall ok — the ok-true-under-mismatch vectors pin that a host's file handling cannot flip a valid capsule's verdict, and no lane may 'helpfully' harden this into a parity break. Entry statuses are the closed vocabulary unverified | verified | mismatch | predecessor_invalid | predecessor_unverifiable (reason: unsupported_version | encrypted_predecessor | unsupported_profile | unsupported_capability). v0.7.1 declarations commit to plain, DEFAULT-PROFILE (v0.6-suite) predecessors; encrypted and alternate-profile supplies report predecessor_unverifiable with the scope reason — a verifier/scope limitation, never mismatch, never predecessor_invalid. Any unchecked entry MUST render with 'declared, not verified', and declared lineage MUST render with 'not countersigned' — a citation must never launder into an endorsement. expected.qualifiers pins the emitted lineage qualifier names exactly (bare strings, non-empty only on a valid verdict; payload-carrying facts live in the lineage area).",
+    "generator": "sdk-js/tools/generate-lineage-fixtures.mjs",
+    "no_warranty": "Conformance fixtures only; not production templates or advice."
+  },
+  "keys_file": "output/keys.json",
+  "vectors": [
+    {
+      "name": "no-lineage-control",
+      "capsule_file": "output/alice.capsule",
+      "expected": {
+        "ok": true,
+        "lineage": { "declared": false, "ok": true, "verified_depth": 0, "entries": [] },
+        "qualifiers": []
+      },
+      "note": "Positive control: no predecessors member. No claim, nothing checked, declared=false reported. Absence is a weaker claim made honestly — never a failure, never a qualifier."
+    },
+    {
+      "name": "declared-unverified",
+      "capsule_file": "output/bob.capsule",
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [{ "status": "unverified", "hop": 1, "identity_checked": true }]
+        },
+        "qualifiers": ["lineage_declared_unverified"],
+        "notes_includes": ["declared, not verified", "not countersigned"]
+      },
+      "note": "Declared lineage with no predecessor bytes supplied. The entry MUST be reported (never omitted) with the pinned phrase 'declared, not verified', and the report MUST state the declaration is one-way ('not countersigned'). The lineage_declared_unverified qualifier is EMITTED in v0.7.1, not reserved."
+    },
+    {
+      "name": "linkage-verified-depth-1",
+      "capsule_file": "output/bob.capsule",
+      "predecessors": ["output/alice.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 1,
+          "entries": [
+            { "status": "verified", "hop": 1, "artifact_observed_version": "0.7" }
+          ]
+        },
+        "qualifiers": [],
+        "notes_includes": ["successor of capsule", "not countersigned"]
+      },
+      "note": "The F-03 hand-off, verified: Bob's successor + Alice's exact sealed artifact. All six equalities hold against RECOMPUTED values (id under the predecessor's era domain, manifest_hash from stored bytes — never the artifact's own claims). The verified report presents two distinct identities; the successor is never presented as BEING the predecessor."
+    },
+    {
+      "name": "linkage-verified-depth-2",
+      "capsule_file": "output/carol.capsule",
+      "predecessors": ["output/bob.capsule", "output/alice.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 2,
+          "entries": [
+            { "status": "verified", "hop": 1 },
+            { "status": "verified", "hop": 2 }
+          ]
+        },
+        "qualifiers": []
+      },
+      "note": "Era-keyed recursive walk: after Bob's capsule verifies, ITS first-person declaration joins the frontier and matches Alice's artifact at hop 2 — no hop is hearsay. Carol's manifest declares exactly ONE entry (re-rewrap never accumulates an inline ancestry list); deep ancestry is recovered hop by hop from supplied bytes."
+    },
+    {
+      "name": "merge-two-predecessors",
+      "capsule_file": "output/merge.capsule",
+      "predecessors": ["output/alice.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [
+            { "status": "verified", "hop": 1 },
+            { "status": "unverified", "hop": 1 }
+          ]
+        },
+        "qualifiers": ["lineage_declared_unverified"]
+      },
+      "note": "A merge declares one entry per immediate parent, each an independent claim verified independently. One branch supplied: verified + unverified, verified_depth stays 0 (depth counts only when EVERY declared entry within the hop is verified). An operator legitimately holds one branch of a merge — the unsupplied entry is reported, never an exit-policy failure."
+    },
+    {
+      "name": "unendorsed-successor-verifies",
+      "capsule_file": "output/unendorsed.capsule",
+      "predecessors": ["output/alice.capsule"],
+      "expected": {
+        "ok": true,
+        "capsule_id": "24d66e0444af3cda0a4586cc0fe078d9a312e4999c25d44100723127414a1c5d",
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 1,
+          "entries": [
+            {
+              "status": "verified",
+              "hop": 1,
+              "capsule_id": "0e0d5132ad41660d90bdc36bd970e3c872bcbe9f37eb43bd0576f405a901bd78"
+            }
+          ]
+        },
+        "notes_includes": ["not countersigned"]
+      },
+      "note": "THE checked-in honest reading of the reputation-squat non-defense: a DIFFERENT, unaffiliated key seals a successor of someone else's public capsule and everything verifies. Prevention is impossible in this artifact class without the predecessor's key endorsing the successor (the v0.8+ countersignature artifact); the format converts the squat into an exact, attributable, non-exclusive, signed claim. The two pinned ids are distinct — the successor squats on nothing — and the required 'not countersigned' language keeps citation from laundering into endorsement. No lane may 'fix' this vector."
+    },
+    {
+      "name": "lineage-from-v06-predecessor",
+      "capsule_file": "output/successor-of-v06.capsule",
+      "predecessors": ["output/known-previous-version-0.6.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 1,
+          "entries": [
+            { "status": "verified", "hop": 1, "artifact_observed_version": "0.6" }
+          ]
+        }
+      },
+      "note": "Cross-era citation is a feature: the declaration names format_version 0.6, standalone identity coherence recomputes under capsule-id-v0.6 (the era-keyed domain discipline every verifier already retains forever), and linkage verifies the predecessor under the v0.6 rules. The fixture is a BYTE-IDENTICAL copy of version-compat/output/known-previous-version-0.6.capsule — frozen, never regenerated, never resealed; the generator's --check asserts byte equality with the original."
+    },
+    {
+      "name": "zero-event-predecessor",
+      "capsule_file": "output/successor-of-template.capsule",
+      "predecessors": ["output/template.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 1,
+          "entries": [{ "status": "verified", "hop": 1 }]
+        }
+      },
+      "note": "A template hand-off: the predecessor is a sealed ZERO-EVENT capsule, so the entry declares first_event_hash and entry_hash both null (the empty-chain anchor rule applied to a reference) and identity coherence uses 32 zero bytes in place of the first event hash — the same genesis stand-in as the capsule_id derivation."
+    },
+    {
+      "name": "same-id-zero-event-rewrap",
+      "capsule_file": "output/self-id-rewrap.capsule",
+      "expected": {
+        "ok": true,
+        "capsule_id": "5cadb978084aeaf21dae3bf0dc84363b5f3c0467e611c0c7d0ee5566aa3cc685",
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [
+            {
+              "status": "unverified",
+              "hop": 1,
+              "capsule_id": "5cadb978084aeaf21dae3bf0dc84363b5f3c0467e611c0c7d0ee5566aa3cc685"
+            }
+          ]
+        }
+      },
+      "note": "Pins the deliberate ABSENCE of a self-reference rule: a same-key zero-event template rewrap honestly declares a predecessor id EQUAL to its own id (two zero-event capsules from one originator share a capsule_id — id equality is not artifact identity). A lane that adds a self-reference rejection brands this legitimate corner a lie. The true self-reference (declared manifest_hash equal to the capsule's own) is a hash fixpoint and cannot be constructed."
+    },
+    {
+      "name": "member-not-array",
+      "capsule_file": "output/member-not-array.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "predecessors must be an array"
+      },
+      "note": "A present declaration no reader can interpret is the capsule asserting something meaningless about its own origin — fail closed with the same diagnosis in every lane, never a lane-specific parse crash (typed lanes parse leniently and diagnose at check time)."
+    },
+    {
+      "name": "empty-array",
+      "capsule_file": "output/empty-array.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "predecessors must not be empty"
+      },
+      "note": "'No claim' has exactly one spelling: absence (the present-but-empty signer_commitment precedent)."
+    },
+    {
+      "name": "entry-missing-manifest-hash",
+      "capsule_file": "output/entry-missing-manifest-hash.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "predecessors[0].manifest_hash"
+      },
+      "note": "All six entry members are REQUIRED: there is no weaker declaration made honestly INSIDE an entry — the weaker honest claim is the member's absence plus prose in program.md."
+    },
+    {
+      "name": "bad-hex-uppercase",
+      "capsule_file": "output/bad-hex-uppercase.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "predecessors[0].capsule_id"
+      },
+      "note": "Lowercase is REQUIRED, not normalized: the claim is bound by its stored bytes, and case-variant spellings of one claim are a cross-lane comparison differential."
+    },
+    {
+      "name": "version-grammar-violation",
+      "capsule_file": "output/version-grammar-violation.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "predecessors[0].format_version"
+      },
+      "note": "format_version follows the versioning.md <major>.<minor> grammar; 'v0.7' is a malformed declaration, not an unknown era."
+    },
+    {
+      "name": "duplicate-manifest-hash",
+      "capsule_file": "output/duplicate-manifest-hash.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "cited twice"
+      },
+      "note": "Two entries sharing a manifest_hash cite the same sealed artifact twice — no legitimate producer, exists only to create counting differentials (the duplicate-signer precedent). Two entries sharing capsule_id with DIFFERENT manifest_hash values remain legal (a merge of two snapshots of one line)."
+    },
+    {
+      "name": "null-incoherent",
+      "capsule_file": "output/null-incoherent.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "cannot exist"
+      },
+      "note": "first_event_hash null with entry_hash 64-hex describes a predecessor that cannot exist — the empty-chain anchor rule applied to a reference."
+    },
+    {
+      "name": "id-not-derivable",
+      "capsule_file": "output/id-not-derivable.capsule",
+      "expected": {
+        "ok": false,
+        "failing": ["lineage"],
+        "error_includes": "does not derive"
+      },
+      "note": "Identity coherence under a KNOWN declared era: the declared capsule_id must equal the recompute under that era's identity rule. No honest writer produces a mismatch (writers derive from predecessor bytes); no external evidence is involved, so this is self-assertion, not linkage — fail closed."
+    },
+    {
+      "name": "era-unknown-declared",
+      "capsule_file": "output/era-unknown-declared.capsule",
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [{ "status": "unverified", "hop": 1, "identity_checked": false }]
+        },
+        "qualifiers": ["lineage_declared_unverified"]
+      },
+      "note": "A well-formed declaration naming era 0.9: versioning.md forbids applying one era's identity formula to another era's claim, so the recompute is SKIPPED and reported (identity_checked=false), never failed. The successor is not lying; this verifier is too old for the declared predecessor's era — the unknown-era skip is the malleability release valve. The SUCCESSOR itself is a 0.7 capsule and its verdict stays valid."
+    },
+    {
+      "name": "predecessors-in-v06-capsule-is-inert",
+      "capsule_file": "output/predecessors-in-v06-capsule.capsule",
+      "expected": {
+        "ok": true,
+        "lineage": { "declared": false, "ok": true, "verified_depth": 0, "entries": [] },
+        "qualifiers": []
+      },
+      "note": "NO RETROACTIVE INTERPRETATION OF SEALED ERAS (spec/versioning.md 'In-era tightening and cross-era force'; spec/lineage.md). This capsule declares era 0.6 and carries the SAME malformed value that fails `empty-array` closed — `\"predecessors\": []` — and it MUST verify: `predecessors` is a CLAIM member, not a rule selector, so it is an unknown member under a rule set that does not define it (preserved, hashed, NEVER shape-checked) and the area reports declared=false. A lane that shape-checks it here rejects a capsule a v0.6 reader accepts, breaking the archival guarantee, and contradicts the same lane's own hop rule — the identical artifact reached through the walk terminates it inertly. The capsule is byte-coherent under 0.6 (`capsule-id-v0.6\\u0000`, `capsule-provenance-v0.6:originator\\u0000`), so nothing but the era gate is under test."
+    },
+    {
+      "name": "mismatch-different-seal",
+      "capsule_file": "output/bob.capsule",
+      "predecessors": ["output/alice-later-seal.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": false,
+          "verified_depth": 0,
+          "entries": [{ "status": "mismatch", "hop": 1 }]
+        },
+        "qualifiers": ["lineage_mismatch"],
+        "error_includes": "different sealed state"
+      },
+      "note": "THE anti-framing pin: the supplied file is a LATER genuine seal of the same line (same key, same genesis, one more event — same capsule_id, different sealed state). The entry reports mismatch with the pinned phrase 'different sealed state of the declared predecessor', the wording never uses tamper/corruption vocabulary (the honest cause is the host's own file handling), and the capsule's overall ok stays TRUE — linkage is report-only, so a hostile host cannot flip a valid capsule's verdict by supplying the wrong file. A lane that hardens this into overall failure is non-conforming."
+    },
+    {
+      "name": "predecessor-fails-own-verification",
+      "capsule_file": "output/bob.capsule",
+      "predecessors": ["output/tampered-alice.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": false,
+          "verified_depth": 0,
+          "entries": [
+            { "status": "predecessor_invalid", "hop": 1, "artifact_error_count_min": 1 }
+          ]
+        },
+        "qualifiers": ["lineage_predecessor_invalid"]
+      },
+      "note": "The two-fact split, never collapsed: the supplied artifact IS the declared artifact (its manifest matches the declared manifest_hash) AND it fails its own verification (a flipped content byte). Status predecessor_invalid takes precedence over mismatch; the diagnosis is a property of the supplied artifact under its own era, distinct from any claim about the successor's honesty. Overall ok stays true — report-only. `artifact_error_count_min` pins the report-honesty invariant: a report that says an artifact FAILED must never also say it has zero errors, whatever shape a lane carries its problems in. A floor, not an equality, because the count is lane-local — lanes with per-channel error lists (js/py/rust) compose them (3 here: the flipped byte's content_index diagnoses), lanes with a flat check list count failing checks."
+    },
+    {
+      "name": "encrypted-predecessor-unverifiable",
+      "capsule_file": "output/bob.capsule",
+      "predecessors": ["output/alice-encrypted.capsule"],
+      "requires": ["encryption"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [
+            {
+              "status": "predecessor_unverifiable",
+              "hop": 1,
+              "reason": "encrypted_predecessor"
+            }
+          ]
+        },
+        "qualifiers": ["lineage_declared_unverified"],
+        "notes_includes": ["declared, not verified"]
+      },
+      "note": "Plain-predecessor scope: v0.7.1 defines no mapping from a declaration onto an encrypted capsule's outer/inner manifest pair, so an encrypted supply is reported predecessor_unverifiable/encrypted_predecessor — never guessed at, never mismatch. The genuine encrypted use case needs no special case: decrypt the inner (which IS a plain capsule) and supply it. Lanes without an encryption path map this to their documented plain-only refusal per the registry consumer notes."
+    },
+    {
+      "name": "predecessor-unsupported-profile",
+      "capsule_file": "output/successor-of-alt-profile.capsule",
+      "predecessors": ["output/alt-profile-pred.capsule"],
+      "expected": {
+        "ok": true,
+        "lineage": {
+          "declared": true,
+          "ok": true,
+          "verified_depth": 0,
+          "entries": [
+            {
+              "status": "predecessor_unverifiable",
+              "hop": 1,
+              "reason": "unsupported_profile"
+            }
+          ]
+        },
+        "qualifiers": ["lineage_declared_unverified"]
+      },
+      "note": "Default-profile scope (the lineage × profile composition rule): v0.7.1 declarations commit to default-profile (v0.6-suite) predecessors — the entry grammar presumes the era-default identity derivation and key encoding. A supplied predecessor declaring a profile this verifier does not implement reports predecessor_unverifiable/unsupported_profile: a verifier/scope limitation, NEVER mismatch and NEVER predecessor_invalid — branding an honest alternate-profile citation a defect is the slander the profile diagnosis discipline exists to kill."
+    },
+    {
+      "name": "inner-outer-mismatch",
+      "capsule_file": "output/inner-outer-mismatch.capsule",
+      "requires": ["encryption"],
+      "expected": {
+        "ok": true,
+        "decryptable_with": "recipient",
+        "inner_ok": false,
+        "inner_error_includes": "predecessors"
+      },
+      "note": "Encrypted successor whose inner and outer manifests BOTH declare predecessors with different values. Each layer alone is well-formed, so L2 (outer) verifies; L3 fails closed on the inner/outer JCS byte inequality — a capsule asserting one origin to the world and another to its recipients is lying about itself across layers. Single-layer placement (inner-only private citation, outer-only public citation) stays legal: each is a weaker claim made honestly, and mandating symmetry would force disclosure of a confidential association."
+    },
+    {
+      "name": "tampered-predecessors-member",
+      "capsule_file": "output/tampered-predecessors-member.capsule",
+      "expected": {
+        "ok": false,
+        "error_includes": "manifest_hash mismatch"
+      },
+      "note": "Post-seal mutation of one declared member (a hex digit of predecessors[0].manifest_hash): the declaration is ordinary manifest content inside the JCS bytes of manifest_hash, under every signature — so the recomputed manifest hash diverges from the envelope's signed claim and verification fails. A third party cannot redirect a sealed successor's lineage; a false citation is a SIGNED false citation, permanently pinned to its author's key."
+    }
+  ]
+}

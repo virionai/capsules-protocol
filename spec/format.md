@@ -133,3 +133,9 @@ they are required to produce archives whose `content_index` (per-file
 hashes) match, and whose canonical envelope payload matches.
 
 This is the right boundary because it is what an auditor actually checks.
+
+The lineage declaration respects the same boundary: a
+`manifest.predecessors` entry pins a predecessor by its recomputed
+`capsule_id` and `manifest_hash` — the hashes the format defines — never
+by archive bytes, so a predecessor repacked by a conforming tool still
+matches its declaration ([lineage.md](lineage.md)).

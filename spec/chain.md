@@ -248,6 +248,30 @@ template or draft that hosted no session legitimately produces an
 empty chain (see "Empty chains"), and the null anchors make that
 weaker claim visible to every reader.
 
+## Custody hand-off event (convention)
+
+A successor capsule declaring lineage ([lineage.md](lineage.md)) starts
+a FRESH chain — the predecessor's history stays where it is signed —
+and the reference builders open the successor chain, by default, with a
+conventional genesis event so custody is visible to the cold LLM reader
+in the chain narrative:
+
+```json
+{ "actor": "system:host", "kind": "observation",
+  "action": "custody_received",
+  "target": "capsule:<predecessor capsule_id>" }
+```
+
+This is a writer convention (the backstop-event posture), NOT a
+verifier rule: `action` and `target` are advisory members no
+verification rule reads, the `manifest.predecessors` declaration is the
+binding claim under every signature, and a mandatory chain echo would
+be a second surface that must agree with the first. Copying predecessor
+events into a successor chain is not forbidden, but re-hashed under a
+new chain context they are fresh assertions on the successor's
+authority wearing old actors' names — worthless as history
+([lineage.md](lineage.md) "Chain treatment").
+
 ## Verification
 
 The reader walks the chain in order:

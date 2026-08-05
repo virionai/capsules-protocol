@@ -166,6 +166,35 @@
         }
       }
     },
+    "lineage/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": [
+        "lineage"
+      ],
+      "lanes": {
+        "js": {
+          "consumer": "tools/check-spec-vectors.mjs",
+          "mode": "walker"
+        },
+        "python": {
+          "consumer": "sdk-py/tests/test_spec_registry.py"
+        },
+        "rust": {
+          "consumer": "verifier-rust/tests/spec_registry.rs"
+        },
+        "swift": {
+          "consumer": "sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift"
+        },
+        "kotlin": {
+          "consumer": "sdk-kotlin/core/src/test/kotlin/ai/virion/capsule/core/SpecRegistryTest.kt"
+        }
+      },
+      "notes": [
+        "spec/lineage.md (manifest.predecessors). Per-vector `predecessors` supplies the linkage pool (paths relative to the collection file); `expected.lineage` pins {declared, ok, verified_depth, entries:[{status, hop, reason?, identity_checked?, capsule_id?, artifact_observed_version?, artifact_error_count_min?}]}; `artifact_error_count_min` is a FLOOR on `entries[i].artifact.error_count` because that count is lane-local (per-channel error lists composed in js/py/rust, failing checks in swift/kotlin) — it pins the report-honesty invariant that an artifact reported as failing never also reports zero errors; `expected.qualifiers` is the EXACT array a lane's result must carry once `x-` vendor entries are stripped — not a lineage-scoped subset; in this revision every lane emits only the three lineage names, so the pinned arrays hold only those, and a revision that starts emitting the base (non-lineage) qualifiers extends these arrays in the same change. All three members are ignore-if-absent so every consumer can parse collections that do not use them. Linkage is REPORT-ONLY: the ok-true-under-mismatch vectors are normative — a lane that fails the capsule on a mismatched supply is non-conforming. `predecessors-in-v06-capsule-is-inert` is equally normative in the other direction: the era gate applies to the SUBJECT capsule, not only to hops, so a lane that shape-checks the member inside a pre-lineage-era capsule rejects an artifact a v0.6 reader accepts. The frozen v0.6 predecessor fixture is a byte-identical copy of version-compat/output/known-previous-version-0.6.capsule; the generator's --check asserts the equality and never reseals it.",
+        "sdk-swift consumer notes (declared asymmetries, never silent omissions): (1) the lane is VERIFY-side for v0.7.1 — the standalone checks, the `predecessors:` pool parameter, `CapsuleVerification.lineage`, and the L3 inner/outer equality all ship; the builder conveniences (continueFrom / declarePredecessor / rewrap) stay declared fast-follows, so this lane pins rewrap output only by verifying the reference builders' fixtures. (2) `CapsuleVerification.qualifiers` carries the three EMITTED lineage names and nothing else — the profile/version qualifiers arrive with the results-vocabulary work — so `expected.qualifiers` is asserted here as the exact array (x- stripped). (3) This lane's verify surface is a check list, so a fail-closed standalone problem is the `lineage` check and the REPORT-ONLY linkage diagnoses live on `lineage.entries[].errors`; `inner_ok` is asserted against the composite L3 result, which covers the outer and inner halves together.",
+        "sdk-kotlin consumer notes (declared asymmetries, never silent omissions): (1) the lane is VERIFY-side for v0.7.1 — the standalone checks, the `predecessors` verify parameter, `CapsuleVerification.lineage`, and the three emitted qualifiers on `CapsuleVerification.qualifiers` all ship; the builder conveniences (continueFrom / declarePredecessor / rewrap) stay declared fast-follows, so this lane pins rewrap output only by verifying the reference builders' fixtures. (2) sdk-kotlin core is a plain-capsule (L2) verifier, so standalone check 4 (the inner/outer JCS equality of an ENCRYPTED SUCCESSOR) has no L3 to run in: `inner-outer-mismatch` is asserted against this lane's documented plain-only refusal, which is strictly stronger than skipping it. (3) `encrypted-predecessor-unverifiable` IS run despite its requires:['encryption'] tag — its capsule is plain and only the supplied POOL artifact is encrypted, and classifying a pool artifact reads the SIGNED envelope's cipher with no decryption path — so this lane reports the same `predecessor_unverifiable`/`encrypted_predecessor` outcome as every other lane. No pool artifact class maps to `unsupported_capability` here: an encrypted supply is a FORMAT-scope limitation of v0.7.1 declarations, not a lane capability gap, and `unsupported_capability` stays unemitted in this lane. (4) This lane's verify surface is a check list, so a fail-closed standalone problem is the `lineage` check (naming the overall verdict) while the AREA boolean `lineage.ok` carries the REPORT-ONLY linkage verdict, and the linkage diagnoses live on `lineage.entries[].errors`. (5) The collection's `keys_file` names per-actor keypairs rather than an originator allowlist, and no vector here pins a trust-dependent fact, so this lane verifies with no allowlist."
+      ]
+    },
     "malformed-layout/vectors.json": {
       "kind": "outcome-collection",
       "failing_areas": [

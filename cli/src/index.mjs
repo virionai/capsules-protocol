@@ -1,6 +1,7 @@
 // capsule CLI dispatcher.
 
 import { verifyCmd } from "./commands/verify.mjs";
+import { rewrapCmd } from "./commands/rewrap.mjs";
 import { inspectCmd } from "./commands/inspect.mjs";
 import { chainCmd } from "./commands/chain.mjs";
 import { manifestCmd } from "./commands/manifest.mjs";
@@ -14,6 +15,7 @@ import { CLIError, err } from "./format.mjs";
 
 const COMMANDS = {
   verify: { fn: verifyCmd, summary: "verify a capsule's signatures, hashes, and chain" },
+  rewrap: { fn: rewrapCmd, summary: "seal a successor capsule that declares this one as predecessor" },
   inspect: { fn: inspectCmd, summary: "one-screen overview of a capsule (header + counts)" },
   chain: { fn: chainCmd, summary: "list chain events" },
   manifest: { fn: manifestCmd, summary: "print manifest.json" },
@@ -43,9 +45,10 @@ function help() {
   err("  -h, --help          show this help");
   err("");
   err("exit codes:");
-  err("  0  success — for verify: integrity verified AND any supplied");
-  err("     trust policy (--allowlist) satisfied");
-  err("  1  verification failed, trust policy not satisfied, or vectors mismatch");
+  err("  0  success — for verify: integrity verified AND every supplied");
+  err("     policy (--allowlist, --predecessor) satisfied");
+  err("  1  verification failed, a supplied policy not satisfied, a rewrap");
+  err("     predecessor refusal, or vectors mismatch");
   err("  2  usage, I/O, or environment error (unknown flag, malformed key, ...)");
 }
 

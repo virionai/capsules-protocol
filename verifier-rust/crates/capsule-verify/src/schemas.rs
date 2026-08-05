@@ -236,6 +236,17 @@ pub struct Manifest {
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_commitment: Option<Vec<SignerCommitmentEntry>>,
+    /// The lineage declaration (spec/lineage.md), kept RAW rather than
+    /// typed: PRESENCE BINDS, ABSENCE REPORTS, and a PRESENT declaration
+    /// of any shape must reach the checks. A typed projection would
+    /// refuse the manifest outright on a malformed member — presenting a
+    /// spec-invalid declaration as a corrupt container, and burying the
+    /// cross-lane `predecessors[i].<member>` diagnosis the conformance
+    /// vectors pin. `None` is absence ("no claim"); `Some(value)` is a
+    /// declaration this view makes no judgment about —
+    /// [`crate::lineage::predecessors_problems`] does, at check time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predecessors: Option<serde_json::Value>,
 }
 
 /// One signature in the envelope's `signers` array. `role` namespaces the

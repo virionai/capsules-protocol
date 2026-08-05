@@ -12,6 +12,7 @@ pub mod decrypt;
 pub mod envelope;
 pub mod jcs;
 mod l3;
+pub mod lineage;
 pub mod manifest;
 pub mod schemas;
 pub mod verifier;
@@ -27,6 +28,10 @@ pub use crypto::{
 };
 pub use decrypt::{decrypt_inner_zip, DecryptError, DecryptionMetadata, KeyBundle};
 pub use jcs::{check_ijson, jcs, parse_json_strict};
+pub use lineage::{
+    predecessors_problems, verification_error_count, LineageCheck, LineageEntry,
+    PredecessorArtifact, LINEAGE_HOP_CAP,
+};
 pub use schemas::{
     parse_chain_jsonl, ChainEvent, ChainParseError, ContentIndex, ContentIndexEntry, Encryption,
     Envelope, FormatBlock, Manifest, Originator, ParsedEvent, Participant, Signer,

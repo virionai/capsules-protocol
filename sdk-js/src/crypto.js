@@ -75,6 +75,15 @@ export function ed25519PrivateFromRaw(raw32) {
   return createPrivateKey({ key: der, format: "der", type: "pkcs8" });
 }
 
+/**
+ * Derive the raw 32-byte public key from a raw 32-byte Ed25519 private
+ * key. A tool handed only a key file (the CLI's writing commands) must
+ * be able to report the public half without ever echoing the secret.
+ */
+export function ed25519DerivePublic(privateKeyRaw) {
+  return ed25519PublicToRaw(createPublicKey(ed25519PrivateFromRaw(privateKeyRaw)));
+}
+
 /** Sign raw bytes (NOT a hex string). Returns 64-byte signature. */
 export function ed25519Sign(privateKeyRaw, message) {
   const key = ed25519PrivateFromRaw(privateKeyRaw);

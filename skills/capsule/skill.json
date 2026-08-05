@@ -94,22 +94,22 @@
       {
         "path": "spec/README.md",
         "title": "Spec index",
-        "sha256": "be98ea1d84591636ab97cafa79ee4e07baa8bd71094835a557f90e0cf9b1280e"
+        "sha256": "dd8eb4b9dad430d6b2f4254e03265217b4c0bedea1fb718e28b114cfcc656f4e"
       },
       {
         "path": "spec/format.md",
         "title": "File layout",
-        "sha256": "b72a80a1782dc82dda340728f5336cbbaff28bb79920eee5adb0fe62b6b2a2ca"
+        "sha256": "667e909ee866222a07e77c1d4ee1351bc210c0058eaade7dfe3d395fdf530524"
       },
       {
         "path": "spec/manifest.md",
         "title": "manifest.json schema",
-        "sha256": "7067c6991794e72ab7b6e9245146ba4bb63ae54777085cafbb51d81e88a34712"
+        "sha256": "71ca2b74d9a2d75b4eb84d4250dccbb048a772e36e789ab226e0c50cd7bc110b"
       },
       {
         "path": "spec/chain.md",
         "title": "Event chain rules",
-        "sha256": "3e50a4c107fc4052db47734223b03a58b24555643cc4949e3d1f1034507ec64f"
+        "sha256": "19fe8eb88ce0ee9dab4995df8429272c03460f05661e8f7fd4da62ac29908e26"
       },
       {
         "path": "spec/envelope.md",
@@ -119,7 +119,7 @@
       {
         "path": "spec/trust.md",
         "title": "Trust model",
-        "sha256": "809d4d8bd7298b6cc69a4d25bdd94e82ccf15535f9e80437bae4a807a78578c6"
+        "sha256": "49cfaa7bbb2c817f7efd2c41019e3766dc24461b8cb2bd6afa710c17959d2e9d"
       },
       {
         "path": "spec/pith.md",

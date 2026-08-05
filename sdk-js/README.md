@@ -175,6 +175,50 @@ const l3 = await verifyCapsule(inner, {
 });
 ```
 
+The reader `decrypt()` returns remembers the layer it came out of, so
+the L3 inner/outer lineage equality (spec/lineage.md) runs on this
+recipe with no extra option. Pass `outerManifest: outer.manifest()`
+only when you verify raw decrypted BYTES instead of that reader.
+
+## Continue someone else's capsule (lineage / rewrap)
+
+You cannot seal under another originator's identity — and you don't
+need to. A successor capsule declares the exact sealed artifact it
+continues from (`manifest.predecessors`, spec/lineage.md), carries the
+content files forward byte-identically, and starts a fresh chain under
+YOUR key:
+
+```js
+import { CapsuleBuilder, rewrapCapsule, generateEd25519 } from "@capsule/sdk-v0.7-prototype";
+
+const bob = generateEd25519();
+
+// One-call custody transfer:
+const { bytes, capsuleId, predecessorEntry } = await rewrapCapsule(aliceBytes, {
+  originator: { ...bob, label: "Bob" },
+});
+
+// Or continue the work before sealing:
+const builder = await CapsuleBuilder.continueFrom(aliceBytes, {
+  originator: { publicKey: bob.publicKeyHex, label: "Bob" },
+  participants: [{ actor_id: "human:bob", role: "custodian" }],
+});
+builder.appendEvent({ actor: "human:bob", action: "continued" });
+const sealed = await builder.seal({ signers: [bob] });
+
+// Verify the custody claim by supplying the predecessor bytes:
+const result = await verifyCapsule(sealed, { predecessors: [aliceBytes] });
+result.lineage; // { declared, ok, verifiedDepth, entries: [...] }
+```
+
+The declaration is the successor's ONE-WAY claim — the predecessor's
+originator has not countersigned it — and linkage is report-only:
+supplying the wrong file changes `result.lineage`, never `result.ok`.
+Merges: `builder.declarePredecessor(otherParentBytes)` once per parent.
+Refusals (tampered / unknown-era / encrypted / alternate-profile
+predecessors) throw `PredecessorError` with a machine-readable
+`.reason`.
+
 ## Going further
 
 - `builder.setAgents(md)` — who may do what, carried with the work

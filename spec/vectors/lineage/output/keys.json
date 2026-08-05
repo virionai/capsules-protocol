@@ -1,0 +1,26 @@
+{
+  "alice": {
+    "publicKey": "04b5ea522ae71ad1f0990610dae0cfdfd287831759d89c1b34253d7da609a95a",
+    "privateKey": "1a7be04f2c9d38516e40a2b57c8f91d3025e6a4b8c7d90e12f34a5b6c7d8e901"
+  },
+  "bob": {
+    "publicKey": "90a392a105b21fd944ca66e8c3f56586420de07e57e307018ce4641463a67444",
+    "privateKey": "2b8cf15e3dae49627f51b3c68d90a2e4136f7b5c9d8ea1f2304b5c6d7e8f9012"
+  },
+  "carol": {
+    "publicKey": "45102eef65838972a3bb529019132eef92238b110b0b5a3ddc863253b61b43c3",
+    "privateKey": "3c9d026f4ebf5a738062c4d79ea1b3f5247a8c6dae9fb203415c6d7e8f901234"
+  },
+  "dana": {
+    "publicKey": "30086c9084f34eda4e4d7bfdaa724cc0df5c78b6f0cb0569990cb561d9baa374",
+    "privateKey": "4dae13705fc06b849173d5e80fb2c40635b89d7ebfa0c314526d7e8f90123456"
+  },
+  "attacker": {
+    "publicKey": "47c99cd57a984a1fd99102fa3e8c0d1d4b2cc1db99d52644d3b4ec6477659904",
+    "privateKey": "5ebf24816a0d17c95a284e691a0c3d5174c9ae8fcb01d425637e8f9012345678"
+  },
+  "recipient": {
+    "publicKey": "b1ed5ed628c4f0aafd43875bef7caf15bbe414ada8bb5960557e1a8417c1ba09",
+    "privateKey": "6fc0359272be28da6b395f7a2b1d4e6285dab9f0dc12e536748f90a1b2c3d4e5"
+  }
+}

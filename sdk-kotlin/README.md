@@ -106,6 +106,45 @@ println("Signers: ${v.signers.map { "${it.role} trusted=${it.trusted}" }}")
 println("Program:\n${parsed.programMd}")
 ```
 
+## Quick start — check a lineage declaration
+
+A successor capsule declares the exact sealed artifact(s) it continues
+from in `manifest.predecessors` ([spec/lineage.md](../spec/lineage.md)).
+The standalone checks always run and fail closed; supplying predecessor
+bytes is REPORT-ONLY — it can falsify `lineage.ok`, never `v.ok`, so a
+third party cannot flip a valid capsule's verdict by handing this
+verifier the wrong file.
+
+```kotlin
+val v = CapsuleVerifier.verify(
+    successorBytes,
+    predecessors = listOf(predecessorFile.readBytes()),  // optional pool
+)
+if (v.lineage.declared) {
+    for (e in v.lineage.entries) {
+        // status: unverified | verified | mismatch |
+        //         predecessor_invalid | predecessor_unverifiable
+        println("hop ${e.hop} ${e.capsuleId}: ${e.status} ${e.reason ?: ""}")
+    }
+    println("verified to depth ${v.lineage.verifiedDepth}")
+}
+```
+
+A declaration is the successor's **one-way** claim: the predecessor's
+originator has not countersigned it, and an unchecked entry is
+"declared, not verified". Both statements are in `v.notes`, and a
+host UI must not drop them — that is how a citation gets read as an
+endorsement. `v.qualifiers` carries the same weaker-claim facts as bare
+strings (`lineage_declared_unverified`, `lineage_mismatch`,
+`lineage_predecessor_invalid`), non-empty only on a valid verdict.
+
+v0.7.1 declarations commit to plain, default-profile predecessors: an
+encrypted or alternate-profile supply is reported
+`predecessor_unverifiable` with a reason, never guessed at and never
+branded a defect. Writing a declaration (rewrap / `continueFrom`) is a
+declared fast-follow in this lane — use the JS or Python SDK to seal a
+successor, then verify it anywhere.
+
 ## Quick start — drop in "+ Capsule" UI
 
 ```kotlin
@@ -200,6 +239,11 @@ the shared interface keeps those adapters thin.
 - **Multi-signer sealing path**: `Envelope.sign` accepts a `List<Signer>`
   but `CapsuleBuilder.seal` currently signs only with the originator.
   The lower-level `Envelope` API is callable.
+- **Lineage writer surface** (`continueFrom` / `declarePredecessor` /
+  rewrap): verify-side lineage ships in full, but sealing a successor
+  is a declared fast-follow here, as it is in the Swift lane. The
+  asymmetry is recorded in `spec/vectors/registry.json` beside the
+  lineage collection, never left silent.
 
 ## License
 

@@ -7,6 +7,206 @@ protocol uses semantic-version pinning at the format layer (the
 version in the file format will not silently mean different things —
 incompatible wire changes ship as a new format version, as `0.7` did).
 
+## v0.7.1 — Unreleased
+
+### Added
+
+- **Lineage: `manifest.predecessors` — a successor capsule verifiably
+  declares the exact sealed artifact(s) it continues from
+  (`spec/lineage.md`; additive within era 0.7, no version bump, no
+  domain-string or hash changes).** The originator binding stays
+  untouched; the second hop of "open it, validate it, continue the
+  work, and hand it off" now works by verifiable reference instead of
+  the key sharing the format rightly makes impossible. One OPTIONAL
+  manifest member: an array of immediate-parent entries (merges
+  expressible; never an inline ancestry list), each committing to six
+  members — `capsule_id`, `format_version`, `originator_public_key`,
+  `first_event_hash`/`entry_hash` (null together exactly for a
+  zero-event predecessor), and the decisive `manifest_hash` pin.
+  Presence binds, absence reports: a PRESENT malformed declaration
+  fails closed with shared `predecessors[i].<member>` diagnoses (the
+  in-era `participants` precedent — the non-`x-` namespace was already
+  reserved, so zero honestly sealed capsules change verdict, per the
+  new bright-line rule in `spec/versioning.md`); identity coherence is
+  recomputed under the DECLARED predecessor era's domain string and
+  SKIPPED (reported, never failed) for unknown eras. The member is a
+  CLAIM member, not a rule selector, so its interpretation is gated on
+  the capsule's OWN era: inside a pre-lineage-era capsule (0.6) it stays
+  an unknown member — preserved, hashed, never shape-checked, reported
+  in the notes — whether that capsule is the verification subject, a
+  predecessor hop, or an encrypted inner layer. Zero sealed v0.6
+  capsules change verdict. Linkage against a
+  supplied predecessor pool (`predecessors` verify option) is
+  REPORT-ONLY — `result.lineage` {declared, ok, verified_depth,
+  entries} with the closed status vocabulary (unverified | verified |
+  mismatch | predecessor_invalid | predecessor_unverifiable with
+  reasons unsupported_version | encrypted_predecessor |
+  unsupported_profile | unsupported_capability) and an era-keyed
+  recursive walk; a hostile host cannot flip a valid capsule's verdict
+  by supplying the wrong file (pinned by the ok-true-under-mismatch
+  vector). v0.7.1 declarations commit to plain, DEFAULT-PROFILE
+  (`v0.6-suite`) predecessors; encrypted successors may place the
+  member inner, outer, or both (both ⇒ JCS byte equality, fail-closed
+  at L3 — the reader returned by `decrypt()` carries its outer
+  manifest, so this fail-closed rule runs on the documented recipe
+  rather than behind an opt-in verify option). Three lineage qualifiers are EMITTED on valid verdicts:
+  `lineage_declared_unverified`, `lineage_mismatch`,
+  `lineage_predecessor_invalid` — payload-carrying facts stay in the
+  lineage area. Pinned report phrases: "declared, not verified", "not
+  countersigned", "different sealed state of the declared predecessor".
+  New conformance collection `spec/vectors/lineage/` (25 vectors,
+  consumed by all five lanes), including a byte-identical frozen
+  copy of the v0.6 version-compat capsule as the cross-era citation
+  evidence (generator `--check` asserts the equality and never
+  reseals it) and `predecessors-in-v06-capsule-is-inert`, which pins
+  that the value failing `empty-array` closed under 0.7 verifies
+  untouched inside a 0.6 capsule.
+
+- **Rewrap: continuing a capsule is one operation in the reference
+  builder.** `CapsuleBuilder.continueFrom(predecessor, …)`,
+  `declarePredecessor` / `declarePredecessorEntry` (the explicit-values
+  archivist path — form validated, truth not), `rewrapCapsule` (one-call
+  custody transfer), and `seal({ lineagePlacement })`. Writer
+  obligations W1–W9 (`spec/lineage.md`): entries derived from opened
+  bytes with `capsule_id`/`manifest_hash` RECOMPUTED (never the
+  envelope's claim); refusals as `PredecessorError` with the closed
+  reason vocabulary `verification_failed` (override:
+  `allowInvalidPredecessor`, which changes no emitted byte — the
+  citation stays exact and linkage reports `predecessor_invalid`) |
+  `unsupported_version` (no override — the tool cannot compute the
+  commitment) | `encrypted_predecessor` (decrypt-then-rewrap the inner)
+  | `unsupported_profile`; files carry byte-identically while manifest
+  claims reset (participants are the caller's claim, never inherited;
+  fresh chain — predecessor history stays where it is signed); the
+  pinned `custody_received` genesis event is emitted by default
+  (actor `system:host`, opt-out); successors always seal at the current
+  version. Reproducible bytes under pinned timestamps within one
+  implementation.
+
+- **Lineage + rewrap: sdk-py — the second BUILDER lane.** `verify_capsule`
+  gains the `predecessors=` pool kwarg (raw bytes or `CapsuleReader`s),
+  `result["lineage"]` ({declared, ok, verified_depth, entries} in this
+  lane's snake_case, defaulting to the fail-closed not-evaluated shape a
+  version-gate refusal leaves behind) and `result["qualifiers"]`,
+  emitting the three lineage names on valid verdicts. Standalone checks
+  1–3 live in `manifest.predecessors_problems` and fail the capsule
+  closed with the shared `predecessors[i].<member>` diagnoses; the
+  linkage walk in the new `capsule.lineage` module (recomputed-values
+  matching, seen-set, hop cap 256, era-keyed recursion, per-hop full
+  verification under the artifact's own era) is report-only; check 4 —
+  an encrypted successor's inner/outer JCS equality — runs on this
+  lane's L3 path. Writer side, mirroring the reference builder member
+  for member: `CapsuleBuilder.continue_from`, `declare_predecessor` /
+  `declare_predecessor_entry`, `rewrap_capsule`, and
+  `seal(lineage_placement=...)`, with refusals raised as
+  `PredecessorError` carrying the closed `reason` vocabulary
+  (`allow_invalid_predecessor=True` is the W3 override and changes no
+  emitted byte). New `tests/test_lineage.py` (30 tests) and
+  `tests/test_rewrap.py` (15 tests) are the unit witnesses, and
+  `spec/vectors/lineage/` is now consumed by `test_spec_registry.py`.
+
+- **Lineage verify-side parity: sdk-kotlin.** `CapsuleVerifier.verify`
+  gains the `predecessors` pool parameter, `CapsuleVerification.lineage`
+  (`LineageReport` {declared, ok, verifiedDepth, entries} defaulting to
+  the fail-closed not-evaluated shape) and a `qualifiers` member
+  emitting the three lineage names on valid verdicts.
+  Standalone checks 1–3 fail closed as the `lineage` check with the
+  shared `predecessors[i].<member>` diagnoses; the linkage walk
+  (recomputed-values matching, seen-set, hop cap 256, era-keyed
+  recursion) is report-only. `envelope.manifest_hash mismatch: stored X
+  vs recomputed Y` joins this lane's diagnosis wording, matching the
+  other four. `spec/vectors/lineage/` is now consumed by
+  `SpecRegistryTest`; the lane's declared asymmetries — no L3 for the
+  encrypted-successor inner/outer equality, and the builder
+  conveniences as fast-follows — are recorded as registry consumer
+  notes, never silent omissions.
+
+- **Lineage verify-side parity: verifier-rust.** `VerifyOptions` gains
+  the `predecessors` pool, `VerifyResult` gains `lineage: LineageCheck`
+  {declared, ok, verified_depth, entries} and `qualifiers`, both
+  `#[serde(default)]` so pre-lineage JSON still deserializes (the
+  `signer_set`/`actor_set` pattern) and both defaulting to the
+  fail-closed not-evaluated shape a version-gate refusal leaves behind.
+  The declaration stays RAW in the typed manifest view — a typed
+  projection would refuse the manifest outright on a malformed member,
+  presenting a spec-invalid declaration as a corrupt container — so
+  standalone checks 1–3 fail closed at check time under the new
+  `TopErrorCategory::Lineage` with the shared
+  `predecessors[i].<member>` diagnoses, and the linkage walk
+  (recomputed-values matching, seen-set, hop cap 256, era-keyed
+  recursion, per-hop full verification under the artifact's own era) is
+  report-only. L3 evaluates the inner declaration plus the both-present
+  JCS equality. The CLI gains repeatable `--predecessor FILE`, a
+  Custody block carrying the pinned phrases, `lineage` in `--json`, and
+  the requested-policy exit rule: exit 1 unless every supplied artifact
+  matched a declared entry and verified — declared entries left
+  unsupplied are reported, never a policy failure. `spec/vectors/
+  lineage/` is now consumed by `verifier-rust/tests/spec_registry.rs`.
+
+- **Lineage verify-side parity: sdk-swift.** Both `CapsuleVerifier.verify`
+  overloads gain the `predecessors:` pool parameter, and
+  `CapsuleVerification` gains `lineage` (`LineageReport` {declared, ok,
+  verifiedDepth, entries}, defaulting to the fail-closed not-evaluated
+  shape an open-stage refusal leaves behind) plus `qualifiers`, which
+  emits the three lineage names on valid verdicts. The reader keeps
+  opening capsules over the new OPTIONAL member — it is parsed leniently
+  and diagnosed at CHECK time, so standalone checks 1–3 fail closed as
+  the `lineage` check with the shared `predecessors[i].<member>`
+  diagnoses instead of a lane-specific parse crash; check 4 (an
+  encrypted successor's inner/outer JCS equality) runs on this lane's L3
+  path. The linkage walk (recomputed-values matching, seen-set, hop cap
+  256, era-keyed recursion, per-hop full verification under the
+  artifact's own era) is report-only. `envelope.manifest_hash mismatch:
+  stored X vs recomputed Y` joins this lane's diagnosis wording,
+  matching the other four. `spec/vectors/lineage/` is now consumed by
+  `SpecRegistryTests`, with `LineageTests` as the unit witness; the
+  builder conveniences stay declared fast-follows, recorded as registry
+  consumer notes rather than a silent omission.
+
+- **CLI: `capsule verify --predecessor` and the new `capsule rewrap`
+  command — the hand-off is now runnable end to end from a shell.**
+  `verify --predecessor FILE` (repeatable — merges, and one file per
+  hop) supplies the linkage pool. The SDK stays report-only; supplying
+  the flag is the operator asking for a CUSTODY POLICY, under the same
+  supplied-flag discipline `--allowlist` already documents: exit 1
+  unless every supplied file matched a declared entry, verified valid
+  under its own era, and every equality held, so
+  `capsule verify s --predecessor p && publish` cannot publish on a
+  failed custody check. Declared entries left unsupplied are reported
+  and never fail the exit (an operator may hold one branch of a merge);
+  an unmatched supplied file DOES fail it (a mistyped path must not
+  exit 0), and an unreadable one is a usage error (exit 2). A mismatch
+  or an invalid predecessor moves `ok` and the exit code but never
+  `integrity_ok` — the anti-framing split, visible in the output. The
+  new Custody block renders every declared entry with the pinned
+  phrases ("declared, not verified", "not countersigned", "different
+  sealed state of the declared predecessor", and the era a predecessor
+  was checked under); `--json` gains the `lineage` facts channel
+  (snake_case, with `verified_depth` and per-entry `status`/`reason`)
+  beside a `custody` block carrying this invocation's policy.
+  `capsule inspect` prints the declaration verbatim (human and
+  `--json`), labelled unverified.
+  **`capsule rewrap <predecessor> --key FILE --out FILE`** is the CLI's
+  first writing command: it wraps `rewrapCapsule` and applies exactly
+  one policy — do not build on a predecessor that fails verification
+  (exit 1, nothing written; `--allow-invalid-predecessor` proceeds with
+  a pinned WARNING and changes no emitted byte). An unknown declared era
+  refuses with no override (exit 1, versioning vocabulary); an encrypted
+  or alternate-profile predecessor is refused as an input class this
+  command does not take (exit 2) with the decrypt-then-rewrap pointer,
+  never as a verdict about the artifact. Flags: `--participant`
+  (repeatable — never inherited), `--custody-actor` /
+  `--no-custody-event`, `--label`, `--created-at`/`--signed-at`
+  (byte-reproducible output), `--force`, `--json`. The successor's id
+  line says "new identity" and every successful run prints the "not
+  countersigned" note; the private key is read, used to sign, and never
+  printed. New `cli/test/rewrap.test.mjs` carries the two-actor hand-off
+  as an executable test: Alice seals, the naive continuation fails the
+  originator binding, Bob rewraps, `verify --predecessor` reaches depth
+  1, a continue-then-seal variant evolves the work before sealing, and
+  Carol's re-rewrap reaches depth 2 while declaring only its immediate
+  parent.
+
 ## v0.7.0 — 2026-08-04
 
 ### Changed

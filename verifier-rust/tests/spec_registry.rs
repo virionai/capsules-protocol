@@ -15,6 +15,8 @@
 //!   - signing-input.json              (byte-level signing/hashing pins)
 //!   - jcs-key-order.json              (RFC 8785 §3.2.3 member ordering)
 //!   - ijson-acceptance.json           (the I-JSON canonicalization input domain)
+//!   - lineage/vectors.json            (manifest.predecessors: fail-closed
+//!     standalone checks + report-only supplied-bytes linkage)
 //!   - unicode-boundary/vectors.json   (Pith-truncated astral text verifies)
 //!   - pith-authoring/vectors.json     (verbatim technical prose + the
 //!                                      pith_normalized_fields marker verify)
@@ -63,6 +65,15 @@ fn all_error_messages(result: &VerifyResult) -> Vec<String> {
     let mut out: Vec<String> = result.errors.iter().map(|e| e.message.clone()).collect();
     out.extend(result.content_index.errors.iter().cloned());
     out.extend(result.chain.errors.iter().cloned());
+    // Lineage entry errors are REPORT-ONLY (they never join
+    // result.errors), but their diagnoses are pinned wording.
+    out.extend(
+        result
+            .lineage
+            .entries
+            .iter()
+            .flat_map(|e| e.errors.iter().cloned()),
+    );
     out
 }
 
@@ -112,6 +123,11 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
                     "{name}: expected an originator binding error; got {:?}",
                     result.errors
                 ),
+                "lineage" => assert!(
+                    !result.lineage.ok,
+                    "{name}: lineage must fail; got {:?}",
+                    result.lineage
+                ),
                 other => panic!("{name}: unknown failing area {other:?}"),
             }
         }
@@ -142,14 +158,33 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
     }
     // Honest-reporting pin: some rules require the verifier to REPORT a
     // weaker claim machine-readably (e.g. a zero-event chain that was not
-    // walked), not just to pass/fail.
-    if let Some(needle) = expected["notes_includes"].as_str() {
+    // walked), not just to pass/fail. A string pins one substring; an
+    // array pins several (e.g. the lineage phrases "declared, not
+    // verified" AND "not countersigned").
+    let note_needles: Vec<&str> = match &expected["notes_includes"] {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(items) => items
+            .iter()
+            .map(|n| n.as_str().expect("notes_includes entry"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    for needle in note_needles {
         assert!(
             result.notes.iter().any(|n| n.contains(needle)),
             "{name}: expected a note containing {needle:?}; got {:?}",
             result.notes
         );
     }
+    // The capsule's identity is a reported fact some vectors pin (e.g.
+    // the same-id-zero-event-rewrap and unendorsed-successor ids).
+    if let Some(want) = expected["capsule_id"].as_str() {
+        assert_eq!(
+            result.capsule_id, want,
+            "{name}: expected capsule_id {want}"
+        );
+    }
+    assert_lineage_outcome(name, expected, result);
     // Skill-trust derivation (spec/trust.md "Skill trust"): the tier MUST
     // come from the verify result — capsule_signed plus the exact per-id
     // map — never from any skill_trust member in the capsule itself.
@@ -175,6 +210,129 @@ fn assert_verify_outcome(name: &str, expected: &Value, result: &VerifyResult) {
     }
 }
 
+/// The lineage area + verdict qualifiers (spec/lineage.md "Reporting"),
+/// both ignore-if-absent per the shared outcome-schema contract so every
+/// collection parses. `expected.lineage` pins declared / ok /
+/// verified_depth and, when present, per-entry status / hop / reason /
+/// identity_checked / capsule_id plus the supplied artifact's observed
+/// version. `expected.qualifiers` pins the emitted names EXACTLY (bare
+/// strings, `x-` vendor entries stripped before comparison).
+fn assert_lineage_outcome(name: &str, expected: &Value, result: &VerifyResult) {
+    if let Some(want) = expected.get("lineage") {
+        let got = &result.lineage;
+        if let Some(declared) = want["declared"].as_bool() {
+            assert_eq!(got.declared, declared, "{name}: lineage.declared");
+        }
+        if let Some(ok) = want["ok"].as_bool() {
+            assert_eq!(got.ok, ok, "{name}: lineage.ok; got {got:?}");
+        }
+        if let Some(depth) = want["verified_depth"].as_u64() {
+            assert_eq!(
+                got.verified_depth as u64, depth,
+                "{name}: lineage.verified_depth; got {got:?}"
+            );
+        }
+        if let Some(entries) = want["entries"].as_array() {
+            assert_eq!(
+                got.entries.len(),
+                entries.len(),
+                "{name}: lineage entry count; got {:?}",
+                got.entries
+            );
+            for (i, want_entry) in entries.iter().enumerate() {
+                let got_entry = &got.entries[i];
+                if let Some(status) = want_entry["status"].as_str() {
+                    assert_eq!(
+                        got_entry.status, status,
+                        "{name}: lineage.entries[{i}].status; got {got_entry:?}"
+                    );
+                }
+                if let Some(hop) = want_entry["hop"].as_u64() {
+                    assert_eq!(
+                        got_entry.hop as u64, hop,
+                        "{name}: lineage.entries[{i}].hop"
+                    );
+                }
+                if let Some(reason) = want_entry["reason"].as_str() {
+                    assert_eq!(
+                        got_entry.reason.as_deref(),
+                        Some(reason),
+                        "{name}: lineage.entries[{i}].reason"
+                    );
+                }
+                if let Some(capsule_id) = want_entry["capsule_id"].as_str() {
+                    assert_eq!(
+                        got_entry.capsule_id.as_deref(),
+                        Some(capsule_id),
+                        "{name}: lineage.entries[{i}].capsule_id"
+                    );
+                }
+                if let Some(checked) = want_entry["identity_checked"].as_bool() {
+                    assert_eq!(
+                        got_entry.identity_checked, checked,
+                        "{name}: lineage.entries[{i}].identity_checked"
+                    );
+                }
+                if let Some(version) = want_entry["artifact_observed_version"].as_str() {
+                    assert_eq!(
+                        got_entry
+                            .artifact
+                            .as_ref()
+                            .and_then(|a| a.observed_version.as_deref()),
+                        Some(version),
+                        "{name}: lineage.entries[{i}].artifact.observed_version"
+                    );
+                }
+                // A FLOOR, not an equality: the count is lane-local, so
+                // only the honesty invariant is pinned — an artifact
+                // reported as failing never also reports zero errors.
+                if let Some(floor) = want_entry["artifact_error_count_min"].as_u64() {
+                    let got_count = got_entry
+                        .artifact
+                        .as_ref()
+                        .map_or(0, |a| a.error_count as u64);
+                    assert!(
+                        got_count >= floor,
+                        "{name}: lineage.entries[{i}].artifact.error_count >= {floor}; got {got_count}"
+                    );
+                }
+            }
+        }
+    }
+    if let Some(want) = expected["qualifiers"].as_array() {
+        let got: Vec<&str> = result
+            .qualifiers
+            .iter()
+            .map(String::as_str)
+            .filter(|q| !q.starts_with("x-"))
+            .collect();
+        let want: Vec<&str> = want
+            .iter()
+            .map(|q| q.as_str().expect("qualifier name"))
+            .collect();
+        assert_eq!(got, want, "{name}: qualifiers");
+    }
+}
+
+/// The lineage linkage pool (spec/lineage.md): per-vector `predecessors`
+/// names checked-in artifacts relative to the collection file, supplied
+/// to the verify call. REPORT-ONLY by design — the vectors pin that the
+/// pool never flips the capsule's own `ok`.
+fn vector_predecessors(base: &Path, vector: &Value) -> Vec<Vec<u8>> {
+    vector["predecessors"]
+        .as_array()
+        .map(|pool| {
+            pool.iter()
+                .map(|rel| {
+                    let rel = rel.as_str().expect("predecessors entry");
+                    std::fs::read(base.join(rel))
+                        .unwrap_or_else(|e| panic!("read predecessor {rel:?}: {e}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyResult {
     let file = vector["capsule_file"].as_str().expect("capsule_file");
     let bytes =
@@ -185,6 +343,7 @@ fn verify_fixture(base: &Path, allowlist: &[String], vector: &Value) -> VerifyRe
             allowlist: allowlist.to_vec(),
             recipient_private_key: None,
             accept_versions: None,
+            predecessors: vector_predecessors(base, vector),
         },
     )
 }
@@ -373,6 +532,86 @@ fn pith_authoring_registry_outcomes() {
     }
 }
 
+/// Lineage (spec/lineage.md, `manifest.predecessors`). PRESENCE BINDS,
+/// ABSENCE REPORTS: an absent member is "no claim" (declared=false,
+/// reported); a PRESENT malformed declaration fails closed with the
+/// shared `predecessors[i].<member>` diagnoses — never a lane-specific
+/// parse crash, which is why this lane keeps the member raw in the typed
+/// manifest view and diagnoses at check time.
+///
+/// Linkage against the supplied `predecessors` pool is REPORT-ONLY: it
+/// can falsify the lineage AREA but never the capsule's overall `ok`.
+/// The mismatch and predecessor_invalid vectors pin exactly that — a
+/// host's file handling must not forge a forgery verdict against an
+/// honest successor, and a lane that "helpfully" hardens this into an
+/// overall failure is non-conforming.
+#[test]
+fn lineage_registry_outcomes() {
+    let path = vectors_dir().join("lineage/vectors.json");
+    let doc = load_json(&path);
+    let base = path.parent().unwrap().to_path_buf();
+    let allowlist = registry_allowlist(&doc, &base);
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        if let Some(requires) = v["requires"].as_array() {
+            for req in requires {
+                // This lane implements every capability defined today;
+                // fail loudly on one it does not know rather than skipping.
+                assert_eq!(
+                    req.as_str(),
+                    Some("encryption"),
+                    "{name}: unknown requirement {req:?}"
+                );
+            }
+        }
+        let expected = &v["expected"];
+        let result = verify_fixture(&base, &allowlist, v);
+        assert_verify_outcome(name, expected, &result);
+
+        // Encrypted successors (spec/lineage.md): L2 evaluates the outer
+        // declaration, L3 the inner plus the both-present JCS equality.
+        // This lane runs L3 inside the same verification, so the inner
+        // outcome is the same result verified WITH the recipient key.
+        if let Some(key_name) = expected["decryptable_with"].as_str() {
+            let keys = load_json(&base.join(doc["keys_file"].as_str().expect("keys_file")));
+            let priv_hex = keys
+                .pointer(&format!("/{key_name}/privateKey"))
+                .and_then(|k| k.as_str())
+                .unwrap_or_else(|| panic!("{name}: keys_file has no {key_name}/privateKey"));
+            let priv_bytes: [u8; 32] = hex::decode(priv_hex)
+                .expect("private key hex")
+                .try_into()
+                .expect("private key must be 32 bytes");
+            let file = v["capsule_file"].as_str().expect("capsule_file");
+            let bytes = std::fs::read(base.join(file)).expect("read fixture");
+            let l3 = verify_capsule(
+                &bytes,
+                &VerifyOptions {
+                    allowlist: allowlist.clone(),
+                    recipient_private_key: Some(priv_bytes),
+                    accept_versions: None,
+                    predecessors: vector_predecessors(&base, v),
+                },
+            );
+            let want_inner_ok = expected["inner_ok"].as_bool().unwrap_or(true);
+            assert_eq!(
+                l3.ok, want_inner_ok,
+                "{name}: expected inner_ok={want_inner_ok}; errors: {:?}",
+                l3.errors
+            );
+            if let Some(needle) = expected["inner_error_includes"].as_str() {
+                let haystack = all_error_messages(&l3).join(" ");
+                assert!(
+                    haystack.contains(needle),
+                    "{name}: expected an inner error containing {needle:?}; got {haystack:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Normative reject-reason vocabulary from `ijson-acceptance.json`.
 const IJSON_REASONS: &[&str] = &["integer_out_of_range", "unpaired_surrogate", "duplicate_member"];
 
@@ -498,6 +737,7 @@ fn semantic_binding_registry_outcomes() {
                     allowlist: allowlist.clone(),
                     recipient_private_key: Some(priv_bytes),
                     accept_versions: None,
+                    predecessors: Vec::new(),
                 },
             );
             assert!(

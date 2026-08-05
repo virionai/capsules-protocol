@@ -112,6 +112,12 @@ class CapsuleReader:
         self._files = files
         self._manifest = manifest
         self._envelope = envelope
+        # Set only on the reader ``decrypt()`` returns: the layer this
+        # one came out of. It carries the L3 inner/outer lineage
+        # equality (spec/lineage.md standalone check 4) to
+        # ``verify_capsule`` without the caller having to know the check
+        # exists — a normative fail-closed rule must not be opt-in.
+        self._outer_manifest: dict | None = None
 
     @classmethod
     def from_bytes(cls, data: bytes) -> CapsuleReader:
@@ -138,6 +144,10 @@ class CapsuleReader:
 
     def envelope(self) -> dict:
         return self._envelope
+
+    def outer_manifest(self) -> dict | None:
+        """The enclosing layer's manifest, or None for a top-level reader."""
+        return self._outer_manifest
 
     def files(self) -> dict[str, bytes]:
         return self._files
@@ -265,7 +275,9 @@ class CapsuleReader:
             raise MalformedCapsuleError(f"decrypted manifest/envelope parse: {e}") from e
         _validate_manifest_shape(inner_manifest)
         _validate_envelope_shape(inner_envelope)
-        return CapsuleReader(inner_files, inner_manifest, inner_envelope)
+        inner = CapsuleReader(inner_files, inner_manifest, inner_envelope)
+        inner._outer_manifest = self._manifest
+        return inner
 
     def _require_plain(self) -> None:
         if self.is_encrypted():
