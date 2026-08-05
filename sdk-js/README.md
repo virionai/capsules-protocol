@@ -184,7 +184,10 @@ const l3 = await verifyCapsule(inner, {
   never author-declared: `verifyCapsule(...).skillTrust` derives it from
   the host's allowlist at verify time (spec/trust.md)
 - `builder.previewCapsuleId()` — know the capsule id before sealing
-- `builder.appendEvent(e, { pith: false })` — skip payload normalization
+- `builder.appendEvent(e, { pith: true })` — opt in to Pith payload
+  normalization (off by default — an author who writes prose gets
+  their prose; a rewrite that changed a field is declared in the
+  event's `pith_normalized_fields`, spec/pith.md)
 - CLI: [`../cli/`](../cli/) (`capsule verify`, `capsule inspect`, ...)
 - Full surface: [`src/index.d.ts`](src/index.d.ts); protocol details:
   [`../spec/`](../spec/)

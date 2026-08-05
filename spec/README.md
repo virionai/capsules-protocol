@@ -18,7 +18,11 @@ These five things are the durable core. They survive untouched.
 4. **Pith as a context-style discipline.** Cold-reading LLMs absorb
    Pith-styled narrative faster and with fewer hallucinations than
    free-form prose. The reference library is a normalizer, not
-   "deterministic compression" — that framing was misleading.
+   "deterministic compression" — that framing was misleading. It is an
+   authoring layer, opt-in at the builder: verification never depends
+   on it, and prose the author wrote is carried faithfully unless the
+   author asks for the rewrite (with the rewrite then declared
+   in-chain via `pith_normalized_fields`).
 5. **Offline-first verification.** The capsule file verifies without a
    server. External services are optional layers, never required.
 
@@ -99,7 +103,8 @@ procedure.
   open forever, unknown ones fail closed with a non-tamper diagnosis,
   domain strings keyed by declared version, the v0.6 algorithm suite
 - [trust.md](trust.md) — trust model, allowlists, derived skill trust
-- [pith.md](pith.md) — context-style discipline for narrative fields
+- [pith.md](pith.md) — authoring-layer context discipline for narrative
+  fields (opt-in normalizer; verification never depends on it)
 - [federation.md](federation.md) — key discovery, issuer metadata, and
   temporal anchoring (informative overlay; embedded locations remain a
   post-0.7 item)

@@ -48,6 +48,38 @@ incompatible wire changes ship as a new format version, as `0.7` did).
   (0.8) so they keep guarding the stale-literal class instead of
   simulating the version that just became current.
 
+- **BREAKING: Pith is an opt-in authoring layer, and its normalizer no
+  longer corrupts technical prose.** The v0.6 sentence splitter treated
+  every `[.!?]` as a sentence boundary, so a dot inside an identifier
+  (`ledger.entry_audit`), a decimal (`12.4k`), or a version number
+  fragmented the sentence, burned the three-sentence budget on the
+  fragments, and silently deleted trailing sentences — and it ran BY
+  DEFAULT on `payload.summary`/`statement`/`note` of every appended
+  event, permanently, inside the hash chain, where the original is not
+  preserved. Three changes, mirrored in sdk-js and sdk-py
+  (`spec/pith.md` now frames Pith as the roadmap's authoring/profile
+  layer): (1) the sentence scanner only ends a sentence at a terminator
+  followed by whitespace — never mid-token — refuses boundaries before
+  lowercase continuations, after common abbreviations, and after
+  single-letter initials, handles fullwidth CJK terminators without
+  inserting spaces, and cuts the original string at sentence ends so
+  kept text is byte-identical to the input; (2) builders apply the
+  normalizer only when asked (`pith: true`, per-builder or per-event,
+  with the per-event flag now overriding in both directions) — an
+  author who writes prose gets their prose; (3) when the normalizer DID
+  change a field, the event records the affected payload members in the
+  new OPTIONAL advisory `pith_normalized_fields` member
+  (`spec/chain.md`), validated against the untrusted-path grammar at
+  append time and covered by the event hash like any other member —
+  a lossy rewrite in the chain is never silent. New
+  `normalizeEventPayload` / `normalize_event_payload` expose the change
+  report; `compressEventPayload` keeps its old shape. Cross-lane
+  evidence: `spec/vectors/pith-authoring/` (a default-built capsule
+  whose identifier-and-decimal prose is stored byte-identical with no
+  marker, and a pith-enabled capsule carrying the marker) is consumed
+  by all five lanes, and the regenerated `unicode-boundary` fixture now
+  carries the marker on its truncated event.
+
 ### Added
 
 - **The version-compatibility policy (`spec/versioning.md`) — the gate

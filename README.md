@@ -75,7 +75,7 @@ spec/                  v0.7 protocol specification (normative)
   chain.md             event chain rules
   envelope.md          provenance envelope schema
   trust.md             trust model and derived skill trust
-  pith.md              context-style discipline (informative)
+  pith.md              authoring-layer context discipline (opt-in normalizer)
 
 sdk-js/                JavaScript reference SDK (npm)
 sdk-py/                Python SDK

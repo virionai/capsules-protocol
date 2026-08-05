@@ -7,6 +7,7 @@ suite required for a durable v1.0 spec.
 Status labels:
 
 - `Complete in v0.6`: specified and implemented in the current profile (the v0.6 redesign baseline, carried forward unchanged by v0.7).
+- `Complete in v0.7`: specified and implemented by the v0.7 remediation.
 - `Partial`: specified or implemented in part, but not enough for v1.0.
 - `Open`: not yet specified.
 
@@ -34,7 +35,7 @@ Status labels:
 | Temporal anchoring profile | Open | `signed_at` is self-attested; `spec/federation.md` drafts bundled `anchors` (Rekor / RFC 3161) with an offline-verification requirement | Define anchor proof formats and verifier treatment; add anchor vectors |
 | Alternate profile declaration | Open | `spec/README.md`, `spec/envelope.md`, and `spec/trust.md` describe extension points conceptually | Specify profile identifiers, negotiation, required fields, and fail-closed behavior |
 | Encrypted outer metadata minimization | Open | v0.7 intentionally exposes outer metadata needed for L2 verification | Define optional profiles for reducing recipient and issuer metadata exposure |
-| Pith protocol boundary | Open | `spec/pith.md` describes Pith as a context-style discipline and helper normalizer, but it remains easy to confuse with canonical protocol semantics | Move Pith requirements into an explicit authoring/profile layer; keep cryptographic verification independent from lossy narrative normalization |
+| Pith protocol boundary | Complete in v0.7 | `spec/pith.md` is an explicit authoring/profile layer: the normalizer is opt-in at the builder (JS/Python), sentence selection is meaning-preserving (a dot inside an identifier, decimal, version, or URL is never a boundary), a rewrite that changed a field is declared in-chain via `pith_normalized_fields` (`spec/chain.md`), and cryptographic verification is independent of narrative normalization; `spec/vectors/pith-authoring/` is consumed by all five lanes | Keep the authoring layer out of verifier semantics; benchmark the discipline's readability claim before any stronger wording |
 | Ecosystem adapter contracts | Partial | `spec/profiles/clerk.md` + `sdk-js/src/federation/` demonstrate the first adapter contract: an external identity/auth provider (Clerk) rides alongside capsules for identity binding, encrypted-recipient discovery, and policy while core verification stays offline. Other targets (MCP, A2A, OpenLineage, C2PA, SLSA/in-toto, LangChain/LlamaIndex) remain conceptual | Add adapter mappings for the remaining targets following the same portability-firewall pattern; clarify translated vs referenced vs omitted data per adapter |
 
 ## v1.0 Gates

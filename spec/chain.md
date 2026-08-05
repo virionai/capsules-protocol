@@ -16,6 +16,7 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
   "timestamp": "2026-05-07T12:00:00Z",
   "payload": { },
   "untrusted_payload_fields": ["payload.summary", "payload.statement"],
+  "pith_normalized_fields": ["payload.summary"],
   "prev_hash": "<64-hex>",
   "hash": "<64-hex>"
 }
@@ -50,6 +51,22 @@ event, JSON object, no trailing whitespace, terminated by `\n`.
   contents must be treated as untrusted by readers. Every entry MUST
   match the path grammar in "Untrusted content" below; writers refuse
   to emit a non-conforming entry and verifiers reject it fail-closed.
+- `pith_normalized_fields`: OPTIONAL, advisory provenance. Paths in the
+  same grammar as `untrusted_payload_fields`, naming top-level `payload`
+  members whose narrative text was rewritten by a Pith normalizer — or
+  by an author applying the discipline — before the event was hashed.
+  The pre-rewrite text is NOT preserved anywhere in the capsule; this
+  marker is what keeps a lossy rewrite inside the hash chain from being
+  silent (see [pith.md](pith.md)). Writers MUST NOT emit an
+  out-of-grammar entry (the reference builders refuse at append time,
+  and record the member automatically when their normalizer changed a
+  field). Readers MUST preserve the member verbatim, MUST include it in
+  the canonicalization below — it is covered by the event hash like
+  every other member — and MUST NOT reject an event merely because it
+  is present. Unlike `untrusted_payload_fields` there is no verifier
+  validation obligation in v0.7: a malformed entry weakens provenance
+  detail but does not unmark unsafe content for downstream readers.
+  Conformance vectors: `spec/vectors/pith-authoring/`.
 - `prev_hash`: hex of the previous event's `hash`, or 64 zeroes for the
   first event.
 - `hash`: see "Hashing" below.
