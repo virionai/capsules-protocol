@@ -8,7 +8,7 @@ import {
   sha256,
   sha256Hex,
 } from "./canonical.js";
-import { CURRENT_VERSION, idDomain } from "./versions.js";
+import { CURRENT_VERSION, classifyVersion, idDomain } from "./versions.js";
 
 /**
  * Compute capsule_id from originator pubkey + first event hash.
@@ -147,6 +147,181 @@ export function signerCommitmentProblems(commitment) {
   return problems;
 }
 
+// ---------------------------------------------------------------------------
+// Lineage declaration (manifest.predecessors) — spec/lineage.md.
+//
+// A successor capsule declares the exact sealed artifact(s) it continues
+// from. Presence binds, absence reports: an absent member is "no claim";
+// a PRESENT member no reader can interpret is the capsule asserting
+// something meaningless about its own origin, rejected fail-closed with
+// the SAME `predecessors[i].<member>` diagnoses in every lane.
+// ---------------------------------------------------------------------------
+
+const HEX64_LOWER = /^[0-9a-f]{64}$/;
+
+/** The six spec-defined members of one predecessor entry, all REQUIRED. */
+export const PREDECESSOR_ENTRY_MEMBERS = Object.freeze([
+  "capsule_id",
+  "format_version",
+  "originator_public_key",
+  "first_event_hash",
+  "entry_hash",
+  "manifest_hash",
+]);
+
+/**
+ * v0.7.1 default-profile scope (spec/lineage.md "Scope"): lineage
+ * declarations commit to DEFAULT-PROFILE predecessors. The era default
+ * profile id is `v0.6-suite` (version 1.0), frozen forever. A manifest
+ * that declares `format.profile` with any other id is an
+ * alternate-profile capsule; this helper returns the declared id for
+ * such a manifest, and null for the default (declared explicitly or by
+ * absence). A present-but-uninterpretable declaration returns a
+ * placeholder string — the caller treats it as non-default; the profile
+ * machinery (spec/profiles.md, parallel track) owns its full diagnosis.
+ */
+export const DEFAULT_PROFILE_ID = "v0.6-suite";
+
+export function declaredAlternateProfileId(manifest) {
+  const profile = manifest?.format?.profile;
+  if (profile === undefined || profile === null) return null;
+  const id =
+    typeof profile === "object" && !Array.isArray(profile) ? profile.id : undefined;
+  if (id === DEFAULT_PROFILE_ID) return null;
+  return typeof id === "string" && id.length > 0 ? id : "(uninterpretable profile declaration)";
+}
+
+/**
+ * Validate a stored `predecessors` value (spec/lineage.md, standalone
+ * checks 1–3). Returns a list of problem strings; empty means
+ * well-formed. Every problem names its member as
+ * `predecessors[i].<member>` — the shared cross-lane diagnosis strings.
+ *
+ * Checks:
+ *   1. Shape and grammar — array of entry objects; six members present
+ *      with required types; lowercase hex REQUIRED, not normalized (the
+ *      claim is bound by its stored bytes); a present-but-EMPTY array is
+ *      malformed ("no claim" has exactly one spelling: absence); two
+ *      entries sharing a manifest_hash are malformed (the same artifact
+ *      cited twice — the duplicate-signer precedent). Two entries
+ *      sharing capsule_id with different manifest_hash values are LEGAL
+ *      (a merge of two snapshots of one line). Vendor extensions inside
+ *      an entry use the x- prefix; any other unrecognized member is
+ *      malformed (the signer_commitment exact-members precedent).
+ *   2. Null coherence — first_event_hash and entry_hash both null
+ *      (zero-event predecessor) or both 64-hex; a mixed declaration
+ *      describes a predecessor that cannot exist.
+ *   3. Identity coherence — when the declared format_version is in THIS
+ *      verifier's known table, the declared capsule_id must equal the
+ *      recompute under THAT era's identity rule (32 zero bytes for a
+ *      null first_event_hash). An unknown declared era SKIPS the check
+ *      (versioning.md forbids applying one era's formula to another
+ *      era's claim) — callers report identity_checked=false, never a
+ *      failure: the rule must not punish a capsule for the verifier's
+ *      age.
+ */
+export function predecessorsProblems(predecessors) {
+  if (!Array.isArray(predecessors)) {
+    return ["predecessors must be an array of predecessor entry objects"];
+  }
+  if (predecessors.length === 0) {
+    return [
+      "predecessors must not be empty when present (\"no claim\" has exactly one spelling: absence)",
+    ];
+  }
+  const problems = [];
+  predecessors.forEach((entry, i) => {
+    if (entry == null || typeof entry !== "object" || Array.isArray(entry)) {
+      problems.push(`predecessors[${i}] must be an entry object`);
+      return;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!PREDECESSOR_ENTRY_MEMBERS.includes(key) && !key.startsWith("x-")) {
+        problems.push(
+          `predecessors[${i}].${key} is not a spec-defined entry member ` +
+            `(vendor extensions must use the x- prefix)`,
+        );
+      }
+    }
+    for (const key of ["capsule_id", "originator_public_key", "manifest_hash"]) {
+      if (typeof entry[key] !== "string" || !HEX64_LOWER.test(entry[key])) {
+        problems.push(`predecessors[${i}].${key} must be lowercase 64-hex`);
+      }
+    }
+    for (const key of ["first_event_hash", "entry_hash"]) {
+      const value = entry[key];
+      if (value === undefined) {
+        problems.push(`predecessors[${i}].${key} must be lowercase 64-hex or null`);
+      } else if (value !== null && (typeof value !== "string" || !HEX64_LOWER.test(value))) {
+        problems.push(`predecessors[${i}].${key} must be lowercase 64-hex or null`);
+      }
+    }
+    const versionClass = classifyVersion(entry.format_version);
+    if (versionClass.status === "invalid") {
+      problems.push(
+        `predecessors[${i}].format_version must be a '<major>.<minor>' version string, ` +
+          `got ${JSON.stringify(entry.format_version ?? null)}`,
+      );
+    }
+    // Null coherence (check 2) — only meaningful once both members typed.
+    const feh = entry.first_event_hash;
+    const eh = entry.entry_hash;
+    const fehOk = feh === null || (typeof feh === "string" && HEX64_LOWER.test(feh));
+    const ehOk = eh === null || (typeof eh === "string" && HEX64_LOWER.test(eh));
+    if (fehOk && ehOk && (feh === null) !== (eh === null)) {
+      problems.push(
+        `predecessors[${i}].first_event_hash and predecessors[${i}].entry_hash must be ` +
+          `both null (zero-event predecessor) or both 64-hex — a mixed declaration ` +
+          `describes a predecessor that cannot exist`,
+      );
+    }
+    // Identity coherence (check 3) — known declared eras only.
+    if (
+      versionClass.status === "known" &&
+      typeof entry.capsule_id === "string" && HEX64_LOWER.test(entry.capsule_id) &&
+      typeof entry.originator_public_key === "string" &&
+      HEX64_LOWER.test(entry.originator_public_key) &&
+      fehOk && ehOk && (feh === null) === (eh === null)
+    ) {
+      const derived = computeCapsuleId(
+        hexToBytes(entry.originator_public_key),
+        feh,
+        entry.format_version,
+      );
+      if (derived !== entry.capsule_id) {
+        problems.push(
+          `predecessors[${i}].capsule_id does not derive from the declared originator ` +
+            `key and first event hash under era ${entry.format_version} — the ` +
+            `declaration contradicts its own members`,
+        );
+      }
+    }
+  });
+  // Duplicate manifest_hash across entries (same artifact cited twice).
+  const seen = new Map();
+  predecessors.forEach((entry, i) => {
+    const mh = entry?.manifest_hash;
+    if (typeof mh !== "string" || !HEX64_LOWER.test(mh)) return;
+    if (seen.has(mh)) {
+      problems.push(
+        `predecessors[${i}].manifest_hash duplicates predecessors[${seen.get(mh)}].manifest_hash ` +
+          `(the same sealed artifact cited twice)`,
+      );
+    } else {
+      seen.set(mh, i);
+    }
+  });
+  return problems;
+}
+
+/**
+ * True when the declared era's identity rule is available to this
+ * implementation, i.e. check 3 above actually ran for the entry.
+ */
+export function predecessorIdentityCheckable(entry) {
+  return classifyVersion(entry?.format_version).status === "known";
+}
+
 /**
  * Build a well-formed signer_commitment from seal-time members
  * [{role, public_key}]. Sorts ascending by (public_key, role) and throws
@@ -183,6 +358,7 @@ export function buildManifest({
   encryption,
   createdAt,
   signerCommitment,
+  predecessors,
 }) {
   const manifest = {
     format: {
@@ -203,6 +379,9 @@ export function buildManifest({
   // JCS sorts keys at serialization time, so insertion position is
   // irrelevant to the canonical bytes.
   if (signerCommitment !== undefined) manifest.signer_commitment = signerCommitment;
+  // Optional lineage declaration (spec/lineage.md): absence is "no
+  // claim"; a present value must already satisfy predecessorsProblems.
+  if (predecessors !== undefined) manifest.predecessors = predecessors;
   return manifest;
 }
 

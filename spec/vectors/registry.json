@@ -166,6 +166,33 @@
         }
       }
     },
+    "lineage/vectors.json": {
+      "kind": "outcome-collection",
+      "failing_areas": [
+        "lineage"
+      ],
+      "lanes": {
+        "js": {
+          "consumer": "tools/check-spec-vectors.mjs",
+          "mode": "walker"
+        },
+        "python": {
+          "exempt": "Reference-first landing (spec/lineage.md): the sdk-py verify-side lineage parity (predecessors= pool kwarg, result['lineage'], continue_from/rewrap_capsule builders) is the python work item of the same v0.7.1 change and lands as its own commit — replace this exemption with sdk-py/tests/test_spec_registry.py in that change. Sequencing record, not a silent omission."
+        },
+        "rust": {
+          "exempt": "Reference-first landing (spec/lineage.md): the verifier-rust lineage parity (lenient predecessors view, LineageCheck with serde(default), --predecessor CLI) is the rust work item of the same v0.7.1 change — replace this exemption with verifier-rust/tests/spec_registry.rs in that change. Sequencing record, not a silent omission."
+        },
+        "swift": {
+          "exempt": "Reference-first landing (spec/lineage.md): the sdk-swift verify-side lineage parity (LineageReport, predecessors pool) is the swift work item of the same v0.7.1 change — replace this exemption with sdk-swift/Tests/CapsuleTests/SpecRegistryTests.swift in that change. Builder conveniences stay declared fast-follows."
+        },
+        "kotlin": {
+          "exempt": "Reference-first landing (spec/lineage.md): the sdk-kotlin verify-side lineage parity is the kotlin work item of the same v0.7.1 change — replace this exemption with the SpecRegistryTest consumer in that change. Kotlin core is plain-only (L2): the vectors tagged requires:['encryption'] map to its documented plain-only refusal, and an encrypted POOL artifact reports the runtime capability refusal per spec/lineage.md."
+        }
+      },
+      "notes": [
+        "spec/lineage.md (manifest.predecessors). Per-vector `predecessors` supplies the linkage pool (paths relative to the collection file); `expected.lineage` pins {declared, ok, verified_depth, entries:[{status, hop, reason?, identity_checked?, capsule_id?, artifact_observed_version?}]}; `expected.qualifiers` pins the emitted lineage qualifier names exactly (x- vendor entries stripped before comparison). Both members are ignore-if-absent so every consumer can parse collections that do not use them. Linkage is REPORT-ONLY: the ok-true-under-mismatch vectors are normative — a lane that fails the capsule on a mismatched supply is non-conforming. The frozen v0.6 predecessor fixture is a byte-identical copy of version-compat/output/known-previous-version-0.6.capsule; the generator's --check asserts the equality and never reseals it."
+      ]
+    },
     "malformed-layout/vectors.json": {
       "kind": "outcome-collection",
       "failing_areas": [

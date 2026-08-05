@@ -166,6 +166,7 @@ const FAILING_AREA = {
   encrypted_blob: (r) => r.errors.some((e) => e.includes("encrypted_blob_hash")),
   signer_set: (r) => r.signerSet.ok === false,
   originator_binding: (r) => r.errors.some((e) => e.includes("originator binding")),
+  lineage: (r) => r.lineage.ok === false,
 };
 
 // Map an open-stage `reason` category to the JS reference lane's error
@@ -310,10 +311,32 @@ async function checkCollection(path, doc) {
       fail(`${label}: capsule_file cannot be opened: ${err.message}`);
       continue;
     }
-    const result = await verifyCapsule(reader, { allowlist: vectorAllowlist });
+    // Lineage linkage pool (spec/lineage.md): per-vector `predecessors`
+    // names checked-in artifacts (relative to the collection file)
+    // supplied to the verify call. REPORT-ONLY by design — the vectors
+    // pin that the pool never flips the capsule's own ok.
+    const verifyOptions = { allowlist: vectorAllowlist };
+    if (Array.isArray(v.predecessors)) {
+      verifyOptions.predecessors = [];
+      for (const rel of v.predecessors) {
+        try {
+          verifyOptions.predecessors.push(await readFile(join(base, rel)));
+        } catch (err) {
+          fail(`${label}: predecessors entry unreadable: ${err.message}`);
+        }
+      }
+    }
+    const result = await verifyCapsule(reader, verifyOptions);
 
     if (typeof v.expected.ok === "boolean" && result.ok !== v.expected.ok) {
       fail(`${label}: expected ok=${v.expected.ok}, got ok=${result.ok} (${result.errors.join("; ")})`);
+    }
+    // The capsule's identity is a reported fact some vectors pin (e.g.
+    // the same-id-zero-event-rewrap and unendorsed-successor ids).
+    if (v.expected.capsule_id && reader.manifest().id !== v.expected.capsule_id) {
+      fail(
+        `${label}: expected capsule_id ${v.expected.capsule_id}, got ${reader.manifest().id}`,
+      );
     }
     // spec/versioning.md: the observed format version is a reported fact.
     if (v.expected.observed_version &&
@@ -361,6 +384,73 @@ async function checkCollection(path, doc) {
         fail(`${label}: expected skillTrust.skills=${wantSkills}, got ${gotSkills}`);
       }
     }
+    // Lineage area expectations (spec/lineage.md; ignore-if-absent per
+    // the shared outcome-schema contract). `expected.lineage` pins
+    // declared/ok/verified_depth and, when present, per-entry
+    // status/hop/reason/identity_checked/capsule_id and the supplied
+    // artifact's observed version.
+    if (v.expected.lineage) {
+      const want = v.expected.lineage;
+      const got = result.lineage ?? {};
+      if (typeof want.declared === "boolean" && got.declared !== want.declared) {
+        fail(`${label}: expected lineage.declared=${want.declared}, got ${got.declared}`);
+      }
+      if (typeof want.ok === "boolean" && got.ok !== want.ok) {
+        fail(`${label}: expected lineage.ok=${want.ok}, got ${got.ok}`);
+      }
+      if (typeof want.verified_depth === "number" && got.verifiedDepth !== want.verified_depth) {
+        fail(
+          `${label}: expected lineage.verified_depth=${want.verified_depth}, got ${got.verifiedDepth}`,
+        );
+      }
+      if (Array.isArray(want.entries)) {
+        const entries = got.entries ?? [];
+        if (entries.length !== want.entries.length) {
+          fail(
+            `${label}: expected ${want.entries.length} lineage entr${want.entries.length === 1 ? "y" : "ies"}, got ${entries.length}`,
+          );
+        } else {
+          want.entries.forEach((wantEntry, i) => {
+            const gotEntry = entries[i];
+            for (const [field, resultField] of [
+              ["status", "status"],
+              ["hop", "hop"],
+              ["reason", "reason"],
+              ["capsule_id", "capsule_id"],
+              ["identity_checked", "identityChecked"],
+            ]) {
+              if (wantEntry[field] !== undefined && gotEntry[resultField] !== wantEntry[field]) {
+                fail(
+                  `${label}: expected lineage.entries[${i}].${field}=` +
+                    `${JSON.stringify(wantEntry[field])}, got ${JSON.stringify(gotEntry[resultField])}`,
+                );
+              }
+            }
+            if (
+              wantEntry.artifact_observed_version !== undefined &&
+              gotEntry.artifact?.observed_version !== wantEntry.artifact_observed_version
+            ) {
+              fail(
+                `${label}: expected lineage.entries[${i}].artifact.observed_version=` +
+                  `${JSON.stringify(wantEntry.artifact_observed_version)}, got ` +
+                  `${JSON.stringify(gotEntry.artifact?.observed_version)}`,
+              );
+            }
+          });
+        }
+      }
+    }
+    // Verdict qualifiers: exact array after stripping x- vendor entries
+    // (spec results vocabulary; ignore-if-absent).
+    if (Array.isArray(v.expected.qualifiers)) {
+      const gotQualifiers = (result.qualifiers ?? []).filter((q) => !q.startsWith("x-"));
+      if (JSON.stringify(gotQualifiers) !== JSON.stringify(v.expected.qualifiers)) {
+        fail(
+          `${label}: expected qualifiers ${JSON.stringify(v.expected.qualifiers)}, ` +
+            `got ${JSON.stringify(gotQualifiers)}`,
+        );
+      }
+    }
     for (const area of v.expected.failing ?? []) {
       const pred = FAILING_AREA[area];
       if (!pred) {
@@ -373,6 +463,9 @@ async function checkCollection(path, doc) {
       ...result.errors,
       ...result.contentIndex.errors,
       ...(result.chain.errors ?? []).map((e) => (typeof e === "string" ? e : e.message ?? "")),
+      // Lineage entry errors are report-only (they never join
+      // result.errors), but their diagnoses are pinned wording.
+      ...(result.lineage?.entries ?? []).flatMap((e) => e.errors ?? []),
     ].join(" ");
     if (v.expected.error_includes && !haystack.includes(v.expected.error_includes)) {
       fail(`${label}: expected an error containing '${v.expected.error_includes}'`);
@@ -403,9 +496,28 @@ async function checkCollection(path, doc) {
           const innerResult = await verifyCapsule(inner, {
             allowlist: vectorAllowlist,
             outerEnvelope: reader.envelope(),
+            // The outer manifest enables the L3 inner/outer lineage
+            // equality check (spec/lineage.md "Encrypted successors").
+            outerManifest: reader.manifest(),
           });
-          if (!innerResult.ok) {
+          // `inner_ok: false` pins an L3 fail-closed outcome (e.g. the
+          // inner/outer lineage mismatch); default expectation is that
+          // the inner verifies.
+          const wantInnerOk = v.expected.inner_ok !== false;
+          if (wantInnerOk && !innerResult.ok) {
             fail(`${label}: inner capsule does not verify: ${innerResult.errors.join("; ")}`);
+          }
+          if (!wantInnerOk && innerResult.ok) {
+            fail(`${label}: expected inner verification to fail at L3, but it verified`);
+          }
+          if (
+            v.expected.inner_error_includes &&
+            !innerResult.errors.join(" ").includes(v.expected.inner_error_includes)
+          ) {
+            fail(
+              `${label}: expected an inner error containing ` +
+                `'${v.expected.inner_error_includes}', got ${innerResult.errors.join("; ")}`,
+            );
           }
         } catch (err) {
           fail(`${label}: decrypt with '${v.expected.decryptable_with}' failed: ${err.message}`);
@@ -416,10 +528,18 @@ async function checkCollection(path, doc) {
     // weaker claim machine-readably (e.g. a zero-event chain that was not
     // walked), not just to pass/fail. Those vectors pin a notes substring.
     if (v.expected.notes_includes) {
-      if (!(result.notes ?? []).join(" ").includes(v.expected.notes_includes)) {
-        fail(
-          `${label}: expected a note containing '${v.expected.notes_includes}', got ${JSON.stringify(result.notes ?? [])}`,
-        );
+      // A string pins one substring; an array pins several (e.g. the
+      // lineage phrases "declared, not verified" AND "not countersigned").
+      const needles = Array.isArray(v.expected.notes_includes)
+        ? v.expected.notes_includes
+        : [v.expected.notes_includes];
+      const notesText = (result.notes ?? []).join(" ");
+      for (const needle of needles) {
+        if (!notesText.includes(needle)) {
+          fail(
+            `${label}: expected a note containing '${needle}', got ${JSON.stringify(result.notes ?? [])}`,
+          );
+        }
       }
     }
   }

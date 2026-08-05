@@ -201,6 +201,18 @@ const TARGETS = [
     pass_signal: { type: "exit_code", value: 0 },
   },
   {
+    // Also asserts the frozen v0.6 predecessor copy stays byte-identical
+    // to the version-compat original (spec/lineage.md frozen evidence).
+    id: "lineage-fixtures-regen",
+    name: "lineage fixture regeneration check",
+    language: "javascript",
+    kind: "check",
+    cwd: ".",
+    install_cmd: "true",
+    test_cmd: "node sdk-js/tools/generate-lineage-fixtures.mjs --check",
+    pass_signal: { type: "exit_code", value: 0 },
+  },
+  {
     id: "spec-vectors",
     name: "spec/vectors registry",
     language: "javascript",

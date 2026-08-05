@@ -7,6 +7,73 @@ protocol uses semantic-version pinning at the format layer (the
 version in the file format will not silently mean different things —
 incompatible wire changes ship as a new format version, as `0.7` did).
 
+## v0.7.1 — Unreleased
+
+### Added
+
+- **Lineage: `manifest.predecessors` — a successor capsule verifiably
+  declares the exact sealed artifact(s) it continues from
+  (`spec/lineage.md`; additive within era 0.7, no version bump, no
+  domain-string or hash changes).** The originator binding stays
+  untouched; the second hop of "open it, validate it, continue the
+  work, and hand it off" now works by verifiable reference instead of
+  the key sharing the format rightly makes impossible. One OPTIONAL
+  manifest member: an array of immediate-parent entries (merges
+  expressible; never an inline ancestry list), each committing to six
+  members — `capsule_id`, `format_version`, `originator_public_key`,
+  `first_event_hash`/`entry_hash` (null together exactly for a
+  zero-event predecessor), and the decisive `manifest_hash` pin.
+  Presence binds, absence reports: a PRESENT malformed declaration
+  fails closed with shared `predecessors[i].<member>` diagnoses (the
+  in-era `participants` precedent — the non-`x-` namespace was already
+  reserved, so zero honestly sealed capsules change verdict, per the
+  new bright-line rule in `spec/versioning.md`); identity coherence is
+  recomputed under the DECLARED predecessor era's domain string and
+  SKIPPED (reported, never failed) for unknown eras. Linkage against a
+  supplied predecessor pool (`predecessors` verify option) is
+  REPORT-ONLY — `result.lineage` {declared, ok, verified_depth,
+  entries} with the closed status vocabulary (unverified | verified |
+  mismatch | predecessor_invalid | predecessor_unverifiable with
+  reasons unsupported_version | encrypted_predecessor |
+  unsupported_profile | unsupported_capability) and an era-keyed
+  recursive walk; a hostile host cannot flip a valid capsule's verdict
+  by supplying the wrong file (pinned by the ok-true-under-mismatch
+  vector). v0.7.1 declarations commit to plain, DEFAULT-PROFILE
+  (`v0.6-suite`) predecessors; encrypted successors may place the
+  member inner, outer, or both (both ⇒ JCS byte equality, fail-closed
+  at L3). Three lineage qualifiers are EMITTED on valid verdicts:
+  `lineage_declared_unverified`, `lineage_mismatch`,
+  `lineage_predecessor_invalid` — payload-carrying facts stay in the
+  lineage area. Pinned report phrases: "declared, not verified", "not
+  countersigned", "different sealed state of the declared predecessor".
+  New conformance collection `spec/vectors/lineage/` (24 vectors, all
+  five lanes registered — reference lane consuming now, the other four
+  as explicit sequencing exemptions), including a byte-identical frozen
+  copy of the v0.6 version-compat capsule as the cross-era citation
+  evidence (generator `--check` asserts the equality and never
+  reseals it).
+
+- **Rewrap: continuing a capsule is one operation in the reference
+  builder.** `CapsuleBuilder.continueFrom(predecessor, …)`,
+  `declarePredecessor` / `declarePredecessorEntry` (the explicit-values
+  archivist path — form validated, truth not), `rewrapCapsule` (one-call
+  custody transfer), and `seal({ lineagePlacement })`. Writer
+  obligations W1–W9 (`spec/lineage.md`): entries derived from opened
+  bytes with `capsule_id`/`manifest_hash` RECOMPUTED (never the
+  envelope's claim); refusals as `PredecessorError` with the closed
+  reason vocabulary `verification_failed` (override:
+  `allowInvalidPredecessor`, which changes no emitted byte — the
+  citation stays exact and linkage reports `predecessor_invalid`) |
+  `unsupported_version` (no override — the tool cannot compute the
+  commitment) | `encrypted_predecessor` (decrypt-then-rewrap the inner)
+  | `unsupported_profile`; files carry byte-identically while manifest
+  claims reset (participants are the caller's claim, never inherited;
+  fresh chain — predecessor history stays where it is signed); the
+  pinned `custody_received` genesis event is emitted by default
+  (actor `system:host`, opt-out); successors always seal at the current
+  version. Reproducible bytes under pinned timestamps within one
+  implementation.
+
 ## v0.7.0 — 2026-08-04
 
 ### Changed

@@ -23,6 +23,7 @@ import {
 } from "./manifest.js";
 import { hexToBytes } from "./crypto.js";
 import { verifyEnvelopeSignatures } from "./envelope.js";
+import { defaultLineage, evaluateLineage } from "./lineage.js";
 import { CapsuleReader } from "./reader.js";
 import { toKeyHex } from "./keys.js";
 import { parseJsonStrict } from "./canonical.js";
@@ -46,8 +47,10 @@ function failClosed(message, level) {
     signerSet: { bound: false, ok: false, errors: [] },
     actorSet: { bound: false },
     formatVersion: unreadFormatVersion(),
+    lineage: defaultLineage(),
     skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
+    qualifiers: [],
     notes: [],
   };
 }
@@ -137,6 +140,12 @@ function peekFormatVersion(files) {
  *                  keys) — signers must appear here for trusted=true
  *   outerEnvelope: optional envelope — for L3 verification, pass the outer
  *                  envelope so the inner can be checked against it.
+ *   outerManifest: optional manifest — for L3 verification, pass the outer
+ *                  manifest so the inner/outer lineage declarations can be
+ *                  compared (spec/lineage.md "Encrypted successors").
+ *   predecessors:  optional pool of candidate predecessor artifacts
+ *                  (bytes or CapsuleReaders) for lineage linkage —
+ *                  REPORT-ONLY: it affects result.lineage, never ok.
  *
  * returns:
  *   {
@@ -148,8 +157,10 @@ function peekFormatVersion(files) {
  *     envelope: { ok, signers: [{role, public_key, valid, trusted}] },
  *     signerSet: { bound, ok, errors: [string] },
  *     actorSet: { bound },
+ *     lineage: { declared, ok, verifiedDepth, entries: [...] },
  *     skillTrust: { capsuleSigned, skills: { [id]: "signed"|"unsigned" } },
  *     trustedSignerCount: number,
+ *     qualifiers: [string],
  *     notes: [string]
  *   }
  *
@@ -236,8 +247,13 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     signerSet: { bound: false, ok: true, errors: [] },
     actorSet: { bound: false },
     formatVersion: unreadFormatVersion(),
+    // Not-evaluated default until the lineage stage runs below; a
+    // version-gate refusal returns it untouched (refusal exclusivity:
+    // the refusal diagnosis is the only error such a result carries).
+    lineage: defaultLineage(),
     skillTrust: { capsuleSigned: false, skills: {} },
     trustedSignerCount: 0,
+    qualifiers: [],
     notes,
   };
 
@@ -485,6 +501,22 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     }
   }
 
+  // Lineage declaration (spec/lineage.md): standalone checks fail
+  // closed (problems land in `errors`); supplied-bytes linkage over
+  // options.predecessors is REPORT-ONLY — it can falsify
+  // result.lineage.ok but never the overall verdict, so a host's file
+  // handling cannot forge a forgery verdict against an honest
+  // successor. An encrypted capsule's OUTER declaration is evaluated
+  // here at L2; the inner declaration is evaluated when the inner
+  // capsule is verified at L3.
+  result.lineage = await evaluateLineage({
+    manifest,
+    options,
+    verify: verifyCapsule,
+    errors,
+    notes,
+  });
+
   // Chain
   if (!reader.isEncrypted()) {
     let events = null;
@@ -662,6 +694,33 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     if (outer.entry_hash !== envelope.entry_hash) {
       errors.push("L3: inner.entry_hash does not match outer.entry_hash");
     }
+    // Lineage inner/outer equality (spec/lineage.md, fail-closed only
+    // when BOTH manifests carry the member): single-layer presence is a
+    // weaker claim made honestly (a private or a public-only citation),
+    // but a capsule asserting one origin to the world and another to
+    // its recipients is lying about itself across layers. JCS byte
+    // equality, so case- or order-variant spellings never pass.
+    const outerManifest = options.outerManifest;
+    if (
+      outerManifest != null && typeof outerManifest === "object" &&
+      "predecessors" in outerManifest && "predecessors" in manifest
+    ) {
+      let equal = false;
+      try {
+        equal = Buffer.compare(
+          Buffer.from(jcs(manifest.predecessors)),
+          Buffer.from(jcs(outerManifest.predecessors)),
+        ) === 0;
+      } catch {
+        equal = false;
+      }
+      if (!equal) {
+        errors.push(
+          "L3: manifest.predecessors differs between the inner and outer manifests — " +
+            "the capsule asserts one origin to the world and another to its recipients",
+        );
+      }
+    }
   }
 
   result.ok =
@@ -684,6 +743,27 @@ async function verifyCapsuleInner(readerOrBytes, options = {}) {
     envelopeOk: result.envelope.ok,
     trustedSignerCount: result.trustedSignerCount,
   });
+
+  // Lineage verdict qualifiers (spec/lineage.md; results vocabulary):
+  // bare strings, non-empty only on a VALID verdict — "valid verdict,
+  // custody claim not clean" is exactly what a renderer must not hide.
+  // Payload-carrying facts (verified_depth, per-entry statuses and
+  // reasons) live in result.lineage, never on the bare-string array.
+  if (result.ok && result.lineage.declared) {
+    if (
+      result.lineage.entries.some(
+        (e) => e.status === "unverified" || e.status === "predecessor_unverifiable",
+      )
+    ) {
+      result.qualifiers.push("lineage_declared_unverified");
+    }
+    if (result.lineage.entries.some((e) => e.status === "mismatch")) {
+      result.qualifiers.push("lineage_mismatch");
+    }
+    if (result.lineage.entries.some((e) => e.status === "predecessor_invalid")) {
+      result.qualifiers.push("lineage_predecessor_invalid");
+    }
+  }
 
   // Advisory notes: a PASS with trusted=false is never silent about why.
   // The unmatched case must never get LESS warning than the no-policy

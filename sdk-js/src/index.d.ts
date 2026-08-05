@@ -118,8 +118,66 @@ export interface SkillInput {
   markdown?: string | null;
 }
 
+/**
+ * One manifest.predecessors entry (spec/lineage.md): the exact sealed
+ * predecessor state a successor declares it continues from. All six
+ * members REQUIRED when an entry is present; the two chain anchors are
+ * null together exactly for a zero-event predecessor.
+ */
+export interface PredecessorEntry {
+  capsule_id: string;
+  format_version: string;
+  originator_public_key: string;
+  first_event_hash: string | null;
+  entry_hash: string | null;
+  manifest_hash: string;
+}
+
+export interface ContinueFromOptions {
+  /** The NEW originator — the successor is a new artifact with a new identity. */
+  originator: OriginatorInput | Ed25519KeyPair;
+  /** The successor's own actor set; never inherited from the predecessor. */
+  participants?: Participant[];
+  createdAt?: string;
+  pith?: boolean;
+  /** Emit the conventional custody_received genesis event (default true). */
+  custodyEvent?: boolean;
+  /** Actor for the custody event (default "system:host"; must satisfy the appendEvent actor rule). */
+  custodyActor?: string;
+  /** Optional filter over carriable predecessor file paths. */
+  carry?: (path: string) => boolean;
+  /** Proceed when the predecessor fails its own verification (W3 override). */
+  allowInvalidPredecessor?: boolean;
+}
+
 export class CapsuleBuilder {
   constructor(options: CapsuleBuilderOptions);
+  /**
+   * Open a successor builder from a sealed predecessor: verify it under
+   * its own era's rules, derive the lineage entry, carry content files
+   * byte-identically, start a fresh chain, and queue the custody event.
+   * Throws PredecessorError (W3–W5).
+   */
+  static continueFrom(
+    predecessor: CapsuleReader | Uint8Array | ArrayBuffer,
+    options: ContinueFromOptions,
+  ): Promise<CapsuleBuilder>;
+  /** Full verifyCapsule result for the predecessor (set by continueFrom). */
+  predecessorVerification?: VerifyResult;
+  /** Sorted predecessor paths carried into this builder (set by continueFrom). */
+  carriedPaths?: string[];
+  /** Lineage entries declared so far. */
+  predecessors: PredecessorEntry[];
+  /** Verify + derive + append one lineage entry (merges: once per parent). */
+  declarePredecessor(
+    predecessor: CapsuleReader | Uint8Array | ArrayBuffer,
+    options?: { allowInvalidPredecessor?: boolean },
+  ): Promise<this>;
+  /**
+   * Explicit-values path: validates grammar, null coherence, and
+   * identity coherence (known eras) — form, never truth.
+   */
+  declarePredecessorEntry(entry: PredecessorEntry): this;
   setProgram(markdown: string): this;
   setAgents(markdown: string): this;
   addSkill(id: string, skill: SkillInput): this;
@@ -131,6 +189,50 @@ export class CapsuleBuilder {
   /** Seal and emit the .capsule bytes (a deterministic ZIP). */
   seal(options: SealOptions): Promise<Uint8Array>;
 }
+
+/**
+ * Refusal to build on a predecessor (spec/lineage.md W3–W5).
+ * `verification` is null for encrypted_predecessor.
+ */
+export class PredecessorError extends Error {
+  reason:
+    | "verification_failed"
+    | "unsupported_version"
+    | "encrypted_predecessor"
+    | "unsupported_profile";
+  verification: VerifyResult | null;
+}
+
+/** Derive the six-member lineage entry from an opened predecessor (W1). */
+export function derivePredecessorEntry(reader: CapsuleReader): PredecessorEntry;
+
+export interface RewrapOptions extends Omit<ContinueFromOptions, "pith"> {
+  /** The NEW keypair; also the default signer. */
+  originator: Ed25519KeyPair | (OriginatorInput & { privateKey?: KeyInput; privateKeyHex?: string });
+  signers?: SealOptions["signers"];
+  signedAt?: string;
+  recipients?: RecipientInput | RecipientInput[];
+  lineagePlacement?: "both" | "inner" | "outer";
+}
+
+export interface RewrapResult {
+  bytes: Uint8Array;
+  capsuleId: string;
+  predecessorEntry: PredecessorEntry;
+  predecessorVerification: VerifyResult;
+  carriedPaths: string[];
+  custodyEventEmitted: boolean;
+}
+
+/**
+ * One-call custody transfer: continueFrom + immediate seal under the
+ * new originator keypair. Single predecessor by design; merges go
+ * through the builder path.
+ */
+export function rewrapCapsule(
+  predecessor: CapsuleReader | Uint8Array | ArrayBuffer,
+  options: RewrapOptions,
+): Promise<RewrapResult>;
 
 // ---------------------------------------------------------------------
 // Read
@@ -179,6 +281,12 @@ export interface Manifest {
   content_index: { files: Array<{ path: string; sha256: string }>; index_hash: string };
   encryption: { metadata_path: string; cipher: string } | null;
   created_at: string;
+  /**
+   * Lineage declaration (spec/lineage.md): the exact sealed
+   * predecessor state(s) this capsule continues from. Optional —
+   * absence is "no claim"; a present member is checked fail-closed.
+   */
+  predecessors?: PredecessorEntry[];
   /**
    * Exact (role, public_key) membership of the seal-time signer set,
    * sorted ascending by public_key then role. Bound into every envelope
@@ -230,11 +338,59 @@ export interface VerifyOptions {
   /** For L3: the outer envelope the decrypted inner capsule must match. */
   outerEnvelope?: Envelope;
   /**
+   * For L3: the outer manifest, so the inner/outer lineage declarations
+   * can be compared (fail-closed only when both carry the member).
+   */
+  outerManifest?: Manifest;
+  /**
    * Host policy: format versions this deployment accepts. The SDK
    * REPORTS the verdict in VerifyResult.formatVersion.acceptedByPolicy
    * and never fails verification over it — exactly as with allowlist.
    */
   acceptVersions?: string[];
+  /**
+   * Candidate predecessor artifacts for lineage linkage
+   * (spec/lineage.md). REPORT-ONLY: affects VerifyResult.lineage, never
+   * the overall ok — a host's file handling must not flip a valid
+   * capsule's verdict.
+   */
+  predecessors?: Array<CapsuleReader | Uint8Array | ArrayBuffer>;
+  /** Walk resource limit (default 256), like the reader's size caps. */
+  lineageHopCap?: number;
+}
+
+/** One reported lineage entry: the declared members echoed, plus facts. */
+export interface LineageEntryReport extends PredecessorEntry {
+  /** 1 = declared by the verified capsule; 2+ = discovered by the walk. */
+  hop: number;
+  /** Whether the identity-coherence recompute ran (false: unknown declared era). */
+  identityChecked: boolean;
+  status:
+    | "unverified"
+    | "verified"
+    | "mismatch"
+    | "predecessor_invalid"
+    | "predecessor_unverifiable";
+  /** Set only for predecessor_unverifiable. */
+  reason: "unsupported_version" | "encrypted_predecessor" | "unsupported_profile" | "unsupported_capability" | null;
+  errors: string[];
+  /** Slim summary of the supplied artifact's own verification; null when nothing was checked. */
+  artifact: { ok: boolean; observed_version: string | null; level: string; error_count: number } | null;
+}
+
+/**
+ * The lineage result area (spec/lineage.md). `ok` is the AREA verdict:
+ * standalone checks passed AND no checked entry contradicts the
+ * declaration. Linkage failures falsify it without touching the overall
+ * verdict; unchecked entries never falsify it (unchecked is not failed).
+ * declared=false covers both "no member" and "not evaluated" (after an
+ * open-stage refusal the channel holds this default).
+ */
+export interface LineageReport {
+  declared: boolean;
+  ok: boolean;
+  verifiedDepth: number;
+  entries: LineageEntryReport[];
 }
 
 /**
@@ -299,8 +455,21 @@ export interface VerifyResult {
    * one is an inert unknown member, never authority.
    */
   skillTrust: { capsuleSigned: boolean; skills: Record<string, "signed" | "unsigned"> };
+  /**
+   * Lineage result area (spec/lineage.md): the manifest.predecessors
+   * declaration checked standalone (fail-closed) and against any
+   * supplied predecessor pool (report-only).
+   */
+  lineage: LineageReport;
   /** Number of DISTINCT public keys that are both valid and on your allowlist. */
   trustedSignerCount: number;
+  /**
+   * Verdict qualifiers (bare strings; non-empty only when ok). This
+   * revision emits the three lineage names — lineage_declared_unverified,
+   * lineage_mismatch, lineage_predecessor_invalid; payload-carrying
+   * facts stay in the lineage area, never on this array.
+   */
+  qualifiers: string[];
   notes: string[];
 }
 
@@ -390,6 +559,18 @@ export function computeCapsuleId(
 ): string;
 export function manifestHash(manifest: Manifest): string;
 export function manifestBytes(manifest: Manifest): Uint8Array;
+/**
+ * Problems with a stored manifest.predecessors value (spec/lineage.md
+ * standalone checks 1–3); [] = well-formed. Each problem names its
+ * member as `predecessors[i].<member>` — the shared cross-lane strings.
+ */
+export function predecessorsProblems(predecessors: unknown): string[];
+/** The six spec-defined members of one predecessor entry. */
+export const PREDECESSOR_ENTRY_MEMBERS: readonly string[];
+/** The era default profile id ("v0.6-suite"), frozen forever. */
+export const DEFAULT_PROFILE_ID: string;
+/** Lineage walk hop cap default (a resource limit, not a protocol rule). */
+export const LINEAGE_HOP_CAP_DEFAULT: number;
 
 /** Reader limits; see spec/format.md "Container properties". */
 export interface ZipLimits {

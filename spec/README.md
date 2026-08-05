@@ -101,7 +101,11 @@ procedure.
 - [envelope.md](envelope.md) — provenance envelope, signing, encryption
 - [versioning.md](versioning.md) — version compatibility: known versions
   open forever, unknown ones fail closed with a non-tamper diagnosis,
-  domain strings keyed by declared version, the v0.6 algorithm suite
+  domain strings keyed by declared version, the v0.6 algorithm suite,
+  the in-era tightening bright line
+- [lineage.md](lineage.md) — the `predecessors` declaration: successor
+  capsules, report-only linkage verification, and the rewrap writer
+  conventions (v0.7.1)
 - [trust.md](trust.md) — trust model, allowlists, derived skill trust
 - [pith.md](pith.md) — authoring-layer context discipline for narrative
   fields (opt-in normalizer; verification never depends on it)
